@@ -9,6 +9,7 @@
 #include "app/ui/Sheet.h"
 #include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/general/Module.h"
 #include "jobs/JobQueue.h"
 
@@ -108,23 +109,23 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
 
     // ---- where to look -----------------------------------------------------------------
     auto* where = new Card(this);
-    m_refresh = button(QStringLiteral("Refresh"), ButtonVariant::Primary, QStringLiteral("refresh"), where);
-    where->setTitle(QStringLiteral("Games on the console"), m_refresh);
+    m_refresh = button(FW_TR("Refresh"), ButtonVariant::Primary, QStringLiteral("refresh"), where);
+    where->setTitle(FW_TR("Games on the console"), m_refresh);
     auto* form = new QWidget(where);
     auto* fh = hbox(form, space::lg);
     m_folders = textInput(QStringLiteral("/data/etaHEN/games; /mnt/usb0/games"), true, form);
-    m_folders->setAccessibleName(QStringLiteral("Console folders"));
-    fh->addWidget(field(QStringLiteral("Folders on the console"), m_folders, QStringLiteral("Separate several folders with ;"), form), 1);
+    m_folders->setAccessibleName(FW_TR("Console folders"));
+    fh->addWidget(field(FW_TR("Folders on the console"), m_folders, FW_TR("Separate several folders with ;"), form), 1);
     m_localFolder = new PathField(PathField::Mode::Directory, form);
-    m_localFolder->setDialogTitle(QStringLiteral("Choose the folder with your built images"));
-    fh->addWidget(field(QStringLiteral("Local images folder"), m_localFolder, QStringLiteral("Images directly in it are matched by file name"), form), 1);
+    m_localFolder->setDialogTitle(FW_TR("Choose the folder with your built images"));
+    fh->addWidget(field(FW_TR("Local images folder"), m_localFolder, FW_TR("Images directly in it are matched by file name"), form), 1);
     where->body()->addWidget(form);
     auto* stats = new QWidget(where);
     auto* sh = hbox(stats, space::xxl);
-    sh->addWidget(statCell(QStringLiteral("Games on the PS5"), m_statRemote, &m_statRemoteCaption, stats), 1);
-    sh->addWidget(statCell(QStringLiteral("Local images"), m_statLocal, &m_statLocalCaption, stats), 1);
-    sh->addWidget(statCell(QStringLiteral("Images on the PS5"), m_statImages, &m_statImagesCaption, stats), 1);
-    sh->addWidget(statCell(QStringLiteral("Free on the PS5"), m_statFree, &m_statFreeCaption, stats), 1);
+    sh->addWidget(statCell(FW_TR("Games on the PS5"), m_statRemote, &m_statRemoteCaption, stats), 1);
+    sh->addWidget(statCell(FW_TR("Local images"), m_statLocal, &m_statLocalCaption, stats), 1);
+    sh->addWidget(statCell(FW_TR("Images on the PS5"), m_statImages, &m_statImagesCaption, stats), 1);
+    sh->addWidget(statCell(FW_TR("Free on the PS5"), m_statFree, &m_statFreeCaption, stats), 1);
     where->body()->addWidget(stats);
     l->addWidget(where);
 
@@ -132,28 +133,28 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     auto* list = new Card(this, Card::Variant::Table);
     auto* h = list->header();
     m_filter = new Segmented(list);
-    for (const QString& s : {QStringLiteral("All"), QStringLiteral("On PS5"), QStringLiteral("Size mismatch"), QStringLiteral("Local only"), QStringLiteral("PS5 only")})
+    for (const QString& s : {FW_TR("All"), FW_TR("On PS5"), FW_TR("Size mismatch"), FW_TR("Local only"), FW_TR("PS5 only")})
         m_filter->addSegment(s);
     m_filter->setCurrentIndex(0);
-    m_filter->setAccessibleName(QStringLiteral("Show"));
+    m_filter->setAccessibleName(FW_TR("Show"));
     h->addWidget(m_filter);
-    m_search = textInput(QStringLiteral("Search"), false, list);
+    m_search = textInput(FW_TR("Search"), false, list);
     m_search->setClearButtonEnabled(true);
     m_search->setMinimumWidth(110);
     m_search->setMaximumWidth(200);
     h->addWidget(m_search);
     h->addStretch(1);
-    m_upload = button(QStringLiteral("Upload"), ButtonVariant::Secondary, QStringLiteral("upload"), list);
-    m_compareRow = button(QStringLiteral("Compare…"), ButtonVariant::Secondary, QStringLiteral("file_search"), list);
-    m_openLocal = button(QStringLiteral("Show file"), ButtonVariant::Secondary, QStringLiteral("folder_open"), list);
-    m_openLocal->setToolTip(QStringLiteral("Show the local image in the file manager"));
+    m_upload = button(FW_TR("Upload"), ButtonVariant::Secondary, QStringLiteral("upload"), list);
+    m_compareRow = button(FW_TR("Compare…"), ButtonVariant::Secondary, QStringLiteral("file_search"), list);
+    m_openLocal = button(FW_TR("Show file"), ButtonVariant::Secondary, QStringLiteral("folder_open"), list);
+    m_openLocal->setToolTip(FW_TR("Show the local image in the file manager"));
     for (auto* b : {m_upload, m_compareRow, m_openLocal})
     {
         setButtonSmall(b, true);
         h->addWidget(b);
     }
     m_games = new QTableWidget(0, GColumnCount, list);
-    m_games->setHorizontalHeaderLabels({QStringLiteral("Game"), QStringLiteral("Status"), QStringLiteral("Local"), QStringLiteral("PS5"), QStringLiteral("Path on the PS5")});
+    m_games->setHorizontalHeaderLabels({FW_TR("Game"), FW_TR("Status"), FW_TR("Local"), QStringLiteral("PS5"), FW_TR("Path on the PS5")});
     styleToolTable(m_games, 8);
     m_games->setSelectionMode(QAbstractItemView::SingleSelection);
     m_games->horizontalHeader()->setSectionResizeMode(GNameCol, QHeaderView::Stretch);
@@ -161,11 +162,11 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     m_games->setColumnWidth(GLocalCol, 100);
     m_games->setColumnWidth(GRemoteCol, 100);
     m_games->setColumnWidth(GPathCol, 330);
-    m_games->setAccessibleName(QStringLiteral("Games"));
+    m_games->setAccessibleName(FW_TR("Games"));
     list->body()->addWidget(m_games);
-    m_gamesEmpty = new EmptyState(QStringLiteral("game"), QStringLiteral("Game list not loaded"),
-                                  QStringLiteral("Refresh lists the images and game folders in the folders above, with the console's free space."), list);
-    auto* load = m_gamesEmpty->addAction(QStringLiteral("Refresh"), ButtonVariant::Primary);
+    m_gamesEmpty = new EmptyState(QStringLiteral("game"), FW_TR("Game list not loaded"),
+                                  FW_TR("Refresh lists the images and game folders in the folders above, with the console's free space."), list);
+    auto* load = m_gamesEmpty->addAction(FW_TR("Refresh"), ButtonVariant::Primary);
     list->body()->addWidget(m_gamesEmpty);
     m_gamesFooter = caption({}, list);
     list->footer()->addWidget(m_gamesFooter, 1);
@@ -174,15 +175,15 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     // ---- compare --------------------------------------------------------------------------
     auto* cmp = new Card(this, Card::Variant::Table);
     auto* ch = cmp->header();
-    ch->addWidget(heading(QStringLiteral("Compare a console folder"), TextStyle::Subtitle, cmp));
+    ch->addWidget(heading(FW_TR("Compare a console folder"), TextStyle::Subtitle, cmp));
     ch->addStretch(1);
     m_cmpFilter = new Segmented(cmp);
-    for (const QString& s : {QStringLiteral("All differences"), QStringLiteral("Missing on PS5"), QStringLiteral("Only on PS5"), QStringLiteral("Different size")})
+    for (const QString& s : {FW_TR("All differences"), FW_TR("Missing on PS5"), FW_TR("Only on PS5"), FW_TR("Different size")})
         m_cmpFilter->addSegment(s);
     m_cmpFilter->setCurrentIndex(0);
     ch->addWidget(m_cmpFilter);
-    m_cmpCancel = button(QStringLiteral("Cancel"), ButtonVariant::Secondary, QStringLiteral("stop"), cmp);
-    m_cmpGo = button(QStringLiteral("Compare"), ButtonVariant::Primary, QStringLiteral("file_search"), cmp);
+    m_cmpCancel = button(FW_TR("Cancel"), ButtonVariant::Secondary, QStringLiteral("stop"), cmp);
+    m_cmpGo = button(FW_TR("Compare"), ButtonVariant::Primary, QStringLiteral("file_search"), cmp);
     ch->addWidget(m_cmpCancel);
     ch->addWidget(m_cmpGo);
     auto* cform = new QWidget(cmp);
@@ -190,34 +191,34 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     auto* rrow = new QWidget(cform);
     auto* rrh = hbox(rrow, space::sm);
     m_cmpRemote = textInput(QStringLiteral("/data/etaHEN/games/PPSA01234"), true, rrow);
-    m_cmpRemote->setAccessibleName(QStringLiteral("Console folder to compare"));
-    m_cmpBrowse = button(QStringLiteral("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder_open"), rrow);
+    m_cmpRemote->setAccessibleName(FW_TR("Console folder to compare"));
+    m_cmpBrowse = button(FW_TR("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder_open"), rrow);
     rrh->addWidget(m_cmpRemote, 1);
     rrh->addWidget(m_cmpBrowse);
-    cfl->addWidget(field(QStringLiteral("Folder on the console"), rrow, {}, cform), 1);
+    cfl->addWidget(field(FW_TR("Folder on the console"), rrow, {}, cform), 1);
     auto* lrow = new QWidget(cform);
     auto* lrh = hbox(lrow, space::sm);
     m_cmpLocal = new PathField(PathField::Mode::Directory, lrow);
-    m_cmpLocal->setDialogTitle(QStringLiteral("Choose the local dump folder"));
-    m_cmpImage = button(QStringLiteral("Image…"), ButtonVariant::Secondary, QStringLiteral("disc"), lrow);
-    m_cmpImage->setToolTip(QStringLiteral("Compare with the files inside an .exfat or .ffpkg image"));
+    m_cmpLocal->setDialogTitle(FW_TR("Choose the local dump folder"));
+    m_cmpImage = button(FW_TR("Image…"), ButtonVariant::Secondary, QStringLiteral("disc"), lrow);
+    m_cmpImage->setToolTip(FW_TR("Compare with the files inside an .exfat or .ffpkg image"));
     lrh->addWidget(m_cmpLocal, 1);
     lrh->addWidget(m_cmpImage, 0, Qt::AlignTop);
-    cfl->addWidget(field(QStringLiteral("Local dump folder or image"), lrow, {}, cform), 1);
+    cfl->addWidget(field(FW_TR("Local dump folder or image"), lrow, {}, cform), 1);
     cmp->body()->addWidget(cform);
     cmp->body()->addWidget(hairline(cmp));
     m_diffs = new QTableWidget(0, DColumnCount, cmp);
-    m_diffs->setHorizontalHeaderLabels({QStringLiteral("Difference"), QStringLiteral("File"), QStringLiteral("Local"), QStringLiteral("PS5")});
+    m_diffs->setHorizontalHeaderLabels({FW_TR("Difference"), FW_TR("File"), FW_TR("Local"), QStringLiteral("PS5")});
     styleToolTable(m_diffs, 6);
     m_diffs->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_diffs->horizontalHeader()->setSectionResizeMode(DPathCol, QHeaderView::Stretch);
     m_diffs->setColumnWidth(DStatusCol, 190);
     m_diffs->setColumnWidth(DLocalCol, 110);
     m_diffs->setColumnWidth(DRemoteCol, 110);
-    m_diffs->setAccessibleName(QStringLiteral("Differences"));
+    m_diffs->setAccessibleName(FW_TR("Differences"));
     cmp->body()->addWidget(m_diffs);
-    m_cmpEmpty = new EmptyState(QStringLiteral("files"), QStringLiteral("No compare yet"),
-                                QStringLiteral("Pick a folder on the console and the dump or image it came from. Every file is matched by path "
+    m_cmpEmpty = new EmptyState(QStringLiteral("files"), FW_TR("No compare yet"),
+                                FW_TR("Pick a folder on the console and the dump or image it came from. Every file is matched by path "
                                                "and size; nothing is downloaded."), cmp);
     cmp->body()->addWidget(m_cmpEmpty);
     m_cmpFooter = caption({}, cmp);
@@ -295,9 +296,9 @@ void Ps5ManagerTab::refresh()
         },
         [this](const Result<Refreshed>& r) {
             if (!r.ok()) {
-                m_gamesFooter->setText(QStringLiteral("Could not reach the console: %1").arg(r.error().message));
+                m_gamesFooter->setText(FW_TR("Could not reach the console: %1").arg(r.error().message));
                 setTextColor(m_gamesFooter, color::danger_hi);
-                emit toastRequested(Tone::Err, QStringLiteral("Game list not loaded"), r.error().message);
+                emit toastRequested(Tone::Err, FW_TR("Game list not loaded"), r.error().message);
                 return;
             }
             m_rows = ps5::mergeGames(r->console.games, r->local);
@@ -306,7 +307,7 @@ void Ps5ManagerTab::refresh()
             showGames();
         });
     if (started) { // the result arrives later, on the UI thread
-        m_gamesFooter->setText(QStringLiteral("Listing %1…").arg(folders.join(QStringLiteral(", "))));
+        m_gamesFooter->setText(FW_TR("Listing %1…").arg(folders.join(QStringLiteral(", "))));
         setTextColor(m_gamesFooter, color::fg_3);
     }
 }
@@ -317,13 +318,13 @@ void Ps5ManagerTab::setStats(int remote, int local, std::optional<qint64> freeBy
     m_statLocal->setText(formatCount(local));
     m_statImages->setText(formatBytes(imageBytes));
     m_statFree->setText(freeBytes ? formatBytes(*freeBytes) : QStringLiteral("—"));
-    m_statRemoteCaption->setText(QStringLiteral("images and game folders"));
-    m_statLocalCaption->setText(QStringLiteral("in the local images folder"));
-    m_statImagesCaption->setText(QStringLiteral("total size of the images"));
+    m_statRemoteCaption->setText(FW_TR("images and game folders"));
+    m_statLocalCaption->setText(FW_TR("in the local images folder"));
+    m_statImagesCaption->setText(FW_TR("total size of the images"));
     // ShadowMount+ 1.7 API first; SITE AVAIL is best effort (no current console server has it).
-    m_statFreeCaption->setText(freeText.isEmpty() ? QStringLiteral("unknown: needs the ShadowMount+ 1.7 API")
+    m_statFreeCaption->setText(freeText.isEmpty() ? FW_TR("unknown: needs the ShadowMount+ 1.7 API")
                                : freeText.contains(QLatin1String("ShadowMount+")) ? freeText.simplified()
-                                                                                 : QStringLiteral("reported by the console's FTP server"));
+                                                                                 : FW_TR("reported by the console's FTP server"));
     m_statFreeCaption->setToolTip(freeText.simplified());
     setTextColor(m_statFree, freeBytes && imageBytes > 0 && *freeBytes < (*freeBytes + imageBytes) / 10 ? color::warn_hi : color::fg_0);
 }
@@ -351,11 +352,11 @@ void Ps5ManagerTab::showGames()
         auto* name = toolItem(g.name, false, color::fg_0);
         name->setIcon(icon(g.isDir ? QStringLiteral("folder") : QStringLiteral("disc"), color::fg_3));
         m_games->setItem(r, GNameCol, name);
-        setBadgeCell(m_games, r, GStatusCol, g.isDir ? QStringLiteral("Game folder") : ps5::gameStatusLabel(g.status), g.isDir ? Tone::Neutral : statusTone(g.status));
+        setBadgeCell(m_games, r, GStatusCol, g.isDir ? FW_TR("Game folder") : ps5::gameStatusLabel(g.status), g.isDir ? Tone::Neutral : statusTone(g.status));
         m_games->setItem(r, GLocalCol, toolItem(sizeText(g.localSize), true, g.localSize < 0 ? color::fg_5 : color::fg_2));
-        m_games->setItem(r, GRemoteCol, toolItem(g.isDir ? QStringLiteral("folder") : sizeText(g.remoteSize), true,
+        m_games->setItem(r, GRemoteCol, toolItem(g.isDir ? FW_TR("folder") : sizeText(g.remoteSize), true,
                                                 g.status == ps5::GameStatus::SizeMismatch ? color::warn_hi : g.remoteSize < 0 ? color::fg_5 : color::fg_2));
-        m_games->setItem(r, GPathCol, toolItem(g.remotePath.isEmpty() ? QStringLiteral("— not uploaded —") : g.remotePath, !g.remotePath.isEmpty(),
+        m_games->setItem(r, GPathCol, toolItem(g.remotePath.isEmpty() ? FW_TR("— not uploaded —") : g.remotePath, !g.remotePath.isEmpty(),
                                               g.remotePath.isEmpty() ? color::fg_5 : color::fg_3));
         m_shown.push_back(int(i));
     }
@@ -367,10 +368,10 @@ void Ps5ManagerTab::showGames()
         mismatch += g.status == ps5::GameStatus::SizeMismatch;
         localOnly += g.status == ps5::GameStatus::LocalOnly;
     }
-    QString text = QStringLiteral("%1 shown · %2 on the PS5 and local · %3 size mismatch · %4 not uploaded")
+    QString text = FW_TR("%1 shown · %2 on the PS5 and local · %3 size mismatch · %4 not uploaded")
                        .arg(m_shown.size()).arg(onPs5).arg(mismatch).arg(localOnly);
     if (!m_folderErrors.isEmpty())
-        text += QStringLiteral(" · could not list %1").arg(m_folderErrors.join(QStringLiteral("; ")));
+        text = FW_TR("%1 · could not list %2").arg(text, m_folderErrors.join(QStringLiteral("; ")));
     m_gamesFooter->setText(text);
     setTextColor(m_gamesFooter, m_folderErrors.isEmpty() ? color::fg_3 : color::warn_hi);
     updateActions();
@@ -393,7 +394,7 @@ void Ps5ManagerTab::updateActions()
     m_refresh->setEnabled(idle);
     m_upload->setEnabled(g && !g->localPath.isEmpty() && (g->status == ps5::GameStatus::LocalOnly || g->status == ps5::GameStatus::SizeMismatch)
                          && jobs::isAvailable(m_ctx, QStringLiteral("ps5.ftp.upload")));
-    m_upload->setText(g && g->status == ps5::GameStatus::SizeMismatch ? QStringLiteral("Upload again") : QStringLiteral("Upload"));
+    m_upload->setText(g && g->status == ps5::GameStatus::SizeMismatch ? FW_TR("Upload again") : FW_TR("Upload"));
     m_compareRow->setEnabled(g && g->isDir && idle);
     m_openLocal->setEnabled(g && !g->localPath.isEmpty());
     m_cmpGo->setEnabled(idle);
@@ -413,21 +414,21 @@ void Ps5ManagerTab::uploadSelected()
                         : folders.isEmpty()                         ? endpoint().gamesFolder
                                                                     : folders.first();
     const ps5::ConsoleEndpoint ep = endpoint(); // the console the question is about
-    const QString title = g.status == ps5::GameStatus::SizeMismatch ? QStringLiteral("Upload %1 again?").arg(g.name)
-                                                                    : QStringLiteral("Upload %1?").arg(g.name);
+    const QString title = g.status == ps5::GameStatus::SizeMismatch ? FW_TR("Upload %1 again?").arg(g.name)
+                                                                    : FW_TR("Upload %1?").arg(g.name);
     const QString text = g.status == ps5::GameStatus::SizeMismatch
-                             ? QStringLiteral("The copy on the PS5 (%1) has a different size from the local image (%2). It is overwritten by %3. Unmount the game first.")
+                             ? FW_TR("The copy on the PS5 (%1) has a different size from the local image (%2). It is overwritten by %3. Unmount the game first.")
                                    .arg(sizeText(g.remoteSize), sizeText(g.localSize), Sheet::monoSpan(nativePath(g.localPath)))
-                             : QStringLiteral("%1 (%2) is uploaded to %3.").arg(Sheet::monoSpan(g.name), sizeText(g.localSize), Sheet::monoSpan(dir));
-    if (!Sheet::confirm(window(), title, text, QStringLiteral("Cancel"), QStringLiteral("Upload"), g.status == ps5::GameStatus::SizeMismatch, Sheet::Icon::Info))
+                             : FW_TR("%1 (%2) is uploaded to %3.").arg(Sheet::monoSpan(g.name), sizeText(g.localSize), Sheet::monoSpan(dir));
+    if (!Sheet::confirm(window(), title, text, FW_TR("Cancel"), FW_TR("Upload"), g.status == ps5::GameStatus::SizeMismatch, Sheet::Icon::Info))
         return;
     auto r = jobs::submitFtpUploadMany(m_ctx, ep.host, ep.ftpPort, {g.localPath}, dir, false);
     if (!r.ok()) {
-        emit toastRequested(Tone::Err, QStringLiteral("Upload not started"), r.error().message);
+        emit toastRequested(Tone::Err, FW_TR("Upload not started"), r.error().message);
         return;
     }
     m_ctx.queue().startNow(r.value()); // this job only; a paused queue stays paused
-    emit toastRequested(Tone::Info, QStringLiteral("Upload queued"), QStringLiteral("%1 → %2").arg(g.name, dir));
+    emit toastRequested(Tone::Info, FW_TR("Upload queued"), QStringLiteral("%1 → %2").arg(g.name, dir));
 }
 
 void Ps5ManagerTab::compareSelected()
@@ -443,19 +444,19 @@ void Ps5ManagerTab::browseConsole()
 {
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
-        emit toastRequested(Tone::Warn, QStringLiteral("No console address"), QStringLiteral("Enter the console's IP address at the top of the page first."));
+        emit toastRequested(Tone::Warn, FW_TR("No console address"), FW_TR("Enter the console's IP address at the top of the page first."));
         return;
     }
     const QString start = m_cmpRemote->text().trimmed().startsWith(u'/') ? m_cmpRemote->text().trimmed() : ep.gamesFolder;
-    const QString chosen = pickConsoleFolder(window(), ep, start, QStringLiteral("Choose the console folder to compare"), QStringLiteral("Use this folder"));
+    const QString chosen = pickConsoleFolder(window(), ep, start, FW_TR("Choose the console folder to compare"), FW_TR("Use this folder"));
     if (!chosen.isEmpty())
         m_cmpRemote->setText(chosen);
 }
 
 void Ps5ManagerTab::chooseImage()
 {
-    const QString image = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the image to compare with"), QString(),
-                                                       QStringLiteral("Images (*.exfat *.ffpkg)"));
+    const QString image = QFileDialog::getOpenFileName(window(), FW_TR("Choose the image to compare with"), QString(),
+                                                       FW_TR("Images") + QStringLiteral(" (*.exfat *.ffpkg)"));
     if (!image.isEmpty())
         m_cmpLocal->setPath(image);
 }
@@ -472,7 +473,7 @@ void Ps5ManagerTab::startCompare()
         setInputError(m_cmpRemote, false);
     }
     if (local.isEmpty() || !QFileInfo::exists(local)) {
-        m_cmpLocal->setError(local.isEmpty() ? QStringLiteral("Choose the local dump folder or image.") : QStringLiteral("It does not exist."));
+        m_cmpLocal->setError(local.isEmpty() ? FW_TR("Choose the local dump folder or image.") : FW_TR("It does not exist."));
         bad = true;
     } else {
         m_cmpLocal->setError({});
@@ -494,9 +495,12 @@ void Ps5ManagerTab::compare(const QString& remoteFolder, const QString& localSou
                                   return;
                               tick.restart();
                               postToUi([this, folders, files] {
-                                  m_cmpFooter->setText(QStringLiteral("Reading the console folder… %1 folder%2, %3 file%4")
-                                                           .arg(folders).arg(folders == 1 ? QString() : QStringLiteral("s"))
-                                                           .arg(files).arg(files == 1 ? QString() : QStringLiteral("s")));
+                                  const QString text = folders == 1
+                                                           ? (files == 1 ? FW_TR("Reading the console folder… %1 folder, %2 file")
+                                                                         : FW_TR("Reading the console folder… %1 folder, %2 files"))
+                                                           : (files == 1 ? FW_TR("Reading the console folder… %1 folders, %2 file")
+                                                                         : FW_TR("Reading the console folder… %1 folders, %2 files"));
+                                  m_cmpFooter->setText(text.arg(folders).arg(files));
                               });
                           }));
             rep.localSource = localSource;
@@ -504,17 +508,17 @@ void Ps5ManagerTab::compare(const QString& remoteFolder, const QString& localSou
         },
         [this](const Result<ps5::CompareReport>& r) {
             if (!r.ok()) {
-                m_cmpFooter->setText(r.error().isCancelled() ? QStringLiteral("Compare cancelled.") : QStringLiteral("Compare failed: %1").arg(r.error().message));
+                m_cmpFooter->setText(r.error().isCancelled() ? FW_TR("Compare cancelled.") : FW_TR("Compare failed: %1").arg(r.error().message));
                 setTextColor(m_cmpFooter, r.error().isCancelled() ? color::fg_3 : color::danger_hi);
                 if (!r.error().isCancelled())
-                    emit toastRequested(Tone::Err, QStringLiteral("Compare failed"), r.error().message);
+                    emit toastRequested(Tone::Err, FW_TR("Compare failed"), r.error().message);
                 return;
             }
             m_report = r.value();
             showReport();
         });
     if (started) {
-        m_cmpFooter->setText(QStringLiteral("Reading %1 on the console…").arg(remoteFolder));
+        m_cmpFooter->setText(FW_TR("Reading %1 on the console…").arg(remoteFolder));
         setTextColor(m_cmpFooter, color::fg_3);
         m_comparing = true;
         updateActions();
@@ -547,11 +551,11 @@ void Ps5ManagerTab::showReport()
     const bool any = !m_report->diffs.empty();
     m_diffs->setVisible(any);
     m_cmpEmpty->setVisible(!any);
-    QString text = QStringLiteral("%1 — %2 local %6 (%3), %4 on the PS5 (%5)")
+    QString text = (m_report->localFiles == 1 ? FW_TR("%1 — %2 local file (%3), %4 on the PS5 (%5)")
+                                              : FW_TR("%1 — %2 local files (%3), %4 on the PS5 (%5)"))
                        .arg(m_report->summary())
                        .arg(formatCount(m_report->localFiles), formatBytes(m_report->localBytes))
-                       .arg(formatCount(m_report->remoteFiles), formatBytes(m_report->remoteBytes))
-                       .arg(m_report->localFiles == 1 ? QStringLiteral("file") : QStringLiteral("files"));
+                       .arg(formatCount(m_report->remoteFiles), formatBytes(m_report->remoteBytes));
     if (!m_report->warnings.isEmpty())
         text += QStringLiteral(" · ") + m_report->warnings.join(QStringLiteral(" · "));
     m_cmpFooter->setText(text);

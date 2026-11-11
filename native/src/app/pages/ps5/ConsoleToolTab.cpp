@@ -1,4 +1,5 @@
 #include "app/pages/ps5/ConsoleToolTab.h"
+#include "core/Tr.h"
 
 
 #include <QHeaderView>
@@ -40,8 +41,8 @@ bool ConsoleToolTab::beginWork()
 QString ConsoleToolTab::whyNotStarted() const
 {
     switch (m_notStarted) {
-    case NotStarted::NoHost: return QStringLiteral("Enter the console's IP address at the top of the page first.");
-    case NotStarted::Busy: return QStringLiteral("Wait for the current step to finish.");
+    case NotStarted::NoHost: return FW_TR("Enter the console's IP address at the top of the page first.");
+    case NotStarted::Busy: return FW_TR("Wait for the current step to finish.");
     case NotStarted::None: break;
     }
     return {};

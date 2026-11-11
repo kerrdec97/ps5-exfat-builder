@@ -5,6 +5,7 @@
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/FtpTransfer.h"
 #include "connect/ps5/RemotePath.h"
+#include "core/Tr.h"
 
 #include <QCoreApplication>
 #include <QListWidget>
@@ -62,7 +63,7 @@ QString pickConsoleFolder(QWidget* host, const ps5::ConsoleEndpoint& ep, const Q
     auto* sheet = new Sheet(host, title, Sheet::Icon::None, size::dialogWide);
     auto* top = new QWidget(sheet);
     auto* th = hbox(top, space::sm);
-    auto* up = new IconButton(QStringLiteral("arrow_up"), QStringLiteral("Up one level"), IconButton::Size::Small, top);
+    auto* up = new IconButton(QStringLiteral("arrow_up"), FW_TR("Up one level"), IconButton::Size::Small, top);
     auto* pathLabel = new ElideLabel(QString(), Qt::ElideMiddle, top);
     pathLabel->setFont(font::mono());
     setTextColor(pathLabel, color::fg_0);
@@ -71,11 +72,11 @@ QString pickConsoleFolder(QWidget* host, const ps5::ConsoleEndpoint& ep, const Q
     sheet->body()->addWidget(top);
     auto* list = new QListWidget(sheet);
     list->setMinimumHeight(8 * size::row);
-    list->setAccessibleName(QStringLiteral("Folders on the console"));
+    list->setAccessibleName(FW_TR("Folders on the console"));
     sheet->body()->addWidget(list);
     auto* status = new MessageRow(sheet);
     sheet->body()->addWidget(status);
-    sheet->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+    sheet->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
     QPushButton* choose = sheet->addButton(actionText, Sheet::Role::Primary);
 
     auto current = std::make_shared<QString>(ps5::normalizeRemotePath(start.isEmpty() ? QStringLiteral("/") : start));
@@ -88,7 +89,7 @@ QString pickConsoleFolder(QWidget* host, const ps5::ConsoleEndpoint& ep, const Q
         list->clear();
         list->setEnabled(false);
         choose->setEnabled(false); // nothing to choose until the folder is listed
-        status->set(QStringLiteral("Listing…"), Tone::Info);
+        status->set(FW_TR("Listing…"), Tone::Info);
         up->setEnabled(path != u"/");
         (void)QtConcurrent::run([=]() {
             const Listed l = listFolders(ep, path);
@@ -106,9 +107,9 @@ QString pickConsoleFolder(QWidget* host, const ps5::ConsoleEndpoint& ep, const Q
                     it->setFont(font::mono());
                 }
                 if (l.looksLikeApp0)
-                    status->set(QStringLiteral("This folder has eboot.bin or sce_sys: a game's app0 folder."), Tone::Ok);
+                    status->set(FW_TR("This folder has eboot.bin or sce_sys: a game's app0 folder."), Tone::Ok);
                 else if (l.folders.isEmpty())
-                    status->set(QStringLiteral("No sub-folders here."), Tone::Neutral);
+                    status->set(FW_TR("No sub-folders here."), Tone::Neutral);
                 else
                     status->clear();
             }, Qt::QueuedConnection);

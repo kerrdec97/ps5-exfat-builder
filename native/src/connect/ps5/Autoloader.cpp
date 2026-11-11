@@ -4,6 +4,7 @@
 #include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
 #include "core/Settings.h"
+#include "core/Tr.h"
 
 #include <QDir>
 #include <QFile>
@@ -182,7 +183,7 @@ std::vector<Line> parse(const QString& text)
             continue;
         }
         if (content.front().isSpace())
-            l.warning = QStringLiteral("Line %1: starts with spaces; the autoloader keeps them, so \"%2\" would not be found.")
+            l.warning = FW_TR("Line %1: starts with spaces; the autoloader keeps them, so \"%2\" would not be found.")
                             .arg(l.number)
                             .arg(l.text);
         if (l.text.startsWith(u'!')) {
@@ -194,27 +195,28 @@ std::vector<Line> parse(const QString& text)
                 l.sleepMs = int(v);
             } else {
                 l.kind = LineKind::Invalid;
-                l.problem = QStringLiteral("Line %1: \"%2\" is not a sleep. Write ! and the milliseconds, e.g. !1000.").arg(l.number).arg(l.text);
+                l.problem = FW_TR("Line %1: \"%2\" is not a sleep. Write ! and the milliseconds, e.g. !1000.").arg(l.number).arg(l.text);
             }
         } else if (l.text.startsWith(u'@')) {
             l.kind = LineKind::Directive;
             l.directive = l.text.mid(1).trimmed().toLower();
             if (l.directive != u"sync")
-                l.warning = QStringLiteral("Line %1: %2 is not a directive the autoloader knows (only @sync).").arg(l.number).arg(l.text);
+                l.warning = FW_TR("Line %1: %2 is not a directive the autoloader knows (only @sync).").arg(l.number).arg(l.text);
         } else if (isPayloadName(l.text) || isScriptName(l.text)) {
             l.kind = LineKind::Payload;
             l.payload = l.text;
             l.absolute = l.text.startsWith(u'/');
             if (isScriptName(l.text))
-                l.warning = QStringLiteral("Line %1: %2 is a .js file; the autoloader sends every line to elfldr, so it would fail. "
+                l.warning = FW_TR("Line %1: %2 is a .js file; the autoloader sends every line to elfldr, so it would fail. "
                                            "Run .js payloads through Y2JB's JS server (port 50000).")
                                 .arg(l.number)
                                 .arg(l.text);
         } else {
             l.kind = LineKind::Invalid;
-            l.problem = QStringLiteral("Line %1: \"%2\" is not an .elf or .bin file.").arg(l.number).arg(l.text);
-            if (hadComment)
-                l.problem += QStringLiteral(" Everything after # is a comment, so file names cannot contain #.");
+            l.problem = (hadComment ? FW_TR("Line %1: \"%2\" is not an .elf or .bin file. Everything after # is a comment, so file names cannot contain #.")
+                                    : FW_TR("Line %1: \"%2\" is not an .elf or .bin file."))
+                            .arg(l.number)
+                            .arg(l.text);
         }
         out.push_back(l);
     }
@@ -235,9 +237,9 @@ Validation validate(const QString& text, const QStringList& folderFiles, bool ch
         case LineKind::Sleep:
             ++v.sleeps;
             if (l.sleepMs == 0)
-                v.warnings << QStringLiteral("Line %1: !0 does not wait at all.").arg(l.number);
+                v.warnings << FW_TR("Line %1: !0 does not wait at all.").arg(l.number);
             else if (l.sleepMs > 60000)
-                v.warnings << QStringLiteral("Line %1: waits %2 s; the editor's usual range is 0.1–60 s.").arg(l.number).arg(l.sleepMs / 1000);
+                v.warnings << FW_TR("Line %1: waits %2 s; the editor's usual range is 0.1–60 s.").arg(l.number).arg(l.sleepMs / 1000);
             break;
         case LineKind::Directive:
             break;
@@ -246,20 +248,20 @@ Validation validate(const QString& text, const QStringList& folderFiles, bool ch
             const QString name = remoteFileName(l.payload);
             const bool isLoader = name == kElfLoader;
             if (!isLoader && name.compare(kElfLoader, Qt::CaseInsensitive) == 0)
-                v.warnings << QStringLiteral("Line %1: the custom ELF loader must be named exactly elfldr.elf.").arg(l.number);
+                v.warnings << FW_TR("Line %1: the custom ELF loader must be named exactly elfldr.elf.").arg(l.number);
             if (isLoader && firstPayloadLine != 0)
-                v.warnings << QStringLiteral("Line %1: elfldr.elf must come before the other payloads (line %2 is loaded first).").arg(l.number).arg(firstPayloadLine);
+                v.warnings << FW_TR("Line %1: elfldr.elf must come before the other payloads (line %2 is loaded first).").arg(l.number).arg(firstPayloadLine);
             if (firstPayloadLine == 0)
                 firstPayloadLine = l.number;
             if (l.payload.contains(u'\\'))
-                v.warnings << QStringLiteral("Line %1: \"%2\" uses \\; paths on the PS5 use /.").arg(l.number).arg(l.payload);
+                v.warnings << FW_TR("Line %1: \"%2\" uses \\; paths on the PS5 use /.").arg(l.number).arg(l.payload);
             else if (checkFiles && !l.absolute && !l.payload.contains(u'/') && !folderFiles.contains(l.payload)) {
                 const auto it = std::find_if(folderFiles.begin(), folderFiles.end(),
                                              [&](const QString& f) { return f.compare(l.payload, Qt::CaseInsensitive) == 0; });
                 if (it != folderFiles.end())
-                    v.warnings << QStringLiteral("Line %1: \"%2\" differs in case from the file %3.").arg(l.number).arg(l.payload, *it);
+                    v.warnings << FW_TR("Line %1: \"%2\" differs in case from the file %3.").arg(l.number).arg(l.payload, *it);
                 else
-                    v.warnings << QStringLiteral("Line %1: %2 is not in the folder.").arg(l.number).arg(l.payload);
+                    v.warnings << FW_TR("Line %1: %2 is not in the folder.").arg(l.number).arg(l.payload);
             }
             break;
         }
@@ -269,7 +271,7 @@ Validation validate(const QString& text, const QStringList& folderFiles, bool ch
         }
     }
     if (v.payloads == 0 && v.errors.isEmpty())
-        v.warnings << QStringLiteral("autoload.txt lists no payloads yet.");
+        v.warnings << FW_TR("autoload.txt lists no payloads yet.");
     return v;
 }
 

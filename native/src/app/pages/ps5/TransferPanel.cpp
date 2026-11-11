@@ -5,6 +5,7 @@
 #include "app/ui/Icons.h"
 #include "connect/ps5/Module.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -46,10 +47,10 @@ TransferRow::TransferRow(QWidget* parent) : QWidget(parent)
     h->addWidget(mid, 1);
     auto* acts = new QWidget(this);
     auto* ah = hbox(acts, 2);
-    m_pause = new IconButton(QStringLiteral("pause"), QStringLiteral("Pause"), IconButton::Size::Small, acts);
-    m_cancel = new IconButton(QStringLiteral("close"), QStringLiteral("Cancel"), IconButton::Size::Small, acts);
-    m_retry = new IconButton(QStringLiteral("rotate_ccw"), QStringLiteral("Retry"), IconButton::Size::Small, acts);
-    m_remove = new IconButton(QStringLiteral("trash"), QStringLiteral("Remove from the list"), IconButton::Size::Small, acts);
+    m_pause = new IconButton(QStringLiteral("pause"), FW_TR("Pause"), IconButton::Size::Small, acts);
+    m_cancel = new IconButton(QStringLiteral("close"), FW_TR("Cancel"), IconButton::Size::Small, acts);
+    m_retry = new IconButton(QStringLiteral("rotate_ccw"), FW_TR("Retry"), IconButton::Size::Small, acts);
+    m_remove = new IconButton(QStringLiteral("trash"), FW_TR("Remove from the list"), IconButton::Size::Small, acts);
     // Cancel deletes a part-sent upload: it sits apart from Pause, and asks first.
     ah->addWidget(m_pause);
     ah->addWidget(m_retry);
@@ -102,33 +103,33 @@ void TransferRow::setRecord(const JobRecord& r)
     // Stats line: bytes, speed, time left, files.
     QStringList parts;
     if (p.unitIsBytes && p.total > 0)
-        parts << QStringLiteral("%1 of %2").arg(formatBytes(p.done), formatBytes(p.total));
+        parts << FW_TR("%1 of %2").arg(formatBytes(p.done), formatBytes(p.total));
     if (running && p.ratePerSec > 0)
         parts << formatRate(p.ratePerSec);
     if (running && p.etaMs >= 0)
         parts << formatTimeLeft(p.etaMs);
     if (p.filesTotal > 1)
-        parts << QStringLiteral("file %1 of %2").arg(std::min(p.filesDone + (ended ? 0 : 1), p.filesTotal)).arg(p.filesTotal);
+        parts << FW_TR("file %1 of %2").arg(std::min(p.filesDone + (ended ? 0 : 1), p.filesTotal)).arg(p.filesTotal);
     QString stats = parts.join(QStringLiteral(" · "));
     Tone tone = Tone::Info;
     QString word;
     switch (r.state) {
-    case JobState::Queued: word = QStringLiteral("Waiting"); tone = Tone::Neutral; stats = QStringLiteral("Waits for the queue"); break;
+    case JobState::Queued: word = FW_TR("Waiting"); tone = Tone::Neutral; stats = FW_TR("Waits for the queue"); break;
     case JobState::Running: word = thinPercent(p.overallFraction); tone = Tone::Info; break;
-    case JobState::Paused: word = QStringLiteral("Paused"); tone = Tone::Warn; break;
-    case JobState::Cancelling: word = QStringLiteral("Cancelling…"); tone = Tone::Neutral; stats = QStringLiteral("Stopping the transfer"); break;
+    case JobState::Paused: word = FW_TR("Paused"); tone = Tone::Warn; break;
+    case JobState::Cancelling: word = FW_TR("Cancelling…"); tone = Tone::Neutral; stats = FW_TR("Stopping the transfer"); break;
     case JobState::Succeeded:
-        word = QStringLiteral("Done");
+        word = FW_TR("Done");
         tone = r.outcome && !r.outcome->warnings.isEmpty() ? Tone::Warn : Tone::Ok;
         stats = r.outcome ? r.outcome->summary : stats;
         break;
     case JobState::Failed:
-        word = QStringLiteral("Failed");
+        word = FW_TR("Failed");
         tone = Tone::Err;
-        stats = r.error ? r.error->message : QStringLiteral("The transfer failed.");
+        stats = r.error ? r.error->message : FW_TR("The transfer failed.");
         break;
-    case JobState::Cancelled: word = QStringLiteral("Cancelled"); tone = Tone::Neutral; stats = r.error ? r.error->message : stats; break;
-    case JobState::Interrupted: word = QStringLiteral("Interrupted"); tone = Tone::Warn; stats = QStringLiteral("The app closed during the transfer; retry to send it again."); break;
+    case JobState::Cancelled: word = FW_TR("Cancelled"); tone = Tone::Neutral; stats = r.error ? r.error->message : stats; break;
+    case JobState::Interrupted: word = FW_TR("Interrupted"); tone = Tone::Warn; stats = FW_TR("The app closed during the transfer; retry to send it again."); break;
     }
     m_badge->set(word, tone);
     // The percentage stands alone; every other state has its tone's glyph again.
@@ -138,8 +139,8 @@ void TransferRow::setRecord(const JobRecord& r)
     m_tile->setTone(r.state == JobState::Failed ? Tone::Err : r.state == JobState::Succeeded ? Tone::Ok : Tone::Info);
     m_pause->setVisible(running || paused);
     m_pause->setIconName(paused ? QStringLiteral("play") : QStringLiteral("pause"));
-    m_pause->setToolTip(paused ? QStringLiteral("Resume") : QStringLiteral("Pause"));
-    m_pause->setAccessibleName(paused ? QStringLiteral("Resume") : QStringLiteral("Pause"));
+    m_pause->setToolTip(paused ? FW_TR("Resume") : FW_TR("Pause"));
+    m_pause->setAccessibleName(paused ? FW_TR("Resume") : FW_TR("Pause"));
     m_cancel->setVisible(!ended);
     m_retry->setVisible(r.state == JobState::Failed || r.state == JobState::Cancelled || r.state == JobState::Interrupted);
     m_remove->setVisible(ended);
@@ -170,9 +171,9 @@ TransferPanel::TransferPanel(AppContext& ctx, QWidget* parent) : Card(parent), m
     m_summary = new Badge({}, Tone::Neutral, right);
     m_summary->setIconName({});
     rh->addWidget(m_summary);
-    m_clear = new Link(QStringLiteral("Clear finished"), right);
+    m_clear = new Link(FW_TR("Clear finished"), right);
     rh->addWidget(m_clear);
-    setTitle(QStringLiteral("Transfers"), right);
+    setTitle(FW_TR("Transfers"), right);
     m_list = new QWidget(this);
     m_rows = vbox(m_list, 0);
     body()->addWidget(m_list);
@@ -181,7 +182,7 @@ TransferPanel::TransferPanel(AppContext& ctx, QWidget* parent) : Card(parent), m
     auto* glyph = new QLabel(m_empty);
     glyph->setPixmap(iconPixmap(QStringLiteral("cloud_upload"), size::icon, color::fg_4, devicePixelRatioF()));
     eh->addWidget(glyph);
-    eh->addWidget(caption(QStringLiteral("Uploads and downloads show here with their speed and time left. Drop files on the list above to upload them."), m_empty), 1);
+    eh->addWidget(caption(FW_TR("Uploads and downloads show here with their speed and time left. Drop files on the list above to upload them."), m_empty), 1);
     body()->addWidget(m_empty);
     connect(m_clear, &Link::activated, this, &TransferPanel::clearFinished);
     auto& q = m_ctx.queue();
@@ -242,7 +243,7 @@ void TransferPanel::sync(const QString& id)
         connect(row, &TransferRow::retryRequested, this, [this](const QString& jid) {
             auto r2 = m_ctx.queue().retry(jid);
             if (!r2.ok()) {
-                emit toastRequested(Tone::Err, QStringLiteral("Transfer not started again"), r2.error().message);
+                emit toastRequested(Tone::Err, FW_TR("Transfer not started again"), r2.error().message);
                 return;
             }
             m_ctx.queue().remove(jid);
@@ -301,13 +302,13 @@ void TransferPanel::showSummary(const std::vector<JobState>& states)
     // "All done" only when every transfer went through.
     QStringList parts;
     if (active > 0)
-        parts << QStringLiteral("%1 active").arg(active);
+        parts << FW_TR("%1 active").arg(active);
     if (failed > 0)
-        parts << QStringLiteral("%1 failed").arg(failed);
+        parts << FW_TR("%1 failed").arg(failed);
     if (stopped > 0)
-        parts << QStringLiteral("%1 not finished").arg(stopped);
+        parts << FW_TR("%1 not finished").arg(stopped);
     const Tone tone = total == 0 ? Tone::Neutral : parts.isEmpty() ? Tone::Ok : failed > 0 ? Tone::Err : active > 0 ? Tone::Info : Tone::Warn;
-    m_summary->set(total == 0 ? QStringLiteral("Idle") : parts.isEmpty() ? QStringLiteral("All done") : parts.join(QStringLiteral(" · ")), tone);
+    m_summary->set(total == 0 ? FW_TR("Idle") : parts.isEmpty() ? FW_TR("All done") : parts.join(QStringLiteral(" · ")), tone);
     // The glyph follows the state too: the spinner only while something moves and nothing failed.
     m_summary->setIconName(active > 0 && failed == 0 ? QStringLiteral("loader") : defaultBadgeIcon(tone));
 }

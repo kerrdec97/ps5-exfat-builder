@@ -2,6 +2,7 @@
 
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -26,6 +27,18 @@ namespace {
 const QStringList kColumns = {QStringLiteral("content_id"), QStringLiteral("label"), QStringLiteral("mount_point"),
                               QStringLiteral("download_status"), QStringLiteral("entitlement_key")};
 enum Col { SectionCol = 0, ContentIdCol, LabelCol, MountCol, StatusCol, KeyCol, ColumnCount };
+
+// The finder's confidence ("high", "medium", "low": data, compared as such) as shown.
+QString confidenceLabel(const QString& c)
+{
+    if (c == QLatin1String("high"))
+        return FW_TR("high");
+    if (c == QLatin1String("medium"))
+        return FW_TR("medium");
+    if (c == QLatin1String("low"))
+        return FW_TR("low");
+    return c;
+}
 } // namespace
 
 DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
@@ -33,16 +46,16 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     setProperty("fwNoRing", true);
     auto* l = vbox(this, space::lg);
     auto* pick = new Card(this);
-    m_badge = new Badge(QStringLiteral("No folder"), Tone::Neutral, pick);
+    m_badge = new Badge(FW_TR("No folder"), Tone::Neutral, pick);
     m_badge->setIconName({});
-    pick->setTitle(QStringLiteral("Game folder"), m_badge);
+    pick->setTitle(FW_TR("Game folder"), m_badge);
     m_folder = new PathField(PathField::Mode::Directory, pick);
-    m_folder->setDialogTitle(QStringLiteral("Choose the game folder (app0)"));
-    m_folder->setPlaceholder(QStringLiteral("The game's app0 folder, where dlc_emu.ini lives"));
-    m_folder->edit()->setAccessibleName(QStringLiteral("Game folder"));
+    m_folder->setDialogTitle(FW_TR("Choose the game folder (app0)"));
+    m_folder->setPlaceholder(FW_TR("The game's app0 folder, where dlc_emu.ini lives"));
+    m_folder->edit()->setAccessibleName(FW_TR("Game folder"));
     pick->body()->addWidget(m_folder);
-    auto* help = caption(QStringLiteral("dlc_emu.ini lists the add-ons the DLC emulator presents to the game."), pick);
-    help->setToolTip(QStringLiteral("One entry per add-on. The file lives in the game's app0 folder and may hold at most 1,024 entries and 32 KiB."));
+    auto* help = caption(FW_TR("dlc_emu.ini lists the add-ons the DLC emulator presents to the game."), pick);
+    help->setToolTip(FW_TR("One entry per add-on. The file lives in the game's app0 folder and may hold at most 1,024 entries and 32 KiB."));
     pick->body()->addWidget(help);
     l->addWidget(pick);
     // Queued: the question about unsaved changes must not open inside the
@@ -51,23 +64,23 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
 
     auto* card = new Card(this, Card::Variant::Table);
     auto* h = card->header();
-    h->addWidget(heading(QStringLiteral("Entries"), TextStyle::Subtitle, card));
+    h->addWidget(heading(FW_TR("Entries"), TextStyle::Subtitle, card));
     h->addStretch(1);
-    m_find = button(QStringLiteral("Find entries…"), ButtonVariant::Secondary, QStringLiteral("search"), card);
-    m_find->setToolTip(QStringLiteral("Look through the dump for add-on content IDs"));
-    m_add = button(QStringLiteral("Add entry"), ButtonVariant::Secondary, QStringLiteral("plus"), card);
-    auto* dup = new IconButton(QStringLiteral("copy"), QStringLiteral("Duplicate"), IconButton::Size::Regular, card);
-    dup->setToolTip(QStringLiteral("Duplicate the selected entry"));
-    auto* rem = new IconButton(QStringLiteral("trash"), QStringLiteral("Remove"), IconButton::Size::Regular, card);
-    rem->setToolTip(QStringLiteral("Remove the selected entry"));
+    m_find = button(FW_TR("Find entries…"), ButtonVariant::Secondary, QStringLiteral("search"), card);
+    m_find->setToolTip(FW_TR("Look through the dump for add-on content IDs"));
+    m_add = button(FW_TR("Add entry"), ButtonVariant::Secondary, QStringLiteral("plus"), card);
+    auto* dup = new IconButton(QStringLiteral("copy"), FW_TR("Duplicate"), IconButton::Size::Regular, card);
+    dup->setToolTip(FW_TR("Duplicate the selected entry"));
+    auto* rem = new IconButton(QStringLiteral("trash"), FW_TR("Remove"), IconButton::Size::Regular, card);
+    rem->setToolTip(FW_TR("Remove the selected entry"));
     m_duplicate = dup;
     m_remove = rem;
-    m_save = button(QStringLiteral("Save…"), ButtonVariant::Primary, QStringLiteral("save"), card);
+    m_save = button(FW_TR("Save…"), ButtonVariant::Primary, QStringLiteral("save"), card);
     for (QWidget* b : std::initializer_list<QWidget*>{m_find, m_add, m_duplicate, m_remove, m_save})
         h->addWidget(b);
     m_table = new QTableWidget(0, ColumnCount, card);
-    m_table->setAccessibleName(QStringLiteral("dlc_emu.ini entries"));
-    m_table->setHorizontalHeaderLabels({QStringLiteral("Section"), QStringLiteral("content_id"), QStringLiteral("label"), QStringLiteral("mount_point"), QStringLiteral("download_status"), QStringLiteral("entitlement_key")});
+    m_table->setAccessibleName(FW_TR("dlc_emu.ini entries"));
+    m_table->setHorizontalHeaderLabels({FW_TR("Section"), QStringLiteral("content_id"), QStringLiteral("label"), QStringLiteral("mount_point"), QStringLiteral("download_status"), QStringLiteral("entitlement_key")});
     m_table->horizontalHeader()->setFixedHeight(32);
     m_table->horizontalHeader()->setHighlightSections(false);
     m_table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -84,10 +97,10 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setMinimumHeight(8 * size::row + 40);
     card->body()->addWidget(m_table);
-    m_empty = new EmptyState(QStringLiteral("database"), QStringLiteral("No dlc_emu.ini yet"),
-                             QStringLiteral("Choose the game folder, then add or find entries."), card);
+    m_empty = new EmptyState(QStringLiteral("database"), FW_TR("No dlc_emu.ini yet"),
+                             FW_TR("Choose the game folder, then add or find entries."), card);
     // The first step as a button, while there is no folder yet.
-    m_emptyChoose = m_empty->addAction(QStringLiteral("Choose the game folder…"));
+    m_emptyChoose = m_empty->addAction(FW_TR("Choose the game folder…"));
     connect(m_emptyChoose, &QPushButton::clicked, this, [this] { m_folder->browseButton()->click(); });
     card->body()->addWidget(m_empty);
     auto* f = card->footer();
@@ -127,10 +140,10 @@ void DlcEmuEditor::folderChanged()
     if (m_dirty) {
         QPointer<DlcEmuEditor> self(this);
         m_asking = true;
-        const bool discard = Sheet::confirm(window(), QStringLiteral("Discard the unsaved changes?"),
-                                            QStringLiteral("The changes to dlc_emu.ini in %1 have not been saved.")
+        const bool discard = Sheet::confirm(window(), FW_TR("Discard the unsaved changes?"),
+                                            FW_TR("The changes to dlc_emu.ini in %1 have not been saved.")
                                                 .arg(Sheet::monoSpan(nativePath(m_shownFolder))),
-                                            QStringLiteral("Keep editing"), QStringLiteral("Discard changes"), true, Sheet::Icon::Warning);
+                                            FW_TR("Keep editing"), FW_TR("Discard changes"), true, Sheet::Icon::Warning);
         if (!self)
             return;
         m_asking = false;
@@ -149,11 +162,11 @@ void DlcEmuEditor::load()
         m_shownFolder.clear();
         m_dirty = false;
         setEntries({});
-        m_badge->set(QStringLiteral("No folder"), Tone::Neutral);
+        m_badge->set(FW_TR("No folder"), Tone::Neutral);
         return;
     }
     if (!QFileInfo(app0).isDir()) {
-        m_folder->setError(QStringLiteral("The folder does not exist."));
+        m_folder->setError(FW_TR("The folder does not exist."));
         return;
     }
     m_folder->setError({});
@@ -172,7 +185,7 @@ void DlcEmuEditor::load()
             }
             self->setEntries(r.value());
             const bool exists = QFile::exists(QDir(app0).filePath(QStringLiteral("dlc_emu.ini")));
-            self->m_badge->set(exists ? QStringLiteral("%1 entr%2 loaded").arg(r->size()).arg(r->size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")) : QStringLiteral("New file"), exists ? Tone::Ok : Tone::Info);
+            self->m_badge->set(exists ? (r->size() == 1 ? FW_TR("%1 entry loaded") : FW_TR("%1 entries loaded")).arg(r->size()) : FW_TR("New file"), exists ? Tone::Ok : Tone::Info);
         }, Qt::QueuedConnection);
     });
 }
@@ -198,11 +211,11 @@ void DlcEmuEditor::addRow(const dlc::Entry& e)
     // silently turned into another one and the validation can name it.
     if (!e.section.isEmpty() && section->findText(e.section) < 0) {
         section->addItem(e.section);
-        section->setItemData(section->count() - 1, QStringLiteral("Not a known section type"), Qt::ToolTipRole);
+        section->setItemData(section->count() - 1, FW_TR("Not a known section type"), Qt::ToolTipRole);
     }
     section->setCurrentText(e.section);
     section->setProperty("fwNoRing", false);
-    section->setAccessibleName(QStringLiteral("Section type"));
+    section->setAccessibleName(FW_TR("Section type"));
     connect(section, &QComboBox::currentIndexChanged, this, [this](int) { m_dirty = true; revalidate(); });
     m_table->setCellWidget(r, SectionCol, section);
     auto* anchor = new QTableWidgetItem;
@@ -218,7 +231,7 @@ void DlcEmuEditor::addRow(const dlc::Entry& e)
             status->addItems(dlc::downloadStatuses());
             if (!e.get(key).isEmpty() && status->findText(e.get(key)) < 0) {
                 status->addItem(e.get(key));
-                status->setItemData(status->count() - 1, QStringLiteral("Not a known download status"), Qt::ToolTipRole);
+                status->setItemData(status->count() - 1, FW_TR("Not a known download status"), Qt::ToolTipRole);
             }
             status->setCurrentText(e.get(key));
             connect(status, &QComboBox::currentIndexChanged, this, [this](int) { m_dirty = true; revalidate(); });
@@ -316,14 +329,14 @@ void DlcEmuEditor::revalidate()
     m_emptyChoose->setVisible(m_folder->path().isEmpty());
     const dlc::Validation v = dlc::validate(all, m_folder->path());
     const int bytes = dlc::byteSize(all);
-    m_bytes->setText(QStringLiteral("%1 entr%2 · %3 of %4 KiB").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")).arg(QString::number(bytes / 1024.0, 'f', 1)).arg(dlc::kMaxIniBytes / 1024));
+    m_bytes->setText((all.size() == 1 ? FW_TR("%1 entry · %2 of %3 KiB") : FW_TR("%1 entries · %2 of %3 KiB")).arg(all.size()).arg(QString::number(bytes / 1024.0, 'f', 1)).arg(dlc::kMaxIniBytes / 1024));
     setTextColor(m_bytes, bytes > dlc::kMaxIniBytes || int(all.size()) > dlc::kMaxEntries ? color::danger_hi : color::fg_3);
     if (!v.errors.isEmpty())
-        m_validation->set(QStringLiteral("%1 error%2: %3").arg(v.errors.size()).arg(v.errors.size() == 1 ? QString() : QStringLiteral("s")).arg(v.errors.first()), Tone::Err);
+        m_validation->set((v.errors.size() == 1 ? FW_TR("%1 error: %2") : FW_TR("%1 errors: %2")).arg(v.errors.size()).arg(v.errors.first()), Tone::Err);
     else if (!v.warnings.isEmpty())
-        m_validation->set(QStringLiteral("%1 warning%2: %3").arg(v.warnings.size()).arg(v.warnings.size() == 1 ? QString() : QStringLiteral("s")).arg(v.warnings.first()), Tone::Warn);
+        m_validation->set((v.warnings.size() == 1 ? FW_TR("%1 warning: %2") : FW_TR("%1 warnings: %2")).arg(v.warnings.size()).arg(v.warnings.first()), Tone::Warn);
     else if (anyRows)
-        m_validation->set(QStringLiteral("Valid%1").arg(m_dirty ? QStringLiteral(" · unsaved changes") : QString()), Tone::Ok);
+        m_validation->set(m_dirty ? FW_TR("Valid · unsaved changes") : FW_TR("Valid"), Tone::Ok);
     else
         m_validation->clear();
     m_validation->setToolTip((v.errors + v.warnings).join(u'\n'));
@@ -348,20 +361,20 @@ void DlcEmuEditor::findEntries()
             if (self->m_folder->path() != app0)
                 return; // another game was opened meanwhile: these IDs are not its IDs
             if (s.entries.empty()) {
-                Sheet::message(self->window(), QStringLiteral("No add-on entries found"),
-                               s.notes.isEmpty() ? QStringLiteral("Nothing in the dump looks like an add-on content ID.") : s.notes.join(u' '), Sheet::Icon::Info);
+                Sheet::message(self->window(), FW_TR("No add-on entries found"),
+                               s.notes.isEmpty() ? FW_TR("Nothing in the dump looks like an add-on content ID.") : s.notes.join(u' '), Sheet::Icon::Info);
                 return;
             }
-            auto* sheet = new Sheet(self->window(), QStringLiteral("Found %1 possible entr%2").arg(s.entries.size()).arg(s.entries.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")), Sheet::Icon::None, 900);
+            auto* sheet = new Sheet(self->window(), (s.entries.size() == 1 ? FW_TR("Found %1 possible entry") : FW_TR("Found %1 possible entries")).arg(s.entries.size()), Sheet::Icon::None, 900);
             QStringList intro;
-            intro << QStringLiteral("Prefix %1%2.").arg(Sheet::monoSpan(s.prefix), s.prefixIsPlaceholder ? QStringLiteral(" (placeholder: the dump's own content ID was not found; check every ID)") : QString());
+            intro << (s.prefixIsPlaceholder ? FW_TR("Prefix %1 (placeholder: the dump's own content ID was not found; check every ID).") : FW_TR("Prefix %1.")).arg(Sheet::monoSpan(s.prefix));
             if (!s.addcont.isEmpty())
-                intro << QStringLiteral("Add-on folders: %1.").arg(Sheet::monoSpan(s.addcont.join(QStringLiteral(", "))));
+                intro << FW_TR("Add-on folders: %1.").arg(Sheet::monoSpan(s.addcont.join(QStringLiteral(", "))));
             for (const QString& n : s.notes)
                 intro << n.toHtmlEscaped();
             sheet->addText(intro.join(u' '));
             auto* table = new QTableWidget(int(s.entries.size()), 4, sheet);
-            table->setHorizontalHeaderLabels({QStringLiteral("Add"), QStringLiteral("Confidence"), QStringLiteral("content_id"), QStringLiteral("Found in")});
+            table->setHorizontalHeaderLabels({FW_TR("Add"), FW_TR("Confidence"), QStringLiteral("content_id"), FW_TR("Found in")});
             table->horizontalHeader()->setFixedHeight(32);
             table->horizontalHeader()->setHighlightSections(false);
             table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
@@ -383,7 +396,7 @@ void DlcEmuEditor::findEntries()
                 auto* wrap = new QWidget(table);
                 auto* wh = hbox(wrap, 0, QMargins(8, 0, 8, 0));
                 const Tone tone = e.confidence == QLatin1String("high") ? Tone::Ok : e.confidence == QLatin1String("medium") ? Tone::Warn : Tone::Neutral;
-                auto* badge = new Badge(e.placeholder ? QStringLiteral("placeholder") : e.confidence, tone, wrap);
+                auto* badge = new Badge(e.placeholder ? FW_TR("placeholder") : confidenceLabel(e.confidence), tone, wrap);
                 badge->setIconName({});
                 wh->addWidget(badge);
                 wh->addStretch(1);
@@ -397,8 +410,8 @@ void DlcEmuEditor::findEntries()
                 table->setItem(r, 3, src);
             }
             sheet->body()->addWidget(table);
-            sheet->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-            sheet->addButton(QStringLiteral("Add ticked entries"), Sheet::Role::Primary);
+            sheet->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
+            sheet->addButton(FW_TR("Add ticked entries"), Sheet::Role::Primary);
             // The sheet and its table are alive until control returns to the
             // event loop; the editor may have gone, or moved to another game.
             const int choice = sheet->exec();
@@ -416,7 +429,7 @@ void DlcEmuEditor::findEntries()
                 return;
             self->m_dirty = true;
             self->revalidate();
-            emit self->toastRequested(Tone::Ok, QStringLiteral("%1 entr%2 added").arg(added).arg(added == 1 ? QStringLiteral("y") : QStringLiteral("ies")), QStringLiteral("Review the IDs, then save."));
+            emit self->toastRequested(Tone::Ok, (added == 1 ? FW_TR("%1 entry added") : FW_TR("%1 entries added")).arg(added), FW_TR("Review the IDs, then save."));
         }, Qt::QueuedConnection);
     });
 }
@@ -432,10 +445,10 @@ void DlcEmuEditor::save()
     }
     const QString file = QDir(app0).filePath(QStringLiteral("dlc_emu.ini"));
     const bool exists = QFile::exists(file);
-    if (!Sheet::confirm(window(), QStringLiteral("Write dlc_emu.ini?"),
-                        QStringLiteral("%1 entr%2 written to %3.%4").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y is") : QStringLiteral("ies are")).arg(Sheet::monoSpan(nativePath(file)),
-                                                                                                               exists ? QStringLiteral(" The current file is kept as dlc_emu.ini.bak.") : QString()),
-                        QStringLiteral("Cancel"), QStringLiteral("Save"), false, Sheet::Icon::Info))
+    if (!Sheet::confirm(window(), FW_TR("Write dlc_emu.ini?"),
+                        (all.size() == 1 ? FW_TR("%1 entry is written to %2.") : FW_TR("%1 entries are written to %2.")).arg(all.size()).arg(Sheet::monoSpan(nativePath(file)))
+                            + (exists ? QStringLiteral(" ") + FW_TR("The current file is kept as dlc_emu.ini.bak.") : QString()),
+                        FW_TR("Cancel"), FW_TR("Save"), false, Sheet::Icon::Info))
         return;
     m_save->setEnabled(false);
     QPointer<DlcEmuEditor> self(this);
@@ -446,15 +459,15 @@ void DlcEmuEditor::save()
                 return;
             self->m_save->setEnabled(true);
             if (!st.ok()) {
-                emit self->toastRequested(Tone::Err, QStringLiteral("dlc_emu.ini not saved"), st.error().message);
+                emit self->toastRequested(Tone::Err, FW_TR("dlc_emu.ini not saved"), st.error().message);
                 return;
             }
             if (self->m_folder->path() != app0)
                 return; // saved, but the editor shows another game by now
             self->m_dirty = false;
             self->revalidate();
-            self->m_badge->set(QStringLiteral("%1 entr%2 saved").arg(all.size()).arg(all.size() == 1 ? QStringLiteral("y") : QStringLiteral("ies")), Tone::Ok);
-            emit self->toastRequested(Tone::Ok, QStringLiteral("dlc_emu.ini saved"), nativePath(self->m_folder->path()));
+            self->m_badge->set((all.size() == 1 ? FW_TR("%1 entry saved") : FW_TR("%1 entries saved")).arg(all.size()), Tone::Ok);
+            emit self->toastRequested(Tone::Ok, FW_TR("dlc_emu.ini saved"), nativePath(self->m_folder->path()));
         }, Qt::QueuedConnection);
     });
 }

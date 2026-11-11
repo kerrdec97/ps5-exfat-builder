@@ -117,11 +117,11 @@ public:
     QString title() const override
     {
         // Like the image builds: their "title" when given, else the folder's
-        // whole name ("Astro Bot v1.020") or the ZIP's name without ".zip".
+        // whole name ("Astro Bot v1.020") or the archive's name without its suffix.
         const QString t = m_p.value(QStringLiteral("title")).toString();
         if (!t.isEmpty())
             return t;
-        return archive::isZipSource(source()) ? QFileInfo(source()).completeBaseName() : QFileInfo(source()).fileName();
+        return archive::sourceName(source());
     }
     QString subtitle() const override
     {
@@ -144,7 +144,7 @@ public:
         if (childKindFor(format()).isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("zstd packs go into .exfat, .ffpkg, .ffpfs and .ffpfsc images."));
         if (!QFileInfo(source()).isDir() && !archive::isZipSource(source()))
-            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the game folder (or a zipped dump) to pack."));
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the game folder (or an archived dump) to pack."));
         if (output().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the image."));
         if (!m_factory || !m_factory->contains(childKindFor(format())))

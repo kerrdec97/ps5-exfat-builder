@@ -1,5 +1,7 @@
 #include "connect/ps5/RemotePath.h"
 
+#include "core/Tr.h"
+
 #include <QDir>
 #include <QFileInfo>
 
@@ -188,23 +190,24 @@ DestinationInfo classifyDestination(const QString& path)
     const QString low = path.trimmed().toLower();
     // A whole first segment: "/data" and "/data/x", not "/database".
     const auto under = [&](QStringView dir) { return low == dir || (low.startsWith(dir) && low.at(dir.size()) == u'/'); };
+    // English: the label is also logged and kept in job details; pages translate it where they show it.
     DestinationInfo d;
     if (low.startsWith(u"/mnt/ext") && !low.startsWith(u"/mnt/extusb")) {
         // /mnt/ext0, /mnt/ext1: storage the console formatted itself.
         d.kind = DestinationKind::External;
-        d.label = QStringLiteral("Extended storage (USB or M.2)");
-        d.note = QStringLiteral("Extended storage is a USB drive or the M.2 SSD set up by the console.");
+        d.label = FW_TR_NOOP("Extended storage (USB or M.2)");
+        d.note = FW_TR_NOOP("Extended storage is a USB drive or the M.2 SSD set up by the console.");
     } else if (low.startsWith(u"/mnt/usb") || low.startsWith(u"/mnt/extusb") || low.startsWith(u"/mnt/sandisk")) {
         d.kind = DestinationKind::External;
-        d.label = QStringLiteral("External USB / exFAT");
-        d.note = QStringLiteral("External USB/exFAT is usually the fastest target.");
+        d.label = FW_TR_NOOP("External USB / exFAT");
+        d.note = FW_TR_NOOP("External USB/exFAT is usually the fastest target.");
     } else if (under(u"/data") || under(u"/mnt/sandbox") || low.startsWith(u"/system") || under(u"/user")) {
         d.kind = DestinationKind::Internal;
-        d.label = QStringLiteral("Internal PS5 storage");
-        d.note = QStringLiteral("Internal PS5 storage may be slower on older firmware.");
+        d.label = FW_TR_NOOP("Internal PS5 storage");
+        d.note = FW_TR_NOOP("Internal PS5 storage may be slower on older firmware.");
     } else {
-        d.label = QStringLiteral("Unknown location");
-        d.note = QStringLiteral("Destination type could not be determined from the path.");
+        d.label = FW_TR_NOOP("Unknown location");
+        d.note = FW_TR_NOOP("Destination type could not be determined from the path.");
     }
     return d;
 }

@@ -4,6 +4,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "connect/ps5/Module.h"
+#include "core/Tr.h"
 
 #include <QCoreApplication>
 #include <QHeaderView>
@@ -27,16 +28,22 @@ QString describeScope(const ps5::DiscoveryOptions& o)
     return nets.join(QStringLiteral(", "));
 }
 
-QString portsText(const ps5::DiscoveryOptions& o)
+// The ports as the sentences name them: one ("port 2121"), or a list and
+// its last ("ports 2121, 1337, 2120 and 2122"); each sentence is whole.
+struct Ports {
+    QString list, last;
+    bool many = false;
+};
+
+Ports portsOf(const ps5::DiscoveryOptions& o)
 {
     QStringList p;
     for (const quint16 port : o.ports)
         p << QString::number(port);
     if (p.size() <= 1)
-        return QStringLiteral("port %1").arg(p.join(QString()));
-    // "ports 2121, 1337, 2120 and 2122"
+        return {p.join(QString()), {}, false};
     const QString last = p.takeLast();
-    return QStringLiteral("ports %1 and %2").arg(p.join(QStringLiteral(", ")), last);
+    return {p.join(QStringLiteral(", ")), last, true};
 }
 
 QTableWidgetItem* cell(const QString& text, const QColor& c, bool mono)
@@ -71,7 +78,7 @@ FindConsolePanel::FindConsolePanel(QWidget* parent) : QWidget(parent)
     area->setFixedHeight(kAreaMin);
     auto* al = vbox(area, 0);
     m_table = new QTableWidget(0, 4, area);
-    m_table->setHorizontalHeaderLabels({QStringLiteral("Address"), QStringLiteral("Port"), QStringLiteral("Server greeting"), QStringLiteral("Answered in")});
+    m_table->setHorizontalHeaderLabels({FW_TR("Address"), FW_TR("Port"), FW_TR("Server greeting"), FW_TR("Answered in")});
     m_table->horizontalHeader()->setFixedHeight(32);
     m_table->horizontalHeader()->setHighlightSections(false);
     m_table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -85,11 +92,11 @@ FindConsolePanel::FindConsolePanel(QWidget* parent) : QWidget(parent)
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_table->setAccessibleName(QStringLiteral("Consoles found"));
+    m_table->setAccessibleName(FW_TR("Consoles found"));
     al->addWidget(m_table);
-    m_empty = new EmptyState(QStringLiteral("search"), QStringLiteral("No PS5 found"), QString(), area);
+    m_empty = new EmptyState(QStringLiteral("search"), FW_TR("No PS5 found"), QString(), area);
     m_empty->setCompact(true);
-    m_again = m_empty->addAction(QStringLiteral("Search again"), ButtonVariant::Secondary);
+    m_again = m_empty->addAction(FW_TR("Search again"), ButtonVariant::Secondary);
     al->addWidget(m_empty);
     m_empty->hide();
     l->addWidget(area);
@@ -121,7 +128,13 @@ void FindConsolePanel::start(const ps5::DiscoveryOptions& options)
     m_scope = describeScope(options);
     m_bar->setState(ProgressBar::State::Indeterminate);
     m_bar->show();
-    m_status->setText(QStringLiteral("Looking for an FTP server on %1 at %2…").arg(portsText(options), m_scope.isEmpty() ? QStringLiteral("this PC's networks") : m_scope));
+    const Ports p = portsOf(options);
+    if (m_scope.isEmpty())
+        m_status->setText(p.many ? FW_TR("Looking for an FTP server on ports %1 and %2 at this PC's networks…").arg(p.list, p.last)
+                                 : FW_TR("Looking for an FTP server on port %1 at this PC's networks…").arg(p.list));
+    else
+        m_status->setText(p.many ? FW_TR("Looking for an FTP server on ports %1 and %2 at %3…").arg(p.list, p.last, m_scope)
+                                 : FW_TR("Looking for an FTP server on port %1 at %2…").arg(p.list, m_scope));
     setTextColor(m_status, color::fg_3);
     emit selectionChanged(false);
     const CancellationToken token = m_cancel.token();
@@ -151,7 +164,7 @@ void FindConsolePanel::cancel()
     m_running = false;
     ++m_generation; // whatever the old run still posts is ignored
     m_bar->setState(ProgressBar::State::Paused);
-    m_status->setText(QStringLiteral("Search stopped."));
+    m_status->setText(FW_TR("Search stopped."));
 }
 
 void FindConsolePanel::onProgress(int generation, int done, int total, int found)
@@ -161,8 +174,10 @@ void FindConsolePanel::onProgress(int generation, int done, int total, int found
     m_bar->setState(ProgressBar::State::Determinate);
     m_bar->setFraction(double(done) / double(total));
     // "on 192.168.1.0/24" for a sweep; an explicit address list names no network.
-    const QString where = m_options.hosts.isEmpty() ? QStringLiteral(" on %1").arg(m_scope) : QString();
-    m_status->setText(QStringLiteral("Checked %1 of %2 addresses%3 · %4 found").arg(done).arg(total).arg(where).arg(found));
+    if (m_options.hosts.isEmpty())
+        m_status->setText(FW_TR("Checked %1 of %2 addresses on %3 · %4 found").arg(done).arg(total).arg(m_scope).arg(found));
+    else
+        m_status->setText(FW_TR("Checked %1 of %2 addresses · %3 found").arg(done).arg(total).arg(found));
 }
 
 void FindConsolePanel::onFinished(int generation, const Result<std::vector<ps5::DiscoveredConsole>>& result)
@@ -177,7 +192,7 @@ void FindConsolePanel::onFinished(int generation, const Result<std::vector<ps5::
         m_table->hide();
         m_empty->show();
         fitArea();
-        m_status->setText(result.error().isCancelled() ? QStringLiteral("Search stopped.") : result.error().message);
+        m_status->setText(result.error().isCancelled() ? FW_TR("Search stopped.") : result.error().message);
         setTextColor(m_status, result.error().isCancelled() ? color::fg_3 : color::danger_hi);
         emit finished(0);
         return;
@@ -202,7 +217,7 @@ void FindConsolePanel::setResults(std::vector<ps5::DiscoveredConsole> results)
         for (const quint16 p : c.openPorts)
             ports << QString::number(p);
         m_table->setItem(r, 1, cell(ports.join(QStringLiteral(", ")), color::fg_1, true));
-        m_table->setItem(r, 2, cell(c.banner.isEmpty() ? QStringLiteral("No greeting (port open)") : c.banner,
+        m_table->setItem(r, 2, cell(c.banner.isEmpty() ? FW_TR("No greeting (port open)") : c.banner,
                                     c.banner.isEmpty() ? color::fg_3 : color::fg_1, !c.banner.isEmpty()));
         m_table->setItem(r, 3, cell(c.rttMs >= 0 ? QStringLiteral("%1 ms").arg(c.rttMs) : QStringLiteral("—"), color::fg_3, true));
     }
@@ -210,14 +225,19 @@ void FindConsolePanel::setResults(std::vector<ps5::DiscoveredConsole> results)
     m_table->setVisible(any);
     m_empty->setVisible(!any);
     if (any) {
-        m_status->setText(QStringLiteral("%1 found on %2. Pick the console and choose Use this console.")
-                              .arg(m_results.size() == 1 ? QStringLiteral("1 FTP server") : QStringLiteral("%1 FTP servers").arg(m_results.size()), m_scope));
+        m_status->setText(m_results.size() == 1 ? FW_TR("1 FTP server found on %1. Pick the console and choose Use this console.").arg(m_scope)
+                                                : FW_TR("%1 FTP servers found on %2. Pick the console and choose Use this console.")
+                                                      .arg(m_results.size()).arg(m_scope));
         setTextColor(m_status, color::fg_2);
         m_table->selectRow(0);
     } else {
-        m_status->setText(QStringLiteral("Nothing answered on %1 at %2. Start the FTP server on the console (ftpsrv, etaHEN or zftpd), check that "
-                                         "the PS5 and this PC are on the same network, then search again.")
-                              .arg(portsText(m_options), m_scope));
+        const Ports p = portsOf(m_options);
+        m_status->setText(p.many ? FW_TR("Nothing answered on ports %1 and %2 at %3. Start the FTP server on the console (ftpsrv, etaHEN or zftpd), "
+                                         "check that the PS5 and this PC are on the same network, then search again.")
+                                       .arg(p.list, p.last, m_scope)
+                                 : FW_TR("Nothing answered on port %1 at %2. Start the FTP server on the console (ftpsrv, etaHEN or zftpd), "
+                                         "check that the PS5 and this PC are on the same network, then search again.")
+                                       .arg(p.list, m_scope));
         setTextColor(m_status, color::fg_2);
     }
     fitArea();
@@ -273,23 +293,23 @@ void FindConsolePanel::showSpecimen()
 
 FindConsoleButton::FindConsoleButton(AppContext& ctx, QWidget* parent) : QPushButton(parent), m_ctx(ctx)
 {
-    setText(QStringLiteral("Find my PS5"));
+    setText(FW_TR("Find my PS5"));
     setButtonVariant(this, ButtonVariant::Secondary);
     setButtonIcon(this, QStringLiteral("search"));
-    setToolTip(QStringLiteral("Search this PC's network for the console's FTP server (ftpsrv 2121, etaHEN 1337, zftpd 2120, 2122)"));
-    setAccessibleName(QStringLiteral("Find my PS5"));
+    setToolTip(FW_TR("Search this PC's network for the console's FTP server (ftpsrv 2121, etaHEN 1337, zftpd 2120, 2122)"));
+    setAccessibleName(FW_TR("Find my PS5"));
     connect(this, &QPushButton::clicked, this, [this] { (void)run(); });
 }
 
 Sheet* FindConsoleButton::makeSheet(FindConsolePanel*& panel, QPushButton*& use)
 {
-    auto* s = new Sheet(window(), QStringLiteral("Find my PS5"), Sheet::Icon::None, size::dialogWide);
-    s->addText(QStringLiteral("Looks for an FTP server at every address of this PC's network, 0.3 s per address, 50 at a time. "
+    auto* s = new Sheet(window(), FW_TR("Find my PS5"), Sheet::Icon::None, size::dialogWide);
+    s->addText(FW_TR("Looks for an FTP server at every address of this PC's network, 0.3 s per address, 50 at a time. "
                               "Start the FTP server on the console first; nothing is sent to the consoles found."));
     panel = new FindConsolePanel(s);
     s->body()->addWidget(panel);
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    use = s->addButton(QStringLiteral("Use this console"), Sheet::Role::Primary);
+    s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
+    use = s->addButton(FW_TR("Use this console"), Sheet::Role::Primary);
     use->setEnabled(false);
     connect(panel, &FindConsolePanel::selectionChanged, use, &QPushButton::setEnabled);
     connect(panel, &FindConsolePanel::activated, s, [s, panel] {

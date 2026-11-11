@@ -18,6 +18,7 @@
 #include "connect/ps5/FtpTransfer.h"
 #include "core/Cancellation.h"
 #include "core/Result.h"
+#include "core/Tr.h"
 
 #include <QCoreApplication>
 #include <QFuture>
@@ -103,8 +104,8 @@ bool ConsoleToolTab::runOnConsole(ConsoleWork<T> work, Done<T> done)
     const ps5::ConsoleEndpoint ep = endpoint();
     if (ep.host.isEmpty()) {
         m_notStarted = NotStarted::NoHost;
-        emit toastRequested(ui::Tone::Warn, QStringLiteral("No console address"),
-                            QStringLiteral("Enter the console's IP address at the top of the page first."));
+        emit toastRequested(ui::Tone::Warn, FW_TR("No console address"),
+                            FW_TR("Enter the console's IP address at the top of the page first."));
         return false;
     }
     return runLocal<T>(

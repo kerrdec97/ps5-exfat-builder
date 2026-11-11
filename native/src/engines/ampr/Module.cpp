@@ -121,7 +121,7 @@ class FolderJob : public Job {
 public:
     explicit FolderJob(QJsonObject p) : m_p(std::move(p)) {}
     QJsonObject parameters() const override { return m_p; }
-    QString title() const override { return isZip() ? QFileInfo(source()).completeBaseName() : QFileInfo(source()).fileName(); }
+    QString title() const override { return isZip() ? archive::sourceName(source()) : QFileInfo(source()).fileName(); }
     QString subtitle() const override { return QStringLiteral("→ %1").arg(native(output())); }
     QStringList busyPaths() const override
     {
@@ -133,7 +133,7 @@ public:
     Status validate(const SettingsValues&) const override
     {
         if (!QFileInfo(source()).isDir() && !isZip())
-            return Error(ErrorCode::InvalidArgument, acceptsZip() ? QStringLiteral("Choose the game folder or a zipped dump.")
+            return Error(ErrorCode::InvalidArgument, acceptsZip() ? QStringLiteral("Choose the game folder or an archived dump.")
                                                                   : QStringLiteral("Choose the game folder."));
         if (isZip())
             FW_TRY(archive::checkZipSource(source()));

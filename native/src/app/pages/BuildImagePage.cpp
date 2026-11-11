@@ -6,7 +6,9 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
+#include "core/ArchiveSource.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/ampr/Lz4Pack.h"
 #include "engines/ampr/Module.h"
 #include "engines/ampr/ZstdPack.h"
@@ -53,7 +55,7 @@ using namespace theme;
 
 namespace {
 
-const QString kShared = QStringLiteral("Verification & after the build");
+const QString kShared = FW_TR_NOOP("Verification & after the build"); // a bucket key: translated where shown
 
 // Settings every image/package job of that format reads, besides its own
 // engine's keys (checked against the *Jobs.cpp / FpkgSettings readers).
@@ -66,7 +68,7 @@ const QString kSpeed = general::keys::kPerformanceMode;
 QString speedNote()
 {
     const int cores = std::max(1, QThread::idealThreadCount());
-    return QStringLiteral("This PC: %1 logical cores. Maximum uses %1, Balanced %2, Low impact %3.")
+    return FW_TR("This PC: %1 logical cores. Maximum uses %1, Balanced %2, Low impact %3.")
         .arg(cores)
         .arg(std::max(1, cores * 3 / 4))
         .arg(std::max(1, cores / 2));
@@ -89,11 +91,11 @@ QString bucketTitle(const SettingDef& d)
     if (d.section == QLatin1String("PlayGo"))
         return QStringLiteral("PlayGo");
     static const QHash<QString, QString> renamed = {
-        {QStringLiteral("exFAT images"), QStringLiteral("Image")},
-        {QStringLiteral("exFAT contents"), QStringLiteral("Contents")},
-        {QStringLiteral("FFPKG images (UFS2)"), QStringLiteral("Image")},
-        {QStringLiteral("FFPKG contents"), QStringLiteral("Contents")},
-        {QStringLiteral("Folder images (.ffpfs)"), QStringLiteral("Files inside .ffpfs images")},
+        {QStringLiteral("exFAT images"), FW_TR_NOOP("Image")},
+        {QStringLiteral("exFAT contents"), FW_TR_NOOP("Contents")},
+        {QStringLiteral("FFPKG images (UFS2)"), FW_TR_NOOP("Image")},
+        {QStringLiteral("FFPKG contents"), FW_TR_NOOP("Contents")},
+        {QStringLiteral("Folder images (.ffpfs)"), FW_TR_NOOP("Files inside .ffpfs images")},
     };
     const QString g = d.group.isEmpty() ? d.section : d.group;
     return renamed.value(g, g);
@@ -129,9 +131,21 @@ QString sourceKindOf(const QString& path)
         return QStringLiteral("ffpkg");
     if (ext == QLatin1String("gp5"))
         return QStringLiteral("gp5");
-    if (ext == QLatin1String("zip"))
-        return QStringLiteral("zip"); // a zipped dump (#67): exFAT, FFPKG and PFS unpack it first
+    if (archive::archiveSourceSuffixes().contains(ext, Qt::CaseInsensitive))
+        return QStringLiteral("zip"); // an archived dump (#67, #37): exFAT, FFPKG and PFS unpack it first
     return fi.exists() ? QStringLiteral("file") : QStringLiteral("folder");
+}
+
+// The name of an archived dump without its extension, and without the
+// ".part1" of a multi-part RAR ("Game.part1.rar" -> "Game").
+QString sourceStem(const QFileInfo& fi)
+{
+    QString stem = fi.completeBaseName();
+    if (archive::isArchiveSource(fi.absoluteFilePath())) {
+        static const QRegularExpression part(QStringLiteral("\\.part\\d+$"), QRegularExpression::CaseInsensitiveOption);
+        stem.remove(part);
+    }
+    return stem;
 }
 
 // " · zstd-packed" for a game folder whose files are in zstd or LZ4 packs.
@@ -145,22 +159,22 @@ QString packedNote(const QString& folder, bool fpkg)
                                                                               : QString();
     if (kind.isEmpty())
         return {};
-    return fpkg ? QStringLiteral(" \u00b7 %1-packed (unpacked for the package)").arg(kind) : QStringLiteral(" \u00b7 %1-packed").arg(kind);
+    return QStringLiteral(" \u00b7 ") + (fpkg ? FW_TR("%1-packed (unpacked for the package)") : FW_TR("%1-packed")).arg(kind);
 }
 
 QString sourceKindLabel(const QString& kind)
 {
     if (kind == QLatin1String("exfat"))
-        return QStringLiteral("exFAT image");
+        return FW_TR("exFAT image");
     if (kind == QLatin1String("ffpfsc"))
-        return QStringLiteral("PFS image");
+        return FW_TR("PFS image");
     if (kind == QLatin1String("ffpkg"))
-        return QStringLiteral("FFPKG image");
+        return FW_TR("FFPKG image");
     if (kind == QLatin1String("gp5"))
-        return QStringLiteral(".gp5 project");
+        return FW_TR(".gp5 project");
     if (kind == QLatin1String("zip"))
-        return QStringLiteral("ZIP archive");
-    return QStringLiteral("Game folder");
+        return FW_TR("Archive (.zip, .7z, .rar)");
+    return FW_TR("Game folder");
 }
 
 // ---- format tiles ------------------------------------------------------------------
@@ -240,7 +254,7 @@ public:
         m_items.push_back({title, description, icon, tag, value});
         if (m_current < 0) {
             m_current = 0;
-            setAccessibleDescription(QStringLiteral("Selected: %1").arg(title));
+            setAccessibleDescription(FW_TR("Selected: %1").arg(title));
         }
         m_hover->reset();
         updateGeometry();
@@ -262,7 +276,7 @@ public:
         if (i < 0 || i >= count() || i == m_current)
             return;
         m_current = i;
-        setAccessibleDescription(QStringLiteral("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
+        setAccessibleDescription(FW_TR("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
         update();
         syncGlow();
         if (onChanged)
@@ -486,7 +500,7 @@ QString driveName(const QString& rootPath)
 {
     if (rootPath.size() >= 2 && rootPath[1] == u':')
         return rootPath.left(2);
-    return rootPath.isEmpty() ? QStringLiteral("this drive") : rootPath;
+    return rootPath.isEmpty() ? FW_TR("this drive") : rootPath;
 }
 
 // What the drive of an output folder answers: its free space, whether it can
@@ -514,7 +528,7 @@ QWidget* sectionHeading(const QString& text, bool first, QWidget* parent)
 {
     auto* w = new QWidget(parent);
     auto* l = vbox(w, 0, QMargins(0, first ? 2 : space::lg, 0, 4));
-    auto* lab = label(text.toUpper(), TextStyle::Overline, color::fg_3, w);
+    auto* lab = label(i18n::translate(text).toUpper(), TextStyle::Overline, color::fg_3, w); // `text` is the bucket key
     l->addWidget(lab);
     return w;
 }
@@ -524,16 +538,16 @@ QWidget* sectionHeading(const QString& text, bool first, QWidget* parent)
 // ---- construction ---------------------------------------------------------------------
 
 BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
-    : JobFormPage(ctx, queueModel, QStringLiteral("build"), QStringLiteral("Build image"),
-                  QStringLiteral("Turn a game dump into an exFAT image that ShadowMount+ and PCs can mount."),
-                  QStringLiteral("Build image"), QStringLiteral("Image building"), parent)
+    : JobFormPage(ctx, queueModel, QStringLiteral("build"), FW_TR("Build image"),
+                  FW_TR("Turn a game dump into an exFAT image that ShadowMount+ and PCs can mount."),
+                  FW_TR("Build image"), FW_TR("Image building"), parent)
 {
-    setNewJobText(QStringLiteral("New build"));
+    setNewJobText(FW_TR("New build"));
     m_reader = new GameInfoReader(this);
     m_reader->setFindGameRoots(true);
     connect(m_reader, &GameInfoReader::ready, this, &BuildImagePage::onSummary);
     connect(m_reader, &GameInfoReader::progress, this, [this](qint64 files, qint64 bytes) {
-        m_sourceBadge->set(QStringLiteral("Scanning\u2026 %1 files \u00b7 %2").arg(formatCount(files), formatBytes(bytes)), Tone::Info);
+        m_sourceBadge->set(FW_TR("Scanning\u2026 %1 files \u00b7 %2").arg(formatCount(files), formatBytes(bytes)), Tone::Info);
         m_sourceBadge->setIconName(QStringLiteral("loader"));
     });
 
@@ -590,12 +604,12 @@ void BuildImagePage::buildSourceCard()
 {
     auto* source = new Card(this);
     setSourceCard(source);
-    m_sourceBadge = new Badge(QStringLiteral("Step 1"), Tone::Neutral, source);
+    m_sourceBadge = new Badge(FW_TR("Step 1"), Tone::Neutral, source);
     m_sourceBadge->setIconName(QString());
-    source->setTitle(QStringLiteral("Game dump"), m_sourceBadge);
-    m_drop = new DropZone(QStringLiteral("folder_open"), QStringLiteral("Drop a game dump folder or a zipped dump here"),
-                          QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or its ZIP"), source);
-    m_drop->setAccessibleName(QStringLiteral("Choose the source"));
+    source->setTitle(FW_TR("Game dump"), m_sourceBadge);
+    m_drop = new DropZone(QStringLiteral("folder_open"), FW_TR("Drop a game dump folder or an archive (.zip, .7z, .rar) here"),
+                          FW_TR("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or an archive of it"), source);
+    m_drop->setAccessibleName(FW_TR("Choose the source"));
     connect(m_drop, &DropZone::clicked, this, &BuildImagePage::browseSource);
     source->body()->addWidget(m_drop);
 
@@ -622,10 +636,10 @@ void BuildImagePage::buildSourceCard()
     scol->addWidget(m_stripMeta);
     scol->addWidget(m_stripPath);
     sh->addLayout(scol, 1);
-    auto* rescan = new IconButton(QStringLiteral("refresh"), QStringLiteral("Read the source again"), IconButton::Size::Regular, strip);
+    auto* rescan = new IconButton(QStringLiteral("refresh"), FW_TR("Read the source again"), IconButton::Size::Regular, strip);
     connect(rescan, &QToolButton::clicked, this, &BuildImagePage::refresh);
     sh->addWidget(rescan);
-    auto* change = button(QStringLiteral("Change\u2026"), ButtonVariant::Secondary, QStringLiteral("folder"), strip);
+    auto* change = button(FW_TR("Change\u2026"), ButtonVariant::Secondary, QStringLiteral("folder"), strip);
     connect(change, &QPushButton::clicked, this, &BuildImagePage::browseSource);
     sh->addWidget(change);
     strip->body()->addLayout(sh);
@@ -648,20 +662,20 @@ void BuildImagePage::buildSourceCard()
 void BuildImagePage::buildFormatCard()
 {
     auto* card = new Card(this);
-    card->setTitle(QStringLiteral("Format"));
+    card->setTitle(FW_TR("Format"));
     auto* tiles = new FormatTiles(card);
     m_formatTiles = tiles;
-    tiles->addTile(QStringLiteral("exFAT"), QStringLiteral("Fastest to build. Mounts with ShadowMount+ and on a PC."),
-                   QStringLiteral("drive"), jobs::kFormatExfat, QStringLiteral("Popular"));
-    tiles->addTile(QStringLiteral("FFPKG"), QStringLiteral("UFS2 image (.ffpkg) that ShadowMount+ mounts as it is."),
+    tiles->addTile(QStringLiteral("exFAT"), FW_TR("Fastest to build. Mounts with ShadowMount+ and on a PC."),
+                   QStringLiteral("drive"), jobs::kFormatExfat, FW_TR("Popular"));
+    tiles->addTile(QStringLiteral("FFPKG"), FW_TR("UFS2 image (.ffpkg) that ShadowMount+ mounts as it is."),
                    QStringLiteral("package"), jobs::kFormatFfpkg);
-    tiles->addTile(QStringLiteral("PFS"), QStringLiteral("Compressed .ffpfsc or a plain .ffpfs."),
+    tiles->addTile(QStringLiteral("PFS"), FW_TR("Compressed .ffpfsc or a plain .ffpfs."),
                    QStringLiteral("compress"), jobs::kFormatFfpfsc);
-    tiles->addTile(QStringLiteral("FPKG"), QStringLiteral("Installable package. Needs your own Sony Publishing Tools."),
+    tiles->addTile(QStringLiteral("FPKG"), FW_TR("Installable package. Needs your own Sony Publishing Tools."),
                    QStringLiteral("package_check"), kFormatFpkg);
-    tiles->addTile(QStringLiteral("Packed folder"), QStringLiteral("No image: the game folder with its files in zstd packs, for a USB drive or FTP."),
+    tiles->addTile(FW_TR("Packed folder"), FW_TR("No image: the game folder with its files in zstd packs, for a USB drive or FTP."),
                    QStringLiteral("archive"), kFormatZstdFolder, QStringLiteral("zstd"));
-    tiles->setAccessibleName(QStringLiteral("Output format"));
+    tiles->setAccessibleName(FW_TR("Output format"));
     tiles->onChanged = [this](int) { onFormatChanged(); };
     card->body()->addWidget(tiles);
 
@@ -672,10 +686,10 @@ void BuildImagePage::buildFormatCard()
 
     // PFS: compressed container or uncompressed folder image (#36, #19).
     m_pfsKind = new Segmented(card);
-    m_pfsKind->addSegment(QStringLiteral("Compressed"), {}, jobs::kFormatFfpfsc);
-    m_pfsKind->addSegment(QStringLiteral("Uncompressed"), {}, jobs::kFormatFfpfs);
-    m_pfsKind->setAccessibleName(QStringLiteral("PFS image type"));
-    m_pfsKind->setToolTip(QStringLiteral("Compressed (.ffpfsc) saves space with zlib; how much depends on the game. Uncompressed "
+    m_pfsKind->addSegment(FW_TR("Compressed"), {}, jobs::kFormatFfpfsc);
+    m_pfsKind->addSegment(FW_TR("Uncompressed"), {}, jobs::kFormatFfpfs);
+    m_pfsKind->setAccessibleName(FW_TR("PFS image type"));
+    m_pfsKind->setToolTip(FW_TR("Compressed (.ffpfsc) saves space with zlib; how much depends on the game. Uncompressed "
                                          "(.ffpfs) is about the size of the dump and the fastest to read."));
     connect(m_pfsKind, &Segmented::currentChanged, this, [this](int) {
         applyRowVisibility();
@@ -689,9 +703,9 @@ void BuildImagePage::buildFormatCard()
     // FPKG: the user's own Sony Publishing Tools, one compact row.
     auto* toolsRight = new QWidget(card);
     auto* trh = hbox(toolsRight, space::md);
-    m_toolsBadge = new Badge(QStringLiteral("Checking\u2026"), Tone::Neutral, toolsRight);
+    m_toolsBadge = new Badge(FW_TR("Checking\u2026"), Tone::Neutral, toolsRight);
     trh->addWidget(m_toolsBadge);
-    m_toolsLink = new Link(QStringLiteral("Set up\u2026"), toolsRight);
+    m_toolsLink = new Link(FW_TR("Set up\u2026"), toolsRight);
     trh->addWidget(m_toolsLink);
     connect(m_toolsLink, &Link::activated, this, [this] {
         const DependencyInfo info = m_ctx.dependencies().last(QStringLiteral("sony.pubcmd"));
@@ -699,9 +713,9 @@ void BuildImagePage::buildFormatCard()
                                                              {QStringLiteral("key"), fpkg::keys::kPubToolsPath},
                                                              {QStringLiteral("howToFix"), info.howToFix}}});
     });
-    m_toolsRow = plainRow(QStringLiteral("Sony Publishing Tools"), {}, toolsRight, card, &m_toolsDetail);
-    m_toolsRow->setAccessibleName(QStringLiteral("Sony Publishing Tools"));
-    m_toolsDetail->setToolTip(QStringLiteral("FPKG builds run your own copy of prospero-pub-cmd.exe. Nothing from Sony is included or downloaded."));
+    m_toolsRow = plainRow(FW_TR("Sony Publishing Tools"), {}, toolsRight, card, &m_toolsDetail);
+    m_toolsRow->setAccessibleName(FW_TR("Sony Publishing Tools"));
+    m_toolsDetail->setToolTip(FW_TR("FPKG builds run your own copy of prospero-pub-cmd.exe. Nothing from Sony is included or downloaded."));
 
     // One options panel per format: only that format's settings.
     const QStringList shared = {kVerify, kVerifyMode, kKeepTemp};
@@ -750,7 +764,7 @@ void BuildImagePage::buildFormatCard()
     // The PFS type row leads the PFS essentials; the tools row leads FPKG's.
     // (layout items 0 and 1 are the hairline and the space under it)
     if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[2].essentials->layout())) {
-        m_pfsKindRow = plainRow(QStringLiteral("Image type"), QStringLiteral("Compressed (.ffpfsc) saves space; uncompressed (.ffpfs) is fastest to read."),
+        m_pfsKindRow = plainRow(FW_TR("Image type"), FW_TR("Compressed (.ffpfsc) saves space; uncompressed (.ffpfs) is fastest to read."),
                                 m_pfsKind, m_formats[2].essentials);
         l->insertWidget(2, m_pfsKindRow);
     }
@@ -846,32 +860,32 @@ void BuildImagePage::buildPackageCard()
 {
     auto* details = new Card(this);
     m_packageCard = details;
-    details->setTitle(QStringLiteral("Package"));
+    details->setTitle(FW_TR("Package"));
     m_packageType = new Segmented(details);
-    m_packageType->addSegment(QStringLiteral("App"), {}, QStringLiteral("app"));
-    m_packageType->addSegment(QStringLiteral("Add-on"), {}, QStringLiteral("addon"));
-    m_packageType->addSegment(QStringLiteral("Update"), {}, QStringLiteral("update"));
-    m_packageType->addSegment(QStringLiteral("Backport"), {}, QStringLiteral("backport"));
-    m_packageType->setAccessibleName(QStringLiteral("Package type"));
-    m_packageType->setToolTip(QStringLiteral("Backport: build backport files as their own update package that installs over "
+    m_packageType->addSegment(FW_TR("App"), {}, QStringLiteral("app"));
+    m_packageType->addSegment(FW_TR("Add-on"), {}, QStringLiteral("addon"));
+    m_packageType->addSegment(FW_TR("Update"), {}, QStringLiteral("update"));
+    m_packageType->addSegment(FW_TR("Backport"), {}, QStringLiteral("backport"));
+    m_packageType->setAccessibleName(FW_TR("Package type"));
+    m_packageType->setToolTip(FW_TR("Backport: build backport files as their own update package that installs over "
                                              "the game's base package, so the game package stays original."));
-    details->body()->addWidget(field(QStringLiteral("Package type"), m_packageType, {}, details));
+    details->body()->addWidget(field(FW_TR("Package type"), m_packageType, {}, details));
     connect(m_packageType, &Segmented::currentChanged, this, [this](int) { onPackageTypeChanged(); });
 
     m_contentId = textInput(QStringLiteral("UPxxxx-PPSAxxxxx_00-xxxxxxxxxxxxxxxx"), true, details);
     m_contentId->setMaxLength(36);
-    m_contentId->setAccessibleName(QStringLiteral("Content ID"));
+    m_contentId->setAccessibleName(FW_TR("Content ID"));
     auto* grid = new QWidget(details);
     auto* gh = hbox(grid, space::md);
     gh->setAlignment(Qt::AlignTop);
-    gh->addWidget(field(QStringLiteral("Content ID"), m_contentId, {}, grid), 3);
+    gh->addWidget(field(FW_TR("Content ID"), m_contentId, {}, grid), 3);
     m_version = textInput(QStringLiteral("01.000.000"), true, grid);
-    m_version->setAccessibleName(QStringLiteral("Version"));
-    gh->addWidget(field(QStringLiteral("Version"), m_version, {}, grid), 1);
+    m_version->setAccessibleName(FW_TR("Version"));
+    gh->addWidget(field(FW_TR("Version"), m_version, {}, grid), 1);
     details->body()->addWidget(grid);
     m_title = textInput({}, false, details);
-    m_title->setAccessibleName(QStringLiteral("Title"));
-    m_titleRow = field(QStringLiteral("Title"), m_title, {}, details);
+    m_title->setAccessibleName(FW_TR("Title"));
+    m_titleRow = field(FW_TR("Title"), m_title, {}, details);
     details->body()->addWidget(m_titleRow);
     connect(m_version, &QLineEdit::textEdited, this, [this] { m_autoVersion.clear(); });
     connect(m_contentId, &QLineEdit::textEdited, this, [this] { m_addonIdFor.clear(); });
@@ -879,13 +893,13 @@ void BuildImagePage::buildPackageCard()
     connect(m_version, &QLineEdit::textChanged, this, [this] { renderFileName(); });
 
     m_basePackage = new PathField(PathField::Mode::OpenFile, details);
-    m_basePackage->setFilter(QStringLiteral("Packages (*.pkg)"));
-    m_basePackage->setDialogTitle(QStringLiteral("Choose the base package installed on the console"));
+    m_basePackage->setFilter(FW_TR("Packages") + QStringLiteral(" (*.pkg)"));
+    m_basePackage->setDialogTitle(FW_TR("Choose the base package installed on the console"));
     m_baseField = new QWidget(details);
     {
         auto* bl = vbox(m_baseField, space::xs);
-        bl->addWidget(field(QStringLiteral("Base package"), m_basePackage,
-                            QStringLiteral("The .pkg the console already has; updates are built against it."), m_baseField));
+        bl->addWidget(field(FW_TR("Base package"), m_basePackage,
+                            FW_TR("The .pkg the console already has; updates are built against it."), m_baseField));
         m_baseInfo = new MessageRow(m_baseField);
         m_baseInfo->hide();
         bl->addWidget(m_baseInfo);
@@ -904,9 +918,9 @@ void BuildImagePage::buildPackageCard()
         auto* rh = vbox(row, space::md);
         const auto picker = [this, row](const QString& label, const QString& hint, const QString& name) {
             auto* f = new PathField(PathField::Mode::Directory, row);
-            f->setPlaceholder(QStringLiteral("Optional \u00b7 folder or ZIP"));
+            f->setPlaceholder(FW_TR("Optional \u00b7 folder or ZIP"));
             f->edit()->setAccessibleName(name);
-            f->setToolTip(QStringLiteral("Backport files in game-root layout (eboot.bin, sce_module/, fakelib/ \u2026): a folder, "
+            f->setToolTip(FW_TR("Backport files in game-root layout (eboot.bin, sce_module/, fakelib/ \u2026): a folder, "
                                          "or the ZIP the Backport tab made. Leave empty to omit this firmware group."));
             QObject::disconnect(f->browseButton(), &QPushButton::clicked, nullptr, nullptr);
             connect(f->browseButton(), &QPushButton::clicked, this, [this, f, label] { browseBackport(f, label); });
@@ -916,10 +930,10 @@ void BuildImagePage::buildPackageCard()
             });
             return std::pair<PathField*, QWidget*>(f, field(label, f, hint, row));
         };
-        auto [p4, w4] = picker(QStringLiteral("Backport 4.xx"), QStringLiteral("Low firmware, optional."),
-                               QStringLiteral("Backport 4.xx files"));
-        auto [p5, w5] = picker(QStringLiteral("Backport 5.xx+"), QStringLiteral("All firmware, optional."),
-                               QStringLiteral("Backport 5.xx+ files"));
+        auto [p4, w4] = picker(FW_TR("Backport 4.xx"), FW_TR("Low firmware, optional."),
+                               FW_TR("Backport 4.xx files"));
+        auto [p5, w5] = picker(FW_TR("Backport 5.xx+"), FW_TR("All firmware, optional."),
+                               FW_TR("Backport 5.xx+ files"));
         m_backport4 = p4;
         m_backport5 = p5;
         rh->addWidget(w4);
@@ -937,19 +951,19 @@ void BuildImagePage::buildPackageCard()
     auto* arow = new QWidget(m_addonField);
     auto* ah = hbox(arow, space::md);
     ah->setAlignment(Qt::AlignTop);
-    m_entitlementKey = textInput(QStringLiteral("32 hexadecimal characters"), true, arow);
+    m_entitlementKey = textInput(FW_TR("32 hexadecimal characters"), true, arow);
     m_entitlementKey->setMaxLength(32);
-    m_entitlementKey->setAccessibleName(QStringLiteral("Entitlement key"));
-    ah->addWidget(field(QStringLiteral("Entitlement key"), m_entitlementKey, {}, arow), 2);
+    m_entitlementKey->setAccessibleName(FW_TR("Entitlement key"));
+    ah->addWidget(field(FW_TR("Entitlement key"), m_entitlementKey, {}, arow), 2);
     m_volumeType = dropdown(arow);
-    m_volumeType->addItem(QStringLiteral("prospero_ac \u00b7 add-on with data"), QStringLiteral("prospero_ac"));
-    m_volumeType->setToolTip(QStringLiteral("prospero_al (licence only) is not supported."));
-    ah->addWidget(field(QStringLiteral("Volume type"), m_volumeType, {}, arow), 1);
+    m_volumeType->addItem(FW_TR("prospero_ac \u00b7 add-on with data"), QStringLiteral("prospero_ac"));
+    m_volumeType->setToolTip(FW_TR("prospero_al (licence only) is not supported."));
+    ah->addWidget(field(FW_TR("Volume type"), m_volumeType, {}, arow), 1);
     al->addWidget(arow);
     auto* drow = new QWidget(m_addonField);
     auto* dh = hbox(drow, space::sm);
-    dh->addWidget(caption(QStringLiteral("The source is the add-on's own folder (addcont0\u2026), not the game."), drow), 1);
-    auto* fromIni = button(QStringLiteral("From dlc_emu.ini\u2026"), ButtonVariant::Secondary, QStringLiteral("database"), drow);
+    dh->addWidget(caption(FW_TR("The source is the add-on's own folder (addcont0\u2026), not the game."), drow), 1);
+    auto* fromIni = button(FW_TR("From dlc_emu.ini\u2026"), ButtonVariant::Secondary, QStringLiteral("database"), drow);
     connect(fromIni, &QPushButton::clicked, this, &BuildImagePage::pickFromDlcEmu);
     dh->addWidget(fromIni);
     al->addWidget(drow);
@@ -961,15 +975,15 @@ void BuildImagePage::buildPackageCard()
 void BuildImagePage::buildSaveCard()
 {
     auto* dest = new Card(this);
-    dest->setTitle(QStringLiteral("Save to"));
+    dest->setTitle(FW_TR("Save to"));
     auto* grid = new QWidget(dest);
     auto* gh = vbox(grid, space::md); // folder, then the file name: both get the full width
     m_output = new PathField(PathField::Mode::Directory, grid);
-    m_output->setDialogTitle(QStringLiteral("Choose the output folder"));
-    m_output->edit()->setAccessibleName(QStringLiteral("Output folder"));
+    m_output->setDialogTitle(FW_TR("Choose the output folder"));
+    m_output->edit()->setAccessibleName(FW_TR("Output folder"));
     auto* outField = new QWidget(grid);
     auto* ol = vbox(outField, space::xs);
-    ol->addWidget(label(QStringLiteral("Folder"), TextStyle::Body, color::fg_1, outField));
+    ol->addWidget(label(FW_TR("Folder"), TextStyle::Body, color::fg_1, outField));
     ol->addWidget(m_output);
     m_spaceRow = new MessageRow(outField);
     ol->addWidget(m_spaceRow);
@@ -979,12 +993,12 @@ void BuildImagePage::buildSaveCard()
     auto* nl = vbox(nameField, space::xs);
     auto* labelRow = new QHBoxLayout;
     labelRow->setSpacing(space::sm);
-    m_fileLabel = label(QStringLiteral("File name"), TextStyle::Body, color::fg_1, nameField);
+    m_fileLabel = label(FW_TR("File name"), TextStyle::Body, color::fg_1, nameField);
     labelRow->addWidget(m_fileLabel);
     labelRow->addStretch(1);
-    m_resetName = new Link(QStringLiteral("Reset"), nameField);
+    m_resetName = new Link(FW_TR("Reset"), nameField);
     m_resetName->setFont(font::caption());
-    m_resetName->setToolTip(QStringLiteral("Use the name from Settings \u203a Build \u203a Output name again."));
+    m_resetName->setToolTip(FW_TR("Use the name from Settings \u203a Build \u203a Output name again."));
     m_resetName->hide();
     connect(m_resetName, &Link::activated, this, [this] {
         m_nameEdited = false;
@@ -995,13 +1009,13 @@ void BuildImagePage::buildSaveCard()
     auto* nameRow = new QHBoxLayout;
     nameRow->setSpacing(space::sm);
     m_fileName = textInput({}, false, nameField);
-    m_fileName->setAccessibleName(QStringLiteral("File name"));
-    m_fileName->setToolTip(QStringLiteral("Named by Settings \u203a Build \u203a Output name. Type to change it for this job."));
+    m_fileName->setAccessibleName(FW_TR("File name"));
+    m_fileName->setToolTip(FW_TR("Named by Settings \u203a Build \u203a Output name. Type to change it for this job."));
     m_fileLabel->setBuddy(m_fileName);
     nameRow->addWidget(m_fileName, 1);
     m_fileExt = monoLabel(QStringLiteral(".exfat"), nameField, color::fg_3);
     nameRow->addWidget(m_fileExt);
-    m_nameMenuButton = new IconButton(QStringLiteral("tag"), QStringLiteral("Naming"), IconButton::Size::Regular, nameField);
+    m_nameMenuButton = new IconButton(QStringLiteral("tag"), FW_TR("Naming"), IconButton::Size::Regular, nameField);
     nameRow->addWidget(m_nameMenuButton);
     nl->addLayout(nameRow);
     gh->addWidget(nameField, 1);
@@ -1030,7 +1044,7 @@ void BuildImagePage::buildSaveCard()
         m_resetName->show();
         const QString problem = text.trimmed().isEmpty() ? QString() : gameinfo::folderNameProblem(text.trimmed() + m_fileExt->text());
         setInputError(m_fileName, !problem.isEmpty());
-        m_fileName->setToolTip(problem.isEmpty() ? QStringLiteral("Named by Settings \u203a Build \u203a Output name. Type to change it for this job.")
+        m_fileName->setToolTip(problem.isEmpty() ? FW_TR("Named by Settings \u203a Build \u203a Output name. Type to change it for this job.")
                                                  : plainTip(problem));
     });
     connect(m_nameMenuButton, &QToolButton::clicked, this, [this] {
@@ -1040,10 +1054,10 @@ void BuildImagePage::buildSaveCard()
         const QString current = m_ctx.settings().value(gameinfo::keys::kNamePreset).toString();
         if (const SettingDef* d = m_ctx.schema().find(gameinfo::keys::kNamePreset))
             for (const auto& c : d->choices) {
-                auto* a = menu.addAction(c.label);
+                auto* a = menu.addAction(i18n::translate(c.label));
                 a->setCheckable(true);
                 a->setChecked(c.value == current);
-                a->setToolTip(c.description);
+                a->setToolTip(i18n::translate(c.description));
                 group->addAction(a);
                 const QString value = c.value;
                 connect(a, &QAction::triggered, this, [this, value] {
@@ -1053,7 +1067,7 @@ void BuildImagePage::buildSaveCard()
                 });
             }
         menu.addSeparator();
-        menu.addAction(QStringLiteral("Template and firmware\u2026"), this, [this] {
+        menu.addAction(FW_TR("Template and firmware\u2026"), this, [this] {
             emit navigateRequested({QStringLiteral("settings"), {{QStringLiteral("section"), QStringLiteral("Build")},
                                                                  {QStringLiteral("key"), gameinfo::keys::kNameTemplate}}});
         });
@@ -1063,8 +1077,8 @@ void BuildImagePage::buildSaveCard()
 
 void BuildImagePage::buildAdvanced()
 {
-    m_advanced = new Disclosure(QStringLiteral("Advanced options"), {}, this);
-    m_advanced->setAccessibleName(QStringLiteral("Advanced options"));
+    m_advanced = new Disclosure(FW_TR("Advanced options"), {}, this);
+    m_advanced->setAccessibleName(FW_TR("Advanced options"));
     m_advanced->body()->setSpacing(0);
     m_advancedHost = new QWidget(m_advanced);
     auto* hostLayout = vbox(m_advancedHost, 0);
@@ -1075,7 +1089,7 @@ void BuildImagePage::buildAdvanced()
     m_advanced->body()->addWidget(hairline(m_advanced));
     auto* row = new QWidget(m_advanced);
     auto* h = hbox(row, space::lg, QMargins(0, 8, 0, 6));
-    auto* lab = label(QStringLiteral("Open the output folder when done"), TextStyle::Body, color::fg_1, row);
+    auto* lab = label(FW_TR("Open the output folder when done"), TextStyle::Body, color::fg_1, row);
     h->addWidget(lab, 1);
     m_openWhenDone = new Switch(row);
     m_openWhenDone->setAccessibleName(lab->text());
@@ -1084,7 +1098,7 @@ void BuildImagePage::buildAdvanced()
     auto* lrow = new QWidget(m_advanced);
     auto* lh = hbox(lrow, 6, QMargins(0, space::sm, 0, 0));
     lh->addStretch(1);
-    m_settingsLink = new Link(QStringLiteral("All build settings"), lrow);
+    m_settingsLink = new Link(FW_TR("All build settings"), lrow);
     connect(m_settingsLink, &Link::activated, this, [this] {
         const QString t = tile();
         const QString section = t == jobs::kFormatFfpfsc ? QStringLiteral("PFS") : t == kFormatFpkg ? QStringLiteral("FPKG") : QStringLiteral("Build");
@@ -1100,7 +1114,7 @@ void BuildImagePage::buildSummaryCard()
     // FPKG only, above the Jobs dock: size, free space and the live CPU limit.
     auto* summary = new Card(this);
     m_summaryCard = summary;
-    summary->setTitle(QStringLiteral("Package build"));
+    summary->setTitle(FW_TR("Package build"));
     summary->body()->setSpacing(space::sm);
     auto addStat = [summary](const QString& name, QLabel*& value) {
         auto* row = new QWidget(summary);
@@ -1110,22 +1124,22 @@ void BuildImagePage::buildSummaryCard()
         h->addWidget(value);
         summary->body()->addWidget(row);
     };
-    addStat(QStringLiteral("Source size"), m_estSize);
-    addStat(QStringLiteral("Free on output drive"), m_freeSpace);
+    addStat(FW_TR("Source size"), m_estSize);
+    addStat(FW_TR("Free on output drive"), m_freeSpace);
     auto* row = new QWidget(summary);
     auto* h = hbox(row, space::md);
     auto* col = new QVBoxLayout;
     col->setSpacing(2);
-    col->addWidget(label(QStringLiteral("CPU cores while packing"), TextStyle::Body, color::fg_1, row));
-    m_liveNote = caption(QStringLiteral("Lower it any time, even while packing."), row);
+    col->addWidget(label(FW_TR("CPU cores while packing"), TextStyle::Body, color::fg_1, row));
+    m_liveNote = caption(FW_TR("Lower it any time, even while packing."), row);
     col->addWidget(m_liveNote);
     h->addLayout(col, 1);
     m_liveCores = dropdown(row);
     const int cores = std::max(1, QThread::idealThreadCount());
-    m_liveCores->addItem(QStringLiteral("All (%1)").arg(cores), 0);
+    m_liveCores->addItem(FW_TR("All (%1)").arg(cores), 0);
     for (int c = cores - 1; c >= 1; --c)
-        m_liveCores->addItem(QStringLiteral("%1 of %2").arg(c).arg(cores), c);
-    m_liveCores->setAccessibleName(QStringLiteral("CPU cores while packing"));
+        m_liveCores->addItem(FW_TR("%1 of %2").arg(c).arg(cores), c);
+    m_liveCores->setAccessibleName(FW_TR("CPU cores while packing"));
     h->addWidget(m_liveCores);
     summary->body()->addWidget(row);
     connect(m_liveCores, &QComboBox::currentIndexChanged, this, [this](int) { applyLiveCpuLimit(); });
@@ -1210,42 +1224,42 @@ void BuildImagePage::onFormatChanged()
     m_packageCard->setVisible(pkg);
     m_summaryCard->setVisible(pkg);
     if (t == jobs::kFormatExfat)
-        header()->setCaption(QStringLiteral("Turn a game dump into an exFAT image that ShadowMount+ and PCs can mount."));
+        header()->setCaption(FW_TR("Turn a game dump into an exFAT image that ShadowMount+ and PCs can mount."));
     else if (t == jobs::kFormatFfpkg)
-        header()->setCaption(QStringLiteral("Turn a game dump into an FFPKG (UFS2) image that ShadowMount+ mounts as it is."));
+        header()->setCaption(FW_TR("Turn a game dump into an FFPKG (UFS2) image that ShadowMount+ mounts as it is."));
     else if (t == jobs::kFormatFfpfsc)
-        header()->setCaption(QStringLiteral("Turn a game dump into a PFS image, compressed (.ffpfsc) or not (.ffpfs)."));
+        header()->setCaption(FW_TR("Turn a game dump into a PFS image, compressed (.ffpfsc) or not (.ffpfs)."));
     else if (folder)
-        header()->setCaption(QStringLiteral("Pack a game dump into a folder of zstd packs: smaller on the drive, read on the console by ampr-emu-ng, no image."));
+        header()->setCaption(FW_TR("Pack a game dump into a folder of zstd packs: smaller on the drive, read on the console by ampr-emu-ng, no image."));
     else
-        header()->setCaption(QStringLiteral("Package a game folder, an image or a .gp5 project as an installable .pkg."));
-    primaryButton()->setText(pkg ? QStringLiteral("Build package") : folder ? QStringLiteral("Pack game") : QStringLiteral("Build image"));
+        header()->setCaption(FW_TR("Package a game folder, an image or a .gp5 project as an installable .pkg."));
+    primaryButton()->setText(pkg ? FW_TR("Build package") : folder ? FW_TR("Pack game") : FW_TR("Build image"));
     // What the "not available in this build" state names follows the tile.
-    setFeatureName(pkg ? QStringLiteral("Package building") : folder ? QStringLiteral("Packing a game folder") : QStringLiteral("Image building"));
-    sourceCard()->setTitleText(pkg ? QStringLiteral("Source") : QStringLiteral("Game dump"));
-    m_drop->setTitle(pkg ? QStringLiteral("Drop a game folder, an image or a .gp5 project here")
-                         : QStringLiteral("Drop a game dump folder or a zipped dump here"));
-    m_drop->setText(pkg ? QStringLiteral("or click to browse \u2014 a folder, an .exfat, .ffpfs, .ffpfsc or .ffpkg image, or a .gp5 project")
-                        : QStringLiteral("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or its ZIP"));
+    setFeatureName(pkg ? FW_TR("Package building") : folder ? FW_TR("Packing a game folder") : FW_TR("Image building"));
+    sourceCard()->setTitleText(pkg ? FW_TR("Source") : FW_TR("Game dump"));
+    m_drop->setTitle(pkg ? FW_TR("Drop a game folder, an image or a .gp5 project here")
+                         : FW_TR("Drop a game dump folder or an archive (.zip, .7z, .rar) here"));
+    m_drop->setText(pkg ? FW_TR("or click to browse \u2014 a folder, an .exfat, .ffpfs, .ffpfsc or .ffpkg image, or a .gp5 project")
+                        : FW_TR("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or an archive of it"));
     if (t == jobs::kFormatExfat)
-        m_advanced->setCaption(QStringLiteral("Free space, volume label, contents, verification"));
+        m_advanced->setCaption(FW_TR("Free space, volume label, contents, verification"));
     else if (t == jobs::kFormatFfpkg)
-        m_advanced->setCaption(QStringLiteral("Block and fragment size, inodes, contents, verification"));
+        m_advanced->setCaption(FW_TR("Block and fragment size, inodes, contents, verification"));
     else if (t == jobs::kFormatFfpfsc)
-        m_advanced->setCaption(QStringLiteral("Threads, PFS format, source folder, verification"));
+        m_advanced->setCaption(FW_TR("Threads, PFS format, source folder, verification"));
     else if (folder)
-        m_advanced->setCaption(QStringLiteral("Check after packing, threads, temporary files"));
+        m_advanced->setCaption(FW_TR("Check after packing, threads, temporary files"));
     else
-        m_advanced->setCaption(QStringLiteral("Packing, param.json, files, PlayGo, verification"));
-    m_settingsLink->setText(t == jobs::kFormatExfat ? QStringLiteral("All exFAT settings")
-                            : t == jobs::kFormatFfpkg ? QStringLiteral("All FFPKG settings")
-                            : t == jobs::kFormatFfpfsc ? QStringLiteral("All PFS settings")
-                            : folder ? QStringLiteral("All zstd settings")
-                                     : QStringLiteral("All FPKG settings"));
-    m_fileLabel->setText(pkg ? QStringLiteral("Package name") : folder ? QStringLiteral("Folder name") : QStringLiteral("File name"));
+        m_advanced->setCaption(FW_TR("Packing, param.json, files, PlayGo, verification"));
+    m_settingsLink->setText(t == jobs::kFormatExfat ? FW_TR("All exFAT settings")
+                            : t == jobs::kFormatFfpkg ? FW_TR("All FFPKG settings")
+                            : t == jobs::kFormatFfpfsc ? FW_TR("All PFS settings")
+                            : folder ? FW_TR("All zstd settings")
+                                     : FW_TR("All FPKG settings"));
+    m_fileLabel->setText(pkg ? FW_TR("Package name") : folder ? FW_TR("Folder name") : FW_TR("File name"));
     m_fileName->setAccessibleName(m_fileLabel->text());
-    m_fileName->setToolTip(pkg ? QStringLiteral("Named from the content ID and the version.")
-                               : QStringLiteral("Named by Settings \u203a Build \u203a Output name. Type to change it for this job."));
+    m_fileName->setToolTip(pkg ? FW_TR("Named from the content ID and the version.")
+                               : FW_TR("Named by Settings \u203a Build \u203a Output name. Type to change it for this job."));
     m_fileName->setReadOnly(pkg);
     m_fileExt->setVisible(!pkg && !folder);
     m_nameMenuButton->setVisible(!pkg);
@@ -1332,7 +1346,7 @@ void BuildImagePage::updateAdvancedSummary()
                 if (SettingRow* row = fo->panel->row(key); row && !row->isHidden())
                     ++n;
     }
-    m_advanced->setSummary(n > 0 ? QStringLiteral("%1 changed").arg(n) : QStringLiteral("Defaults"), n > 0 ? Tone::Info : Tone::Neutral);
+    m_advanced->setSummary(n > 0 ? FW_TR("%1 changed").arg(n) : FW_TR("Defaults"), n > 0 ? Tone::Info : Tone::Neutral);
 }
 
 void BuildImagePage::updateClusterNote()
@@ -1346,7 +1360,7 @@ void BuildImagePage::updateClusterNote()
     if (v == QLatin1String("auto") || v == QLatin1String("65536") || v.isEmpty())
         row->setMessage({}, Tone::Neutral);
     else
-        row->setMessage(QStringLiteral("ShadowMount+ 1.7 and later need 64 KB."), Tone::Warn);
+        row->setMessage(FW_TR("ShadowMount+ 1.7 and later need 64 KB."), Tone::Warn);
 }
 
 void BuildImagePage::updatePfsRows()
@@ -1357,7 +1371,7 @@ void BuildImagePage::updatePfsRows()
         return;
     const bool folderImage = format() == jobs::kFormatFfpfs;
     const bool compressFiles = panel->effectiveValue(pfs::keys::kCompressFiles).toBool();
-    level->setDisabledReason(folderImage && !compressFiles ? QStringLiteral("Only used when files inside the .ffpfs are compressed.") : QString());
+    level->setDisabledReason(folderImage && !compressFiles ? FW_TR("Only used when files inside the .ffpfs are compressed.") : QString());
 }
 
 void BuildImagePage::updateToolsStatus()
@@ -1367,22 +1381,22 @@ void BuildImagePage::updateToolsStatus()
     const DependencyInfo info = m_ctx.dependencies().last(QStringLiteral("sony.pubcmd"));
     m_toolsDetail->show();
     if (info.id.isEmpty()) {
-        m_toolsBadge->set(QStringLiteral("Checking\u2026"), Tone::Neutral);
+        m_toolsBadge->set(FW_TR("Checking\u2026"), Tone::Neutral);
         m_toolsBadge->setIconName(QStringLiteral("loader"));
-        m_toolsDetail->setText(QStringLiteral("Your own prospero-pub-cmd.exe builds the package."));
-        m_toolsLink->setText(QStringLiteral("Set up\u2026"));
+        m_toolsDetail->setText(FW_TR("Your own prospero-pub-cmd.exe builds the package."));
+        m_toolsLink->setText(FW_TR("Set up\u2026"));
     } else if (info.status == DependencyStatus::Ready) {
-        m_toolsBadge->set(info.version.isEmpty() ? QStringLiteral("Found") : QStringLiteral("Found \u00b7 %1").arg(info.version), Tone::Ok);
+        m_toolsBadge->set(info.version.isEmpty() ? FW_TR("Found") : FW_TR("Found \u00b7 %1").arg(info.version), Tone::Ok);
         m_toolsBadge->setIconName(defaultBadgeIcon(Tone::Ok));
-        m_toolsDetail->setText(info.path.isEmpty() ? QStringLiteral("Your own prospero-pub-cmd.exe builds the package.") : nativePath(info.path));
-        m_toolsLink->setText(QStringLiteral("Change\u2026"));
+        m_toolsDetail->setText(info.path.isEmpty() ? FW_TR("Your own prospero-pub-cmd.exe builds the package.") : nativePath(info.path));
+        m_toolsLink->setText(FW_TR("Change\u2026"));
     } else {
         const bool notSet = info.status == DependencyStatus::Missing;
-        m_toolsBadge->set(notSet ? QStringLiteral("Not set") : dependencyStatusName(info.status), Tone::Warn);
+        m_toolsBadge->set(notSet ? FW_TR("Not set") : i18n::translate(dependencyStatusName(info.status)), Tone::Warn);
         m_toolsBadge->setIconName(defaultBadgeIcon(Tone::Warn));
-        m_toolsDetail->setText(notSet ? QStringLiteral("Needed to build packages. Nothing from Sony is included.")
+        m_toolsDetail->setText(notSet ? FW_TR("Needed to build packages. Nothing from Sony is included.")
                                       : (info.detail.isEmpty() ? info.howToFix : info.detail));
-        m_toolsLink->setText(QStringLiteral("Set up\u2026"));
+        m_toolsLink->setText(FW_TR("Set up\u2026"));
     }
 }
 
@@ -1408,8 +1422,8 @@ bool BuildImagePage::acceptsDrop(const QList<QUrl>& urls) const
         return true;
     static const QStringList exts = {QStringLiteral("exfat"), QStringLiteral("ffpfsc"), QStringLiteral("ffpfs"),
                                      QStringLiteral("ffpkg"), QStringLiteral("gp5")};
-    if (tile() != kFormatFpkg && fi.isFile() && fi.suffix().compare(QLatin1String("zip"), Qt::CaseInsensitive) == 0)
-        return true; // a zipped dump
+    if (tile() != kFormatFpkg && fi.isFile() && archive::isArchiveSource(fi.absoluteFilePath()))
+        return true; // an archived dump
     return tile() == kFormatFpkg && fi.isFile() && exts.contains(fi.suffix().toLower());
 }
 
@@ -1470,24 +1484,24 @@ void BuildImagePage::browseSource()
     QString picked;
     if (!isFpkg()) {
         QMenu menu(this);
-        auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Game folder\u2026"));
-        auto* zip = menu.addAction(iconPixmap(QStringLiteral("archive"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Zipped dump (.zip)\u2026"));
+        auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), FW_TR("Game folder\u2026"));
+        auto* zip = menu.addAction(iconPixmap(QStringLiteral("archive"), 16, color::fg_2, devicePixelRatioF()), FW_TR("Archived dump (.zip, .7z, .rar)\u2026"));
         QAction* chosen = menu.exec(at);
         if (chosen == folder)
-            picked = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game dump folder"), start);
+            picked = QFileDialog::getExistingDirectory(window(), FW_TR("Choose the game dump folder"), start);
         else if (chosen == zip)
-            picked = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the zipped dump"), start,
-                                                  QStringLiteral("ZIP archives (*.zip)"));
+            picked = QFileDialog::getOpenFileName(window(), FW_TR("Choose the archived dump"), start,
+                                                  FW_TR("Archives") + QStringLiteral(" (*.") + archive::archiveSourceSuffixes().join(QStringLiteral(" *.")) + u')');
     } else {
         QMenu menu(this);
-        auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Game folder\u2026"));
-        auto* file = menu.addAction(iconPixmap(QStringLiteral("file"), 16, color::fg_2, devicePixelRatioF()), QStringLiteral("Image or .gp5 project\u2026"));
+        auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), FW_TR("Game folder\u2026"));
+        auto* file = menu.addAction(iconPixmap(QStringLiteral("file"), 16, color::fg_2, devicePixelRatioF()), FW_TR("Image or .gp5 project\u2026"));
         QAction* chosen = menu.exec(at);
         if (chosen == folder)
-            picked = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game folder"), start);
+            picked = QFileDialog::getExistingDirectory(window(), FW_TR("Choose the game folder"), start);
         else if (chosen == file)
-            picked = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the image or project"), start,
-                                                  QStringLiteral("Images and projects (*.exfat *.ffpfsc *.ffpfs *.ffpkg *.gp5)"));
+            picked = QFileDialog::getOpenFileName(window(), FW_TR("Choose the image or project"), start,
+                                                  FW_TR("Images and projects") + QStringLiteral(" (*.exfat *.ffpfsc *.ffpfs *.ffpkg *.gp5)"));
     }
     if (!picked.isEmpty())
         setSource(picked);
@@ -1512,7 +1526,7 @@ void BuildImagePage::setSource(const QString& path)
         m_reader->cancel();
         m_strip->hide();
         m_drop->show();
-        m_sourceBadge->set(QStringLiteral("Step 1"), Tone::Neutral);
+        m_sourceBadge->set(FW_TR("Step 1"), Tone::Neutral);
         m_sourceBadge->setIconName(QString());
         m_summary = {};
         m_nameEdited = false;
@@ -1534,7 +1548,7 @@ void BuildImagePage::setSource(const QString& path)
         m_nameEdited = false;
     const QFileInfo fi(path);
     if (fi.isDir() || m_sourceKind == QLatin1String("zip")) {
-        m_sourceBadge->set(QStringLiteral("Scanning\u2026"), Tone::Info);
+        m_sourceBadge->set(FW_TR("Scanning\u2026"), Tone::Info);
         m_sourceBadge->setIconName(QStringLiteral("loader"));
         m_summary = {}; // nothing stale while the new folder is read
         // …nor in the strip (when it shows the source before) and the status bar.
@@ -1553,7 +1567,7 @@ void BuildImagePage::setSource(const QString& path)
     s.exists = fi.exists();
     s.isGame = fi.exists();
     s.bytes = fi.size();
-    s.title = fi.completeBaseName();
+    s.title = sourceStem(fi);
     static const QRegularExpression re(QStringLiteral("(CUSA|PPSA|PPLH)[-_ ]?(\\d{5})"), QRegularExpression::CaseInsensitiveOption);
     if (const auto m = re.match(fi.fileName()); m.hasMatch())
         s.titleId = (m.captured(1) + m.captured(2)).toUpper();
@@ -1618,9 +1632,9 @@ void BuildImagePage::refreshSourceState()
     if (!s.exists) {
         m_strip->hide();
         m_drop->show();
-        m_sourceMsg->set(file ? QStringLiteral("This file does not exist. Choose another or check the drive.")
-                              : QStringLiteral("This folder does not exist. Choose another or check the drive."), Tone::Err);
-        m_sourceBadge->set(QStringLiteral("Not found"), Tone::Err);
+        m_sourceMsg->set(file ? FW_TR("This file does not exist. Choose another or check the drive.")
+                              : FW_TR("This folder does not exist. Choose another or check the drive."), Tone::Err);
+        m_sourceBadge->set(FW_TR("Not found"), Tone::Err);
         m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Err));
     } else {
         m_drop->hide();
@@ -1646,31 +1660,31 @@ void BuildImagePage::refreshSourceState()
                                          + packedNote(s.folder, isFpkg()));
             } else {
                 m_stripTile->setIconName(QStringLiteral("folder"));
-                m_stripMeta->setFullText(s.gameRoots.size() > 1 ? QStringLiteral("Folder \u00b7 %1 games inside").arg(s.gameRoots.size())
-                                                                : QStringLiteral("Folder without a game"));
+                m_stripMeta->setFullText(s.gameRoots.size() > 1 ? FW_TR("Folder \u00b7 %1 games inside").arg(s.gameRoots.size())
+                                                                : FW_TR("Folder without a game"));
             }
         }
         if (kind == QLatin1String("zip") && isFpkg()) {
             m_stripTile->setTone(Tone::Warn);
-            m_sourceMsg->set(QStringLiteral("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP, or pick exFAT, FFPKG, PFS or Packed folder."), Tone::Warn);
-            m_sourceBadge->set(QStringLiteral("Needs a folder"), Tone::Warn);
+            m_sourceMsg->set(FW_TR("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the archive, or pick exFAT, FFPKG, PFS or Packed folder."), Tone::Warn);
+            m_sourceBadge->set(FW_TR("Needs a folder"), Tone::Warn);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip") && (!s.isGame || !s.error.isEmpty())) {
             m_stripTile->setTone(Tone::Warn);
-            m_sourceMsg->set(s.error.isEmpty() ? QStringLiteral("This ZIP holds no game (no eboot.bin or sce_sys/param.json).") : s.error, Tone::Warn);
-            m_sourceBadge->set(QStringLiteral("Not a game"), Tone::Warn);
+            m_sourceMsg->set(s.error.isEmpty() ? FW_TR("This archive holds no game (no eboot.bin or sce_sys/param.json).") : s.error, Tone::Warn);
+            m_sourceBadge->set(FW_TR("Not a game"), Tone::Warn);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip")) {
             m_stripTile->setTone(Tone::Ok);
-            m_sourceMsg->set(QStringLiteral("The ZIP is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
+            m_sourceMsg->set(FW_TR("The archive is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
                                  .arg(formatBytes(s.bytes)),
                              Tone::Neutral);
-            m_sourceBadge->set(QStringLiteral("Ready"), Tone::Ok);
+            m_sourceBadge->set(FW_TR("Ready"), Tone::Ok);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Ok));
         } else if (file && !isFpkg()) {
             m_stripTile->setTone(Tone::Warn);
-            m_sourceMsg->set(QStringLiteral("Only FPKG can use an image or a .gp5 project. Choose the game folder for this format."), Tone::Warn);
-            m_sourceBadge->set(QStringLiteral("Needs a folder"), Tone::Warn);
+            m_sourceMsg->set(FW_TR("Only FPKG can use an image or a .gp5 project. Choose the game folder for this format."), Tone::Warn);
+            m_sourceBadge->set(FW_TR("Needs a folder"), Tone::Warn);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (!s.isGame) {
             m_stripTile->setTone(Tone::Warn);
@@ -1678,10 +1692,10 @@ void BuildImagePage::refreshSourceState()
         } else {
             m_stripTile->setTone(Tone::Ok);
             if (!m_pendingRootNote.isEmpty())
-                m_sourceMsg->set(QStringLiteral("Found the game in %1.").arg(m_pendingRootNote), Tone::Info);
+                m_sourceMsg->set(FW_TR("Found the game in %1.").arg(m_pendingRootNote), Tone::Info);
             else
                 m_sourceMsg->clear();
-            m_sourceBadge->set(QStringLiteral("Ready"), Tone::Ok);
+            m_sourceBadge->set(FW_TR("Ready"), Tone::Ok);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Ok));
         }
     }
@@ -1695,16 +1709,16 @@ void BuildImagePage::showGameRoots(const GameSummary& s)
     }
     m_rootChoices = s.gameRoots;
     if (s.gameRoots.isEmpty()) {
-        QString text = QStringLiteral("No game here. Choose the folder that holds eboot.bin and sce_sys.");
+        QString text = FW_TR("No game here. Choose the folder that holds eboot.bin and sce_sys.");
         if (s.rootsTruncated)
-            text = QStringLiteral("No game found in the first 4,000 folders. Choose the folder that holds eboot.bin and sce_sys.");
+            text = FW_TR("No game found in the first 4,000 folders. Choose the folder that holds eboot.bin and sce_sys.");
         m_sourceMsg->set(text, Tone::Warn);
-        m_sourceBadge->set(QStringLiteral("Not a game dump"), Tone::Warn);
+        m_sourceBadge->set(FW_TR("Not a game dump"), Tone::Warn);
         m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         return;
     }
-    m_sourceMsg->set(QStringLiteral("This folder holds %1 games. Choose one:").arg(s.gameRoots.size()), Tone::Info);
-    m_sourceBadge->set(QStringLiteral("Choose a game"), Tone::Warn);
+    m_sourceMsg->set(FW_TR("This folder holds %1 games. Choose one:").arg(s.gameRoots.size()), Tone::Info);
+    m_sourceBadge->set(FW_TR("Choose a game"), Tone::Warn);
     m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
     const int shown = std::min<int>(int(s.gameRoots.size()), 8);
     for (int i = 0; i < shown; ++i) {
@@ -1712,16 +1726,16 @@ void BuildImagePage::showGameRoots(const GameSummary& s)
         auto* pick = button(QDir::toNativeSeparators(QDir(s.folder).relativeFilePath(root)), ButtonVariant::Subtle,
                             QStringLiteral("game"), m_rootsBox);
         setButtonSmall(pick, true);
-        pick->setAccessibleName(QStringLiteral("Use %1").arg(QFileInfo(root).fileName()));
+        pick->setAccessibleName(FW_TR("Use %1").arg(QFileInfo(root).fileName()));
         pick->setToolTip(plainTip(nativePath(root)));
         connect(pick, &QPushButton::clicked, this, [this, root] { setSource(root); });
         m_rootsList->addWidget(pick, 0, Qt::AlignLeft);
     }
     QStringList rest;
     if (s.gameRoots.size() > shown)
-        rest << QStringLiteral("and %1 more.").arg(s.gameRoots.size() - shown);
+        rest << FW_TR("and %1 more.").arg(s.gameRoots.size() - shown);
     if (s.rootsTruncated)
-        rest << QStringLiteral("The search stopped after 4,000 folders.");
+        rest << FW_TR("The search stopped after 4,000 folders.");
     if (!rest.isEmpty())
         m_rootsList->addWidget(caption(rest.join(u' '), m_rootsBox));
     m_rootsBox->show();
@@ -1763,8 +1777,8 @@ void BuildImagePage::onPackageTypeChanged()
     // refuses any other), so the field only shows it; an add-on has its own.
     const bool ownId = t == QLatin1String("addon");
     m_contentId->setReadOnly(!ownId);
-    m_contentId->setToolTip(ownId ? QStringLiteral("36 characters: the add-on's own content ID.")
-                                  : QStringLiteral("Read from the game's sce_sys/param.json. A package must carry the game's own content ID, so it "
+    m_contentId->setToolTip(ownId ? FW_TR("36 characters: the add-on's own content ID.")
+                                  : FW_TR("Read from the game's sce_sys/param.json. A package must carry the game's own content ID, so it "
                                                    "cannot be changed here."));
     m_titleRow->setVisible(!backport);
     if (backport) {
@@ -1774,9 +1788,9 @@ void BuildImagePage::onPackageTypeChanged()
             "unpacked). Needs a verified SDK Fix toolchain."));
     } else {
         m_backportNote->setText(hasBackports()
-                                    ? QStringLiteral("This game's package is built first, then a separate update for each "
+                                    ? FW_TR("This game's package is built first, then a separate update for each "
                                                      "backport against it. Install the package, then the update for your firmware.")
-                                    : QStringLiteral("Optional: add backport files to also get them as separate updates for "
+                                    : FW_TR("Optional: add backport files to also get them as separate updates for "
                                                      "this package (the package itself stays the original game)."));
     }
     if (backport) {
@@ -1812,21 +1826,21 @@ void BuildImagePage::updateStartHint()
     if (!m_sourcePath.isEmpty() || backportType)
         setStartHint({});
     else
-        setStartHint(isFpkg() ? QStringLiteral("Choose the source first.") : QStringLiteral("Choose the game dump first."));
+        setStartHint(isFpkg() ? FW_TR("Choose the source first.") : FW_TR("Choose the game dump first."));
 }
 
 void BuildImagePage::browseBackport(PathField* f, const QString& label)
 {
     QMenu menu(this);
-    menu.addAction(icon(QStringLiteral("folder"), color::fg_2), QStringLiteral("Choose a folder\u2026"), this, [this, f, label] {
-        const QString d = QFileDialog::getExistingDirectory(window(), QStringLiteral("%1 backport files (game-root layout)").arg(label),
+    menu.addAction(icon(QStringLiteral("folder"), color::fg_2), FW_TR("Choose a folder\u2026"), this, [this, f, label] {
+        const QString d = QFileDialog::getExistingDirectory(window(), FW_TR("%1 backport files (game-root layout)").arg(label),
                                                             f->path());
         if (!d.isEmpty())
             f->setPath(QDir::toNativeSeparators(d));
     });
-    menu.addAction(icon(QStringLiteral("archive"), color::fg_2), QStringLiteral("Choose a backport ZIP\u2026"), this, [this, f, label] {
-        const QString z = QFileDialog::getOpenFileName(window(), QStringLiteral("%1 backport ZIP").arg(label), f->path(),
-                                                       QStringLiteral("Backport ZIP (*.zip)"));
+    menu.addAction(icon(QStringLiteral("archive"), color::fg_2), FW_TR("Choose a backport ZIP\u2026"), this, [this, f, label] {
+        const QString z = QFileDialog::getOpenFileName(window(), FW_TR("%1 backport ZIP").arg(label), f->path(),
+                                                       FW_TR("Backport ZIP") + QStringLiteral(" (*.zip)"));
         if (!z.isEmpty())
             f->setPath(QDir::toNativeSeparators(z));
     });
@@ -1851,7 +1865,7 @@ void BuildImagePage::inspectBase()
         renderFileName();
         return;
     }
-    m_baseInfo->set(QStringLiteral("Reading the base package\u2026"), Tone::Neutral);
+    m_baseInfo->set(FW_TR("Reading the base package\u2026"), Tone::Neutral);
     m_baseInfo->show();
     auto* watcher = new QFutureWatcher<Result<fpkg::PackageIdentity>>(this);
     connect(watcher, &QFutureWatcher<Result<fpkg::PackageIdentity>>::finished, this, [this, watcher, gen] {
@@ -1862,9 +1876,9 @@ void BuildImagePage::inspectBase()
         if (!r.ok()) {
             m_baseInfo->set(r.error().message, Tone::Err);
         } else if (r->kind != fpkg::PackageKind::Ps5) {
-            m_baseInfo->set(QStringLiteral("Not a full PS5 package (kind %1).").arg(fpkg::packageKindName(r->kind)), Tone::Err);
+            m_baseInfo->set(FW_TR("Not a full PS5 package (kind %1).").arg(fpkg::packageKindName(r->kind)), Tone::Err);
         } else if (!r->hasParam) {
-            m_baseInfo->set(QStringLiteral("The base package has no readable param.json; it may be a retail (encrypted) package."), Tone::Err);
+            m_baseInfo->set(FW_TR("The base package has no readable param.json; it may be a retail (encrypted) package."), Tone::Err);
         } else {
             m_baseTitleId = r->titleId;
             m_baseInfo->set(QStringLiteral("%1 [%2] %3").arg(r->title, r->titleId, r->version), Tone::Ok);
@@ -1884,26 +1898,26 @@ void BuildImagePage::pickFromDlcEmu()
 {
     QString game = m_summary.exists && QFileInfo(m_summary.folder).isDir() ? m_summary.folder : QString();
     if (game.isEmpty() || !QFile::exists(QDir(game).filePath(QStringLiteral("dlc_emu.ini"))))
-        game = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose the game folder that holds dlc_emu.ini"));
+        game = QFileDialog::getExistingDirectory(window(), FW_TR("Choose the game folder that holds dlc_emu.ini"));
     if (game.isEmpty())
         return;
     const auto candidates = fpkg::addonsFromDlcEmu(game);
     if (candidates.empty()) {
-        Sheet::message(window(), QStringLiteral("No add-ons found"),
-                       QStringLiteral("%1 has no dlc_emu.ini entries with a content ID.").arg(Sheet::monoSpan(nativePath(game))), Sheet::Icon::Info);
+        Sheet::message(window(), FW_TR("No add-ons found"),
+                       FW_TR("%1 has no dlc_emu.ini entries with a content ID.").arg(Sheet::monoSpan(nativePath(game))), Sheet::Icon::Info);
         return;
     }
-    auto* s = new Sheet(window(), QStringLiteral("Add-ons in dlc_emu.ini"), Sheet::Icon::None, size::dialogWide);
+    auto* s = new Sheet(window(), FW_TR("Add-ons in dlc_emu.ini"), Sheet::Icon::None, size::dialogWide);
     auto* combo = dropdown(s);
     for (const auto& c : candidates)
         combo->addItem(QStringLiteral("%1 \u00b7 %2%3")
-                           .arg(c.contentId, c.payloadFolder.isEmpty() ? QStringLiteral("no local payload folder") : nativePath(c.payloadFolder),
+                           .arg(c.contentId, c.payloadFolder.isEmpty() ? FW_TR("no local payload folder") : nativePath(c.payloadFolder),
                                 c.supported ? QString() : QStringLiteral(" \u00b7 ") + c.reason),
                        int(&c - &candidates[0]));
     combo->setMinimumWidth(520);
-    s->body()->addWidget(field(QStringLiteral("Add-on"), combo, QStringLiteral("Only entries with a payload folder and a supported volume type can be packaged."), s));
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Use this add-on"), Sheet::Role::Primary);
+    s->body()->addWidget(field(FW_TR("Add-on"), combo, FW_TR("Only entries with a payload folder and a supported volume type can be packaged."), s));
+    s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
+    s->addButton(FW_TR("Use this add-on"), Sheet::Role::Primary);
     if (s->exec() != 1)
         return;
     const auto& c = candidates[size_t(combo->currentData().toInt())];
@@ -1916,7 +1930,7 @@ void BuildImagePage::pickFromDlcEmu()
     }
     m_contentId->setText(c.contentId);
     if (!c.supported)
-        showFormError(QStringLiteral("This add-on cannot be packaged"), c.reason);
+        showFormError(FW_TR("This add-on cannot be packaged"), c.reason);
 }
 
 QString BuildImagePage::expectedPackagePath() const
@@ -1948,8 +1962,8 @@ void BuildImagePage::applyLiveCpuLimit()
             fpkg::setLiveCpuLimit(rec.id, cores);
             ++applied;
         }
-    m_liveNote->setText(applied > 0 ? QStringLiteral("Applied to %1 running package job%2.").arg(applied).arg(applied == 1 ? QString() : QStringLiteral("s"))
-                                    : QStringLiteral("Lower it any time, even while packing."));
+    m_liveNote->setText(applied > 0 ? (applied == 1 ? FW_TR("Applied to %1 running package job.") : FW_TR("Applied to %1 running package jobs.")).arg(applied)
+                                    : FW_TR("Lower it any time, even while packing."));
 }
 
 // ---- output -----------------------------------------------------------------------
@@ -1998,12 +2012,12 @@ void BuildImagePage::renderFileName()
         m_fileName->setText(name);
         m_fileName->setPlaceholderText(packageTypeKind() == PackageType::Backport
                                            ? QStringLiteral("<TITLEID>-backport-4xx.pkg / -5xxplus.pkg")
-                                           : QStringLiteral("Named from the content ID"));
+                                           : FW_TR("Named from the content ID"));
         m_fileName->setCursorPosition(0);
         setInputError(m_fileName, false);
         return;
     }
-    m_fileName->setPlaceholderText(m_summary.exists ? QString() : QStringLiteral("From the game's title and version"));
+    m_fileName->setPlaceholderText(m_summary.exists ? QString() : FW_TR("From the game's title and version"));
     if (m_nameEdited) {
         // The FPKG tile shows its package name in this field; back on another
         // tile the name the user typed returns.
@@ -2032,7 +2046,7 @@ void BuildImagePage::renderFileName()
     f.firmware = fwOverride.isEmpty() || fwOverride == QLatin1String("auto") ? gameinfo::firmwareMajor(m_summary.requiredFw) : fwOverride;
     f.sdk = m_summary.sdk;
     f.type = typeLabel(tile());
-    f.folderName = sourceKind() == QLatin1String("zip") ? QFileInfo(m_summary.folder).completeBaseName() : QFileInfo(m_summary.folder).fileName();
+    f.folderName = sourceKind() == QLatin1String("zip") ? sourceStem(QFileInfo(m_summary.folder)) : QFileInfo(m_summary.folder).fileName();
     QString name = gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), f);
     // A packed folder next to the dump under the dump's own name would be the dump itself.
     if (isZstdFolder() && sourceKind() == QLatin1String("folder") && !name.isEmpty()
@@ -2084,9 +2098,9 @@ void BuildImagePage::updateOutput()
     const QString def = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
     if (isFpkg())
         placeholder = m_summary.exists ? nativePath(fpkg::defaultOutputFolder(m_summary.folder, def))
-                                       : (def.isEmpty() ? QStringLiteral("Next to the source, in a \u2026-pkg folder") : nativePath(def));
+                                       : (def.isEmpty() ? FW_TR("Next to the source, in a \u2026-pkg folder") : nativePath(def));
     else
-        placeholder = def.isEmpty() ? QStringLiteral("Next to the source folder") : nativePath(def);
+        placeholder = def.isEmpty() ? FW_TR("Next to the source folder") : nativePath(def);
     m_output->setPlaceholder(placeholder);
     checkSpace();
 }
@@ -2150,7 +2164,7 @@ void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<Q
     m_output->setError({});
     if (!ds.ok()) {
         m_spaceState = SpaceCheck::Unavailable;
-        m_spaceRow->set(QStringLiteral("The output drive is not available."), Tone::Warn);
+        m_spaceRow->set(FW_TR("The output drive is not available."), Tone::Warn);
         if (m_freeSpace)
             m_freeSpace->setText(QStringLiteral("\u2014"));
         return;
@@ -2172,13 +2186,13 @@ void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<Q
         showSpaceError(needed, ds->available, drive, reserve);
         return;
     }
-    QString text = QStringLiteral("%1 free on %2.").arg(formatBytes(ds->available), drive);
+    QString text = FW_TR("%1 free on %2.").arg(formatBytes(ds->available), drive);
     if (needed > 0)
-        text += pkg ? QStringLiteral(" The package needs up to %1.").arg(formatBytes(needed))
-                : isZstdFolder() ? QStringLiteral(" The packed folder needs up to %1.").arg(formatBytes(needed))
-                                 : QStringLiteral(" This image needs about %1.").arg(formatBytes(needed));
+        text += u' ' + (pkg ? FW_TR("The package needs up to %1.") : isZstdFolder() ? FW_TR("The packed folder needs up to %1.")
+                                                                                   : FW_TR("This image needs about %1."))
+                           .arg(formatBytes(needed));
     if (!exists)
-        text += QStringLiteral(" The folder is created when the build starts.");
+        text += u' ' + FW_TR("The folder is created when the build starts.");
     Tone tone = Tone::Ok;
     if (!vol->isEmpty()) {
         text += u' ' + vol->join(u' ');
@@ -2191,21 +2205,25 @@ void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<Q
 void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QString& drive, qint64 reserve)
 {
     reserve = std::max<qint64>(0, reserve);
-    const QString what = isFpkg() ? QStringLiteral("package") : isZstdFolder() ? QStringLiteral("packed folder") : QStringLiteral("image");
+    const bool pkg = isFpkg(), packedFolder = !pkg && isZstdFolder();
     const QString toFree = formatBytes(std::max<qint64>(0, needed + reserve - freeBytes));
     m_spaceState = SpaceCheck::Insufficient;
     m_spaceOk = false;
-    m_spaceProblem = QStringLiteral("Not enough space on %1.").arg(drive);
+    m_spaceProblem = FW_TR("Not enough space on %1.").arg(drive);
     m_spaceRow->clear();
-    m_output->setError(QStringLiteral("Not enough space"));
+    m_output->setError(FW_TR("Not enough space"));
     m_spaceBar->setTone(Tone::Err);
-    m_spaceBar->setTitle(QStringLiteral("Not enough space on %1").arg(drive));
+    m_spaceBar->setTitle(FW_TR("Not enough space on %1").arg(drive));
     // The refusal counts the free-space reserve, so the message does too.
     m_spaceBar->setMessage(reserve > 0
-                               ? QStringLiteral("This %1 needs %2 plus the %3 free-space reserve; %4 is free. Free %5 or choose another output folder.")
-                                     .arg(what, formatBytes(needed), formatBytes(reserve), formatBytes(freeBytes), toFree)
-                               : QStringLiteral("This %1 needs %2; %3 is free. Free %4 or choose another output folder.")
-                                     .arg(what, formatBytes(needed), formatBytes(freeBytes), toFree));
+                               ? (pkg ? FW_TR("This package needs %1 plus the %2 free-space reserve; %3 is free. Free %4 or choose another output folder.")
+                                  : packedFolder ? FW_TR("This packed folder needs %1 plus the %2 free-space reserve; %3 is free. Free %4 or choose another output folder.")
+                                                 : FW_TR("This image needs %1 plus the %2 free-space reserve; %3 is free. Free %4 or choose another output folder."))
+                                     .arg(formatBytes(needed), formatBytes(reserve), formatBytes(freeBytes), toFree)
+                               : (pkg ? FW_TR("This package needs %1; %2 is free. Free %3 or choose another output folder.")
+                                  : packedFolder ? FW_TR("This packed folder needs %1; %2 is free. Free %3 or choose another output folder.")
+                                                 : FW_TR("This image needs %1; %2 is free. Free %3 or choose another output folder."))
+                                     .arg(formatBytes(needed), formatBytes(freeBytes), toFree));
     m_spaceBar->clearLinks();
     // Suggest the volume with the most free space.
     QStorageInfo best;
@@ -2217,10 +2235,10 @@ void BuildImagePage::showSpaceError(qint64 needed, qint64 freeBytes, const QStri
     }
     if (best.isValid()) {
         const QString root = best.rootPath();
-        auto* l = m_spaceBar->addLink(QStringLiteral("Choose %1 (%2 free)").arg(driveLabel(root), formatBytes(best.bytesAvailable())));
+        auto* l = m_spaceBar->addLink(FW_TR("Choose %1 (%2 free)").arg(driveLabel(root), formatBytes(best.bytesAvailable())));
         connect(l, &Link::activated, this, [this, root] { m_output->setPath(QDir(root).filePath(QStringLiteral("Images"))); });
     }
-    auto* s = m_spaceBar->addLink(QStringLiteral("Open Storage settings"));
+    auto* s = m_spaceBar->addLink(FW_TR("Open Storage settings"));
     connect(s, &Link::activated, this, [this] {
         emit navigateRequested({QStringLiteral("settings"), {{QStringLiteral("section"), QStringLiteral("Storage")}}});
     });
@@ -2236,57 +2254,57 @@ QString BuildImagePage::validateForm()
     if (backportType && m_sourcePath.isEmpty()) {
         // The game folder is optional: without it the base package is unpacked.
         if (m_basePackage->path().trimmed().isEmpty() || !QFileInfo(m_basePackage->path().trimmed()).isFile())
-            return QStringLiteral("Choose the base package (.pkg).");
+            return FW_TR("Choose the base package (.pkg).");
         if (!hasBackports())
-            return QStringLiteral("Choose at least one backport (a folder or a ZIP): 4.xx or 5.xx+.");
+            return FW_TR("Choose at least one backport (a folder or a ZIP): 4.xx or 5.xx+.");
         static const QRegularExpression ver(QStringLiteral("^\\d{2}\\.\\d{3}\\.\\d{3}$"));
         const QString v = m_version->text().trimmed();
         if (!v.isEmpty() && !ver.match(v).hasMatch())
-            return QStringLiteral("The version must be NN.NNN.NNN, for example 01.000.001.");
+            return FW_TR("The version must be NN.NNN.NNN, for example 01.000.001.");
         return fo && fo->panel->hasErrors() ? fo->panel->errorMessages().join(u' ') : QString();
     }
     if (m_sourcePath.isEmpty())
-        return isFpkg() ? QStringLiteral("Choose the source first.") : QStringLiteral("Choose the game dump first.");
+        return isFpkg() ? FW_TR("Choose the source first.") : FW_TR("Choose the game dump first.");
     if (m_reader->isBusy())
-        return QStringLiteral("The source is still being read. Try again in a moment.");
+        return FW_TR("The source is still being read. Try again in a moment.");
     if (!m_summary.exists)
-        return QStringLiteral("The source does not exist.");
+        return FW_TR("The source does not exist.");
     const QString kind = sourceKind();
     if (!isFpkg()) {
         if (kind == QLatin1String("zip")) {
             if (!m_summary.error.isEmpty())
                 return m_summary.error;
             if (!m_summary.isGame)
-                return QStringLiteral("This ZIP holds no game (no eboot.bin or sce_sys/param.json).");
+                return FW_TR("This archive holds no game (no eboot.bin or sce_sys/param.json).");
         } else if (kind != QLatin1String("folder"))
-            return isZstdFolder() ? QStringLiteral("A packed folder is made from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.")
-                                  : QStringLiteral("exFAT, FFPKG and PFS images are built from a game folder or a zipped dump. Choose the dump, or choose FPKG to package this file.");
+            return isZstdFolder() ? FW_TR("A packed folder is made from a game folder or an archived dump. Choose the dump, or choose FPKG to package this file.")
+                                  : FW_TR("exFAT, FFPKG and PFS images are built from a game folder or an archived dump. Choose the dump, or choose FPKG to package this file.");
         if (kind == QLatin1String("folder") && !m_summary.isGame)
-            return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
-                                                  : QStringLiteral("The source folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");
+            return m_summary.gameRoots.size() > 1 ? FW_TR("This folder holds several games. Choose one of them.")
+                                                  : FW_TR("The source folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");
         const QString stem = m_fileName->text().trimmed();
         if (stem.isEmpty())
-            return isZstdFolder() ? QStringLiteral("Enter a folder name.") : QStringLiteral("Enter a file name.");
+            return isZstdFolder() ? FW_TR("Enter a folder name.") : FW_TR("Enter a file name.");
         if (const QString why = gameinfo::folderNameProblem(fileName()); !why.isEmpty()) {
             setInputError(m_fileName, true);
-            return QStringLiteral("The %1 name cannot be used: %2").arg(isZstdFolder() ? QStringLiteral("folder") : QStringLiteral("file"), why);
+            return (isZstdFolder() ? FW_TR("The folder name cannot be used: %1") : FW_TR("The file name cannot be used: %1")).arg(why);
         }
         if (isZstdFolder()) {
             // The job refuses these too; here the message comes before anything is queued.
             const QString out = QDir::cleanPath(QFileInfo(QDir(outputFolder()).filePath(stem)).absoluteFilePath());
             const QString src = QDir::cleanPath(QFileInfo(m_summary.folder).absoluteFilePath());
             if (kind == QLatin1String("folder") && (isSameOrInside(out, src) || isSameOrInside(src, out)))
-                return QStringLiteral("The packed folder cannot be the game folder itself, inside it or above it. Change the folder name or the output folder.");
+                return FW_TR("The packed folder cannot be the game folder itself, inside it or above it. Change the folder name or the output folder.");
             if (QFileInfo::exists(out)
                 && (!QFileInfo(out).isDir() || !QDir(out).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)))
-                return QStringLiteral("%1 already exists. Choose another folder name.").arg(nativePath(out));
+                return FW_TR("%1 already exists. Choose another folder name.").arg(nativePath(out));
         }
     } else {
         if (kind == QLatin1String("zip"))
-            return QStringLiteral("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the ZIP first.");
+            return FW_TR("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the archive first.");
         if (kind == QLatin1String("folder") && !m_summary.isGame)
-            return m_summary.gameRoots.size() > 1 ? QStringLiteral("This folder holds several games. Choose one of them.")
-                                                  : QStringLiteral("The folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");
+            return m_summary.gameRoots.size() > 1 ? FW_TR("This folder holds several games. Choose one of them.")
+                                                  : FW_TR("The folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");
         const PackageType ptype = packageTypeKind();
         // The engine's own rule (what the package name is made with). A backport
         // update takes its ID from the base package: the field is hidden then.
@@ -2295,46 +2313,46 @@ QString BuildImagePage::validateForm()
         setInputError(m_contentId, badId);
         if (badId)
             return m_contentId->isReadOnly()
-                       ? QStringLiteral("The Content ID in the game's sce_sys/param.json must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 "
+                       ? FW_TR("The Content ID in the game's sce_sys/param.json must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 "
                                         "(36 characters). Correct it there.")
-                       : QStringLiteral("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
+                       : FW_TR("The Content ID must look like UP9000-PPSA01325_00-GHOSTOFYOTEI0000 (36 characters).");
         static const QRegularExpression ver(QStringLiteral("^\\d{2}\\.\\d{3}\\.\\d{3}$"));
         const QString v = m_version->text().trimmed();
         setInputError(m_version, !v.isEmpty() && !ver.match(v).hasMatch());
         if (!v.isEmpty() && !ver.match(v).hasMatch())
-            return QStringLiteral("The version must be NN.NNN.NNN, for example 01.000.000.");
+            return FW_TR("The version must be NN.NNN.NNN, for example 01.000.000.");
         if (ptype == PackageType::Update) {
             const QString base = m_basePackage->path().trimmed();
             if (base.isEmpty())
-                return QStringLiteral("An update needs the base package that is installed on the console.");
+                return FW_TR("An update needs the base package that is installed on the console.");
             if (!QFileInfo(base).isFile())
-                return QStringLiteral("The base package does not exist. Choose the .pkg that is installed on the console.");
+                return FW_TR("The base package does not exist. Choose the .pkg that is installed on the console.");
         }
         if (ptype == PackageType::Backport) {
             if (kind != QLatin1String("folder"))
-                return QStringLiteral("The game for a backport update is a game folder (or leave it empty to unpack the base package).");
+                return FW_TR("The game for a backport update is a game folder (or leave it empty to unpack the base package).");
             if (m_basePackage->path().trimmed().isEmpty() || !QFileInfo(m_basePackage->path().trimmed()).isFile())
-                return QStringLiteral("Choose the base package (.pkg).");
+                return FW_TR("Choose the base package (.pkg).");
             if (!hasBackports())
-                return QStringLiteral("Choose at least one backport (a folder or a ZIP): 4.xx or 5.xx+.");
+                return FW_TR("Choose at least one backport (a folder or a ZIP): 4.xx or 5.xx+.");
         }
         if (ptype == PackageType::App && hasBackports()) {
             if (kind != QLatin1String("folder"))
-                return QStringLiteral("Backport updates require a game folder source. GP5 sources and images cannot be combined "
+                return FW_TR("Backport updates require a game folder source. GP5 sources and images cannot be combined "
                                       "with backport inputs.");
             // The fields are filled from the game's param.json; only a change is refused.
             if ((!c.isEmpty() && c != m_summary.contentId) || (!v.isEmpty() && v != m_summary.version)
                 || (!m_title->text().trimmed().isEmpty() && m_title->text().trimmed() != m_summary.title))
-                return QStringLiteral("Content ID, version and title changes cannot be combined with backport updates (the "
+                return FW_TR("Content ID, version and title changes cannot be combined with backport updates (the "
                                       "updates must match the game exactly). Clear them, or build the backports separately.");
         }
         if (ptype == PackageType::Addon) {
             static const QRegularExpression hex32(QStringLiteral("^[0-9A-Fa-f]{32}$"));
             setInputError(m_entitlementKey, !hex32.match(m_entitlementKey->text().trimmed()).hasMatch());
             if (!hex32.match(m_entitlementKey->text().trimmed()).hasMatch())
-                return QStringLiteral("The entitlement key must be 32 hexadecimal characters.");
+                return FW_TR("The entitlement key must be 32 hexadecimal characters.");
             if (c.isEmpty())
-                return QStringLiteral("An add-on needs its Content ID.");
+                return FW_TR("An add-on needs its Content ID.");
         }
     }
     // Never refuse, or start, on an old answer: ask the drive now when the last
@@ -2345,7 +2363,7 @@ QString BuildImagePage::validateForm()
         && (!positive || !m_spaceChecked.isValid() || m_spaceChecked.elapsed() > kSpaceVerdictMs))
         checkSpaceNow();
     if (m_spaceState == SpaceCheck::Unavailable)
-        return QStringLiteral("The output drive is not available. Choose another output folder.");
+        return FW_TR("The output drive is not available. Choose another output folder.");
     if (!m_spaceOk)
         return m_spaceProblem;
     if (fo && fo->panel->hasErrors())
@@ -2406,12 +2424,12 @@ Result<QString> BuildImagePage::submit(bool)
         // An existing package with the expected name: ask now, since a queued job cannot.
         const QString expected = expectedPackagePath();
         if (!expected.isEmpty() && QFileInfo::exists(expected) && m_ctx.schema().contains(fpkg::keys::kOutputConflict)) {
-            auto* s = new Sheet(window(), QStringLiteral("A package with this name exists"), Sheet::Icon::Warning);
-            s->addText(QStringLiteral("%1 is already in the output folder. Keep both renames the existing file to \"name (1).pkg\"; overwrite sets it aside and restores it if the build fails.")
+            auto* s = new Sheet(window(), FW_TR("A package with this name exists"), Sheet::Icon::Warning);
+            s->addText(FW_TR("%1 is already in the output folder. Keep both renames the existing file to \"name (1).pkg\"; overwrite sets it aside and restores it if the build fails.")
                            .arg(Sheet::monoSpan(nativePath(expected))));
-            s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-            s->addButton(QStringLiteral("Keep both"), Sheet::Role::Primary);
-            s->addButton(QStringLiteral("Overwrite"), Sheet::Role::Destructive);
+            s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
+            s->addButton(FW_TR("Keep both"), Sheet::Role::Primary);
+            s->addButton(FW_TR("Overwrite"), Sheet::Role::Destructive);
             const int res = s->exec();
             if (res != 1 && res != 2)
                 return Error(ErrorCode::Cancelled, QStringLiteral("Not started."));

@@ -5,6 +5,7 @@
 #include "connect/ps5/IniDocument.h"
 #include "connect/ps5/KlogClient.h"
 #include "connect/ps5/RemotePath.h"
+#include "core/Tr.h"
 
 #include <QBuffer>
 #include <QElapsedTimer>
@@ -99,7 +100,7 @@ bool isTitleId(const QString& t)
 QString kStp(const char* s) { return QString::fromLatin1(s); }
 
 SmpKey key(const char* name, const char* section, const char* v2, SmpKeyType type, const char* def, const char* group,
-           const char* label, const char* help)
+           const QString& label, const QString& help)
 {
     SmpKey k;
     k.key = kStp(name);
@@ -108,8 +109,8 @@ SmpKey key(const char* name, const char* section, const char* v2, SmpKeyType typ
     k.type = type;
     k.defaultValue = QString::fromUtf8(def);
     k.group = kStp(group);
-    k.label = QString::fromUtf8(label);
-    k.help = QString::fromUtf8(help);
+    k.label = label; // English; the form translates it where it is shown
+    k.help = help;
     return k;
 }
 
@@ -122,217 +123,223 @@ std::vector<SmpKey> buildSmpKeys()
         return v.back();
     };
     // General
-    add(key("debug", "general", "debug", T::Bool, "1", "General", "Debug log",
-            "Writes debug.log and the kernel-log lines that Safe to unplug waits for. Keep it on."));
-    add(key("quiet_mode", "general", "quiet_mode", T::Bool, "0", "General", "Quiet mode", "Shows fewer notifications on the console."));
+    add(key("debug", "general", "debug", T::Bool, "1", "General", FW_TR_NOOP("Debug log"),
+            FW_TR_NOOP("Writes debug.log and the kernel-log lines that Safe to unplug waits for. Keep it on.")));
+    add(key("quiet_mode", "general", "quiet_mode", T::Bool, "0", "General", FW_TR_NOOP("Quiet mode"), FW_TR_NOOP("Shows fewer notifications on the console.")));
     {
         auto& k = add(key("library_sync_notification", "general", "library_sync_notification", T::Bool, "1", "General",
-                          "Library sync notification", "Notifies when the game library was synchronised."));
+                          FW_TR_NOOP("Library sync notification"), FW_TR_NOOP("Notifies when the game library was synchronised.")));
         k.v2Only = true;
     }
     {
-        auto& k = add(key("language", "general", "language", T::Text, "auto", "General", "Language",
-                          "auto, or a locale such as en-US, de-DE or fr-FR."));
+        auto& k = add(key("language", "general", "language", T::Text, "auto", "General", FW_TR_NOOP("Language"),
+                          FW_TR_NOOP("auto, or a locale such as en-US, de-DE or fr-FR.")));
         k.aliases = {QStringLiteral("lang"), QStringLiteral("locale")};
         k.since = QStringLiteral("1.7");
     }
     // Scanning
     {
-        auto& k = add(key("scan_depth", "scan", "depth", T::Int, "1", "Scanning", "Scan depth", "How many folder levels below each scan path are searched."));
+        auto& k = add(key("scan_depth", "scan", "depth", T::Int, "1", "Scanning", FW_TR_NOOP("Scan depth"), FW_TR_NOOP("How many folder levels below each scan path are searched.")));
         k.minimum = 1;
         k.maximum = 2;
     }
     {
-        auto& k = add(key("scan_interval_seconds", "scan", "interval_seconds", T::Int, "15", "Scanning", "Scan interval",
-                          "Seconds between scans for new games."));
+        auto& k = add(key("scan_interval_seconds", "scan", "interval_seconds", T::Int, "15", "Scanning", FW_TR_NOOP("Scan interval"),
+                          FW_TR_NOOP("Seconds between scans for new games.")));
         k.minimum = 1;
         k.maximum = 3600;
         k.aliases = {QStringLiteral("scan_interval_sec")};
     }
     {
         auto& k = add(key("stability_wait_seconds", "scan", "stability_wait_seconds", T::Int, "10", "Scanning",
-                          "Stability wait", "Seconds a new game must stay unchanged before it is mounted."));
+                          FW_TR_NOOP("Stability wait"), FW_TR_NOOP("Seconds a new game must stay unchanged before it is mounted.")));
         k.minimum = 0;
         k.maximum = 3600;
         k.aliases = {QStringLiteral("stability_wait_sec")};
     }
     {
-        auto& k = add(key("scanpath", "scan", "path", T::PathList, "", "Scanning", "Scan paths",
-                          "One folder per line. Any entry replaces the built-in list."));
+        auto& k = add(key("scanpath", "scan", "path", T::PathList, "", "Scanning", FW_TR_NOOP("Scan paths"),
+                          FW_TR_NOOP("One folder per line. Any entry replaces the built-in list.")));
         k.repeatable = true;
         k.maxItems = 256;
     }
     {
-        auto& k = add(key("recursive_scan", "", "", T::Bool, "", "Scanning", "Recursive scan (deprecated)",
-                          "Deprecated: 1 forces depth 2 and shows a notification. Use Scan depth."));
+        auto& k = add(key("recursive_scan", "", "", T::Bool, "", "Scanning", FW_TR_NOOP("Recursive scan (deprecated)"),
+                          FW_TR_NOOP("Deprecated: 1 forces depth 2 and shows a notification. Use Scan depth.")));
         k.advanced = true;
     }
     // Mounting
     {
-        auto& k = add(key("mount_read_only", "mount", "mode", T::Bool, "1", "Mounting", "Mount read-only", "Mounts game images read-only."));
+        auto& k = add(key("mount_read_only", "mount", "mode", T::Bool, "1", "Mounting", FW_TR_NOOP("Mount read-only"), FW_TR_NOOP("Mounts game images read-only.")));
         k.aliases = {QStringLiteral("read_only")};
     }
-    add(key("force_mount", "mount", "force", T::Bool, "0", "Mounting", "Force mount", "Mounts images even when a check fails."));
+    add(key("force_mount", "mount", "force", T::Bool, "0", "Mounting", FW_TR_NOOP("Force mount"), FW_TR_NOOP("Mounts images even when a check fails.")));
     {
         auto& k = add(key("persistent_image_mounts", "mount", "persistent_images", T::Bool, "0", "Mounting",
-                          "Keep images mounted", "Keeps images mounted after the game exits (USB images still unmount for rest mode)."));
+                          FW_TR_NOOP("Keep images mounted"), FW_TR_NOOP("Keeps images mounted after the game exits (USB images still unmount for rest mode).")));
         k.since = QStringLiteral("1.7");
     }
     {
-        auto& k = add(key("exfat_backend", "mount", "exfat_backend", T::Enum, "lvd", "Mounting", "exFAT backend",
-                          "lvd is needed for the exFAT fast path."));
+        auto& k = add(key("exfat_backend", "mount", "exfat_backend", T::Enum, "lvd", "Mounting", FW_TR_NOOP("exFAT backend"),
+                          FW_TR_NOOP("lvd is needed for the exFAT fast path.")));
         k.choices = {QStringLiteral("lvd"), QStringLiteral("md")};
     }
     {
-        auto& k = add(key("ufs_backend", "mount", "ufs_backend", T::Enum, "lvd", "Mounting", "UFS backend", "Backend for .ffpkg images."));
+        auto& k = add(key("ufs_backend", "mount", "ufs_backend", T::Enum, "lvd", "Mounting", FW_TR_NOOP("UFS backend"), FW_TR_NOOP("Backend for .ffpkg images.")));
         k.choices = {QStringLiteral("lvd"), QStringLiteral("md")};
     }
     {
         auto& k = add(key("nested_pfs_index_cache", "mount", "nested_pfs_index_cache", T::Bool, "0", "Mounting",
-                          "Nested PFS index cache", "Caches nested PFS indexes (older GDDR5 option)."));
+                          FW_TR_NOOP("Nested PFS index cache"), FW_TR_NOOP("Caches nested PFS indexes (older GDDR5 option).")));
         k.aliases = {QStringLiteral("legacy_gddr5_cache")};
         k.advanced = true;
         k.since = QStringLiteral("1.7");
     }
     // Library
-    add(key("app_install_all", "library", "install_all", T::Bool, "0", "Library", "Register every app",
-            "1.7 registers each title on FW 12+ by itself; rarely needed."));
+    add(key("app_install_all", "library", "install_all", T::Bool, "0", "Library", FW_TR_NOOP("Register every app"),
+            FW_TR_NOOP("1.7 registers each title on FW 12+ by itself; rarely needed.")));
     {
         auto& k = add(key("auto_remove_missing_games", "library", "remove_missing", T::Bool, "0", "Library",
-                          "Remove missing games", "Removes games whose image or folder is gone."));
+                          FW_TR_NOOP("Remove missing games"), FW_TR_NOOP("Removes games whose image or folder is gone.")));
         k.since = QStringLiteral("1.7");
     }
     {
         auto& k = add(key("auto_remove_games_with_dlc", "library", "remove_with_dlc", T::Bool, "0", "Library",
-                          "Also remove games with DLC", "Lets the removal above include games that have DLC."));
+                          FW_TR_NOOP("Also remove games with DLC"), FW_TR_NOOP("Lets the removal above include games that have DLC.")));
         k.since = QStringLiteral("1.7");
     }
     {
         auto& k = add(key("auto_remove_missing_delay_seconds", "library", "remove_delay_seconds", T::Int, "300", "Library",
-                          "Removal delay", "Seconds a game must stay missing before it is removed."));
+                          FW_TR_NOOP("Removal delay"), FW_TR_NOOP("Seconds a game must stay missing before it is removed.")));
         k.minimum = 1;
         k.maximum = 86400;
         k.aliases = {QStringLiteral("auto_remove_missing_delay_sec")};
         k.since = QStringLiteral("1.7");
     }
     // Fakelib
-    add(key("backport_fakelib", "fakelib", "enabled", T::Bool, "1", "Fakelib", "Backport fakelib", "Uses a game's own fakelib folder."));
+    add(key("backport_fakelib", "fakelib", "enabled", T::Bool, "1", "Fakelib", FW_TR_NOOP("Backport fakelib"), FW_TR_NOOP("Uses a game's own fakelib folder.")));
     {
-        auto& k = add(key("fakelib_default_mode", "fakelib", "default_mode", T::Enum, "full", "Fakelib", "Default fakelib mode",
-                          "full, emulators (AMPR/PlayGo libraries only) or disabled."));
+        auto& k = add(key("fakelib_default_mode", "fakelib", "default_mode", T::Enum, "full", "Fakelib", FW_TR_NOOP("Default fakelib mode"),
+                          FW_TR_NOOP("full, emulators (AMPR/PlayGo libraries only) or disabled.")));
         k.choices = {QStringLiteral("full"), QStringLiteral("emulators"), QStringLiteral("disabled")};
         k.since = QStringLiteral("1.7");
     }
     {
-        auto& k = add(key("global_fakelib", "fakelib", "global_enabled", T::Bool, "1", "Fakelib", "Global fakelib",
-                          "Uses the shared overlay folder for every game."));
+        auto& k = add(key("global_fakelib", "fakelib", "global_enabled", T::Bool, "1", "Fakelib", FW_TR_NOOP("Global fakelib"),
+                          FW_TR_NOOP("Uses the shared overlay folder for every game.")));
         k.aliases = {QStringLiteral("global_fakelib_enabled")};
     }
     add(key("global_fakelib_path", "fakelib", "global_path", T::Path, "/data/shadowmount/fakelib", "Fakelib",
-            "Global fakelib folder", "Folder with the shared library overlays."));
+            FW_TR_NOOP("Global fakelib folder"), FW_TR_NOOP("Folder with the shared library overlays.")));
     {
         auto& k = add(key("global_fakelib_priority", "fakelib", "global_priority", T::Enum, "game", "Fakelib",
-                          "Global fakelib priority", "Which overlay wins when a game has its own: game or global."));
+                          FW_TR_NOOP("Global fakelib priority"), FW_TR_NOOP("Which overlay wins when a game has its own: game or global.")));
         k.choices = {QStringLiteral("game"), QStringLiteral("global")};
     }
     // Emulators
     {
-        auto& k = add(key("update_emulators", "emulators", "update_enabled", T::Bool, "1", "Emulators", "Update emulators",
-                          "Installs emulator updates found in the emulators folder."));
+        auto& k = add(key("update_emulators", "emulators", "update_enabled", T::Bool, "1", "Emulators", FW_TR_NOOP("Update emulators"),
+                          FW_TR_NOOP("Installs emulator updates found in the emulators folder.")));
         k.since = QStringLiteral("1.7");
     }
     {
         auto& k = add(key("emulators_path", "emulators", "path", T::Path, "/data/shadowmount/emus", "Emulators",
-                          "Emulators folder", "Where emulator update files are read from."));
+                          FW_TR_NOOP("Emulators folder"), FW_TR_NOOP("Where emulator update files are read from.")));
         k.since = QStringLiteral("1.7");
     }
     {
         auto& k = add(key("auto_update_ampr", "emulators", "auto_update_ampr", T::Bool, "0", "Emulators",
-                          "Update the AMPR emulator", "Downloads the latest libSceAmpr.sprx 30 s after start, then every 4 h."));
+                          FW_TR_NOOP("Update the AMPR emulator"), FW_TR_NOOP("Downloads the latest libSceAmpr.sprx 30 s after start, then every 4 h.")));
         k.since = QStringLiteral("1.7");
     }
     {
         auto& k = add(key("ampr_update_url", "emulators", "ampr_update_url", T::Url,
                           "https://github.com/drakmor/ampr_emu/releases/latest/download/libSceAmpr.sprx", "Emulators",
-                          "AMPR update URL", "http or https address of libSceAmpr.sprx."));
+                          FW_TR_NOOP("AMPR update URL"), FW_TR_NOOP("http or https address of libSceAmpr.sprx.")));
         k.advanced = true;
         k.since = QStringLiteral("1.7");
     }
     // Fan
     {
         auto& k = add(key("fan_target_temperature", "fan", "target_temperature", T::Temperature, "system", "Fan",
-                          "Fan target temperature", "system, or 50–91 °C."));
+                          FW_TR_NOOP("Fan target temperature"), FW_TR_NOOP("system, or 50–91 °C.")));
         k.minimum = 50;
         k.maximum = 91;
         k.since = QStringLiteral("1.7");
     }
     // API
     {
-        auto& k = add(key("api_enabled", "api", "enabled", T::Bool, "1", "API", "HTTP API and web UI",
-                          "Off also skips the Shell UI launcher install."));
+        auto& k = add(key("api_enabled", "api", "enabled", T::Bool, "1", "API", FW_TR_NOOP("HTTP API and web UI"),
+                          FW_TR_NOOP("Off also skips the Shell UI launcher install.")));
         k.since = QStringLiteral("1.7");
     }
     {
-        auto& k = add(key("api_bind_address", "api", "bind_address", T::Address, "0.0.0.0", "API", "API address",
-                          "0.0.0.0 for the whole network, 127.0.0.1 for the console only."));
+        auto& k = add(key("api_bind_address", "api", "bind_address", T::Address, "0.0.0.0", "API", FW_TR_NOOP("API address"),
+                          FW_TR_NOOP("0.0.0.0 for the whole network, 127.0.0.1 for the console only.")));
         k.aliases = {QStringLiteral("api_bind_adress")};
         k.since = QStringLiteral("1.7");
     }
     {
-        auto& k = add(key("api_port", "api", "port", T::Int, "10101", "API", "API port", "TCP port of the API and web UI."));
+        auto& k = add(key("api_port", "api", "port", T::Int, "10101", "API", FW_TR_NOOP("API port"), FW_TR_NOOP("TCP port of the API and web UI.")));
         k.minimum = 1;
         k.maximum = 65535;
         k.since = QStringLiteral("1.7");
     }
     // Sector sizes
-    const char* sectors[][5] = {
-        {"lvd_exfat_sector_size", "lvd_exfat", "512", "LVD exFAT sector", "Keep 512 (the exFAT fast path needs it)."},
-        {"lvd_ufs_sector_size", "lvd_ufs", "4096", "LVD UFS sector", "Power of two, 512–1048576."},
-        {"lvd_pfs_sector_size", "lvd_pfs", "4096", "LVD PFS sector", "Power of two, 512–1048576 (4096 since 1.7)."},
-        {"md_exfat_sector_size", "md_exfat", "512", "MD exFAT sector", "Power of two, 512–1048576."},
-        {"md_ufs_sector_size", "md_ufs", "4096", "MD UFS sector", "Power of two, 512–1048576."},
+    const struct {
+        const char* name;
+        const char* v2;
+        const char* def;
+        QString label;
+        QString help;
+    } sectors[] = {
+        {"lvd_exfat_sector_size", "lvd_exfat", "512", FW_TR_NOOP("LVD exFAT sector"), FW_TR_NOOP("Keep 512 (the exFAT fast path needs it).")},
+        {"lvd_ufs_sector_size", "lvd_ufs", "4096", FW_TR_NOOP("LVD UFS sector"), FW_TR_NOOP("Power of two, 512–1048576.")},
+        {"lvd_pfs_sector_size", "lvd_pfs", "4096", FW_TR_NOOP("LVD PFS sector"), FW_TR_NOOP("Power of two, 512–1048576 (4096 since 1.7).")},
+        {"md_exfat_sector_size", "md_exfat", "512", FW_TR_NOOP("MD exFAT sector"), FW_TR_NOOP("Power of two, 512–1048576.")},
+        {"md_ufs_sector_size", "md_ufs", "4096", FW_TR_NOOP("MD UFS sector"), FW_TR_NOOP("Power of two, 512–1048576.")},
     };
     for (const auto& s : sectors) {
-        auto& k = add(key(s[0], "sectors", s[1], T::PowerOfTwo, s[2], "Sectors", s[3], s[4]));
+        auto& k = add(key(s.name, "sectors", s.v2, T::PowerOfTwo, s.def, "Sectors", s.label, s.help));
         k.minimum = 512;
         k.maximum = 1048576;
         k.advanced = true;
     }
     // Rules (flat repeatable keys; profiles.ini in v2)
     {
-        auto& k = add(key("fakelib_mode", "", "", T::FakelibRules, "", "Rules", "Per-game fakelib mode",
-                          "One TITLEID:mode per line (default, full, emulators or disabled)."));
+        auto& k = add(key("fakelib_mode", "", "", T::FakelibRules, "", "Rules", FW_TR_NOOP("Per-game fakelib mode"),
+                          FW_TR_NOOP("One TITLEID:mode per line (default, full, emulators or disabled).")));
         k.repeatable = true;
         k.maxItems = 128;
         k.since = QStringLiteral("1.7");
     }
     {
-        auto& k = add(key("fakelib_exclude", "", "", T::TitleIdList, "", "Rules", "No fakelib for",
-                          "One title ID per line; those games get no fakelib."));
+        auto& k = add(key("fakelib_exclude", "", "", T::TitleIdList, "", "Rules", FW_TR_NOOP("No fakelib for"),
+                          FW_TR_NOOP("One title ID per line; those games get no fakelib.")));
         k.repeatable = true;
         k.maxItems = 128;
         k.since = QStringLiteral("1.7");
     }
     {
-        auto& k = add(key("global_fakelib_exclude", "", "", T::TitleIdList, "", "Rules", "No global fakelib for",
-                          "One title ID per line; those games ignore the global overlays."));
+        auto& k = add(key("global_fakelib_exclude", "", "", T::TitleIdList, "", "Rules", FW_TR_NOOP("No global fakelib for"),
+                          FW_TR_NOOP("One title ID per line; those games ignore the global overlays.")));
         k.repeatable = true;
         k.aliases = {QStringLiteral("global_fakelib_exclude_title")};
         k.maxItems = 128;
     }
     {
-        auto& k = add(key("image_ro", "", "", T::ImageNames, "", "Rules", "Read-only images", "One image file name per line."));
+        auto& k = add(key("image_ro", "", "", T::ImageNames, "", "Rules", FW_TR_NOOP("Read-only images"), FW_TR_NOOP("One image file name per line.")));
         k.repeatable = true;
         k.maxItems = 128;
     }
     {
-        auto& k = add(key("image_rw", "", "", T::ImageNames, "", "Rules", "Read-write images", "One image file name per line."));
+        auto& k = add(key("image_rw", "", "", T::ImageNames, "", "Rules", FW_TR_NOOP("Read-write images"), FW_TR_NOOP("One image file name per line.")));
         k.repeatable = true;
         k.maxItems = 128;
     }
     {
-        auto& k = add(key("image_sector", "", "", T::ImageSectors, "", "Rules", "Image sector sizes",
-                          "One name:size per line, e.g. game.ffpkg:4096. Never 65536 for an .exfat image."));
+        auto& k = add(key("image_sector", "", "", T::ImageSectors, "", "Rules", FW_TR_NOOP("Image sector sizes"),
+                          FW_TR_NOOP("One name:size per line, e.g. game.ffpkg:4096. Never 65536 for an .exfat image.")));
         k.repeatable = true;
         k.maxItems = 128;
     }
@@ -592,9 +599,9 @@ QString smpProfilesRemotePath()
 QString smpConfigFormatName(SmpConfigFormat f)
 {
     switch (f) {
-    case SmpConfigFormat::Flat16: return QStringLiteral("1.6 (flat)");
-    case SmpConfigFormat::Flat17: return QStringLiteral("1.7 (flat)");
-    case SmpConfigFormat::V2: return QStringLiteral("v2 (sections)");
+    case SmpConfigFormat::Flat16: return FW_TR("1.6 (flat)");
+    case SmpConfigFormat::Flat17: return FW_TR("1.7 (flat)");
+    case SmpConfigFormat::V2: return FW_TR("v2 (sections)");
     }
     return {};
 }
@@ -1010,7 +1017,7 @@ QStringList validateMountConfig(MountTool tool, const MountConfigValues& data, b
         // The flat file cannot quote: the console would read "/mnt/usb0/Games #2" as "/mnt/usb0/Games".
         for (auto it = data.cbegin(); it != data.cend(); ++it)
             if (it.value().contains(u'#') || it.value().contains(u';'))
-                problems << QStringLiteral("%1 cannot contain # or ; in this config format (the console reads the value up to that character). Got: %2")
+                problems << FW_TR("%1 cannot contain # or ; in this config format (the console reads the value up to that character). Got: %2")
                                 .arg(it.key(), it.value().simplified());
     }
     if (tool == MountTool::MicroMount) {
@@ -1020,7 +1027,7 @@ QStringList validateMountConfig(MountTool tool, const MountConfigValues& data, b
                 continue;
             qint64 n = 0;
             if (!pythonIntBase0(v, &n) || n < 0)
-                problems << QStringLiteral("%1 must be a non-negative integer. Got: %2").arg(QLatin1String(k), v);
+                problems << FW_TR("%1 must be a non-negative integer. Got: %2").arg(QLatin1String(k), v);
         }
         return problems;
     }
@@ -1034,65 +1041,65 @@ QStringList validateMountConfig(MountTool tool, const MountConfigValues& data, b
         switch (d->type) {
         case SmpKeyType::Bool:
             if (!parseBool(v, k == u"mount_read_only"))
-                problems << QStringLiteral("%1 must be 1 or 0 (also true/false, yes/no, on/off). Got: %2").arg(k, v);
+                problems << FW_TR("%1 must be 1 or 0 (also true/false, yes/no, on/off). Got: %2").arg(k, v);
             break;
         case SmpKeyType::Int: {
             qint64 n = 0;
             if (!decimalInt(v, &n) || n < d->minimum || n > d->maximum)
-                problems << QStringLiteral("%1 must be a whole number in %2–%3. Got: %4").arg(k).arg(d->minimum).arg(d->maximum).arg(v);
+                problems << FW_TR("%1 must be a whole number in %2–%3. Got: %4").arg(k).arg(d->minimum).arg(d->maximum).arg(v);
             break;
         }
         case SmpKeyType::Enum:
             if (!d->choices.contains(v, Qt::CaseInsensitive))
-                problems << QStringLiteral("%1 must be one of %2. Got: %3").arg(k, d->choices.join(QStringLiteral(", ")), v);
+                problems << FW_TR("%1 must be one of %2. Got: %3").arg(k, d->choices.join(QStringLiteral(", ")), v);
             break;
         case SmpKeyType::PowerOfTwo: {
             qint64 n = 0;
             if (!decimalInt(v, &n) || !isPowerOfTwoSector(n))
-                problems << QStringLiteral("%1 must be a power of two from 512 to 1048576. Got: %2").arg(k, v);
+                problems << FW_TR("%1 must be a power of two from 512 to 1048576. Got: %2").arg(k, v);
             break;
         }
         case SmpKeyType::Path:
             if (!v.startsWith(u'/'))
-                problems << QStringLiteral("%1 must be an absolute path starting with /. Got: %2").arg(k, v);
+                problems << FW_TR("%1 must be an absolute path starting with /. Got: %2").arg(k, v);
             break;
         case SmpKeyType::Url:
             if (!v.startsWith(QLatin1String("http://"), Qt::CaseInsensitive) && !v.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
-                problems << QStringLiteral("%1 must be an http or https address. Got: %2").arg(k, v);
+                problems << FW_TR("%1 must be an http or https address. Got: %2").arg(k, v);
             break;
         case SmpKeyType::Address: {
             QHostAddress a;
             if (!a.setAddress(v) || a.protocol() != QAbstractSocket::IPv4Protocol)
-                problems << QStringLiteral("%1 must be an IPv4 address such as 0.0.0.0 or 127.0.0.1. Got: %2").arg(k, v);
+                problems << FW_TR("%1 must be an IPv4 address such as 0.0.0.0 or 127.0.0.1. Got: %2").arg(k, v);
             break;
         }
         case SmpKeyType::Temperature: {
             qint64 n = 0;
             if (v.compare(QLatin1String("system"), Qt::CaseInsensitive) != 0 && (!decimalInt(v, &n) || n < d->minimum || n > d->maximum))
-                problems << QStringLiteral("%1 must be system or %2–%3 (°C). Got: %4").arg(k).arg(d->minimum).arg(d->maximum).arg(v);
+                problems << FW_TR("%1 must be system or %2–%3 (°C). Got: %4").arg(k).arg(d->minimum).arg(d->maximum).arg(v);
             break;
         }
         case SmpKeyType::Text:
             if (k == u"language") {
                 static const QRegularExpression loc(QStringLiteral("^(auto|[a-zA-Z]{2,3}([-_][a-zA-Z]{2,4})?)$"));
                 if (!loc.match(v).hasMatch())
-                    problems << QStringLiteral("language must be auto or a locale such as en-US. Got: %1").arg(v);
+                    problems << FW_TR("language must be auto or a locale such as en-US. Got: %1").arg(v);
             }
             break;
         case SmpKeyType::PathList: {
             const QStringList l = listLines(v);
             for (const QString& p : l)
                 if (!p.startsWith(u'/'))
-                    problems << QStringLiteral("Scan paths must start with /. Got: %1").arg(p);
+                    problems << FW_TR("Scan paths must start with /. Got: %1").arg(p);
             if (d->maxItems > 0 && l.size() > d->maxItems)
-                problems << QStringLiteral("At most %1 scan paths are allowed; there are %2.").arg(d->maxItems).arg(l.size());
+                problems << FW_TR("At most %1 scan paths are allowed; there are %2.").arg(d->maxItems).arg(l.size());
             break;
         }
         case SmpKeyType::TitleIdList:
             for (const QString& t : listLines(v)) {
                 ++titleRules;
                 if (!isTitleId(t))
-                    problems << QStringLiteral("%1: \"%2\" is not a title ID (four letters and five digits, e.g. PPSA01234).").arg(k, t);
+                    problems << FW_TR("%1: \"%2\" is not a title ID (four letters and five digits, e.g. PPSA01234).").arg(k, t);
             }
             break;
         case SmpKeyType::FakelibRules:
@@ -1102,14 +1109,14 @@ QStringList validateMountConfig(MountTool tool, const MountConfigValues& data, b
                 const QString mode = c > 0 ? t.mid(c + 1).trimmed().toLower() : QString();
                 if (c <= 0 || !isTitleId(t.left(c))
                     || !QStringList{QStringLiteral("default"), QStringLiteral("full"), QStringLiteral("emulators"), QStringLiteral("disabled")}.contains(mode))
-                    problems << QStringLiteral("fakelib_mode: expected TITLEID:mode (default, full, emulators or disabled), got: %1").arg(t);
+                    problems << FW_TR("fakelib_mode: expected TITLEID:mode (default, full, emulators or disabled), got: %1").arg(t);
             }
             break;
         case SmpKeyType::ImageNames:
             for (const QString& f : listLines(v)) {
                 ++imageRules;
                 if (f.contains(u'/') || f.contains(u'\\'))
-                    problems << QStringLiteral("%1: use the image file name only, not a path. Got: %2").arg(k, f);
+                    problems << FW_TR("%1: use the image file name only, not a path. Got: %2").arg(k, f);
             }
             break;
         case SmpKeyType::ImageSectors:
@@ -1119,19 +1126,19 @@ QStringList validateMountConfig(MountTool tool, const MountConfigValues& data, b
                 qint64 n = 0;
                 const QString name = c > 0 ? t.left(c).trimmed() : QString();
                 if (c <= 0 || !decimalInt(t.mid(c + 1), &n) || !isPowerOfTwoSector(n))
-                    problems << QStringLiteral("image_sector: expected name:size with a power of two from 512 to 1048576, got: %1").arg(t);
+                    problems << FW_TR("image_sector: expected name:size with a power of two from 512 to 1048576, got: %1").arg(t);
                 else if (name.contains(u'/') || name.contains(u'\\'))
-                    problems << QStringLiteral("image_sector: use the image file name only, not a path. Got: %1").arg(t);
+                    problems << FW_TR("image_sector: use the image file name only, not a path. Got: %1").arg(t);
                 else if (name.endsWith(QLatin1String(".exfat"), Qt::CaseInsensitive) && n == 65536)
-                    problems << QStringLiteral("image_sector: never set 65536 for an exFAT image (the logical sector stays 512). Got: %1").arg(t);
+                    problems << FW_TR("image_sector: never set 65536 for an exFAT image (the logical sector stays 512). Got: %1").arg(t);
             }
             break;
         }
     }
     if (titleRules > 128)
-        problems << QStringLiteral("At most 128 per-game fakelib rules are allowed; there are %1.").arg(titleRules);
+        problems << FW_TR("At most 128 per-game fakelib rules are allowed; there are %1.").arg(titleRules);
     if (imageRules > 128)
-        problems << QStringLiteral("At most 128 per-image rules are allowed; there are %1.").arg(imageRules);
+        problems << FW_TR("At most 128 per-image rules are allowed; there are %1.").arg(imageRules);
     return problems;
 }
 
@@ -1141,19 +1148,19 @@ QStringList mountConfigWarnings(MountTool tool, const MountConfigValues& v)
     if (tool != MountTool::ShadowMountPlus)
         return out;
     if (parseBool(v.value(QStringLiteral("debug"), QStringLiteral("1"))) == false)
-        out << QStringLiteral("debug is off: ShadowMount+ logs nothing, so Safe to unplug cannot confirm the cleanup.");
+        out << FW_TR("debug is off: ShadowMount+ logs nothing, so Safe to unplug cannot confirm the cleanup.");
     if (const QString s = v.value(QStringLiteral("lvd_exfat_sector_size")).trimmed(); !s.isEmpty() && s != u"512")
-        out << QStringLiteral("Keep lvd_exfat_sector_size at 512: the exFAT fast path needs it.");
+        out << FW_TR("Keep lvd_exfat_sector_size at 512: the exFAT fast path needs it.");
     if (v.value(QStringLiteral("exfat_backend")).trimmed().compare(QLatin1String("md"), Qt::CaseInsensitive) == 0)
-        out << QStringLiteral("The exFAT fast path needs the lvd backend.");
+        out << FW_TR("The exFAT fast path needs the lvd backend.");
     QStringList obsolete;
     for (auto it = v.cbegin(); it != v.cend(); ++it)
         if (isObsoleteSmpKey(it.key()))
             obsolete << it.key();
     if (!obsolete.isEmpty())
         out << (obsolete.size() == 1
-                    ? QStringLiteral("%1 no longer exists in ShadowMount+ 1.7 and is removed on push to a 1.7 console.")
-                    : QStringLiteral("%1 no longer exist in ShadowMount+ 1.7 and are removed on push to a 1.7 console."))
+                    ? FW_TR("%1 no longer exists in ShadowMount+ 1.7 and is removed on push to a 1.7 console.")
+                    : FW_TR("%1 no longer exist in ShadowMount+ 1.7 and are removed on push to a 1.7 console."))
                    .arg(obsolete.join(QStringLiteral(", ")));
     return out;
 }

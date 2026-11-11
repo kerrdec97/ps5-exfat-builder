@@ -1,5 +1,7 @@
 #include "app/backport/BackportHost.h"
 
+#include "core/Tr.h"
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -159,7 +161,7 @@ bool ensureFolders(QString* error)
     for (const QString& d : {f.configDir, f.dataDir, f.jobsDir, f.logDir}) {
         if (!QDir().mkpath(d)) {
             if (error)
-                *error = QStringLiteral("Could not create %1").arg(QDir::toNativeSeparators(d));
+                *error = FW_TR("Could not create %1").arg(QDir::toNativeSeparators(d));
             return false;
         }
     }
@@ -258,7 +260,7 @@ bool Worker::start(const QJsonObject& job, QString* error)
     const QString exe = engineExecutable();
     if (exe.isEmpty()) {
         if (error)
-            *error = QStringLiteral("The backport engine is missing from this installation (engines\\backport\\%1). Download the app again.")
+            *error = FW_TR("The backport engine is missing from this installation (engines\\backport\\%1). Download the app again.")
                          .arg(QLatin1String(kEngineExeName));
         return false;
     }
@@ -278,7 +280,7 @@ bool Worker::start(const QJsonObject& job, QString* error)
     const QByteArray jobBytes = QJsonDocument(job).toJson(QJsonDocument::Compact);
     if (!jf.open(QIODevice::WriteOnly | QIODevice::Truncate) || jf.write(jobBytes) != jobBytes.size() || !jf.flush()) {
         if (error)
-            *error = QStringLiteral("Could not write the job file %1: %2").arg(QDir::toNativeSeparators(m_jobPath), jf.errorString());
+            *error = FW_TR("Could not write the job file %1: %2").arg(QDir::toNativeSeparators(m_jobPath), jf.errorString());
         jf.close();
         QFile::remove(m_jobPath);
         m_jobPath.clear();
@@ -300,7 +302,7 @@ bool Worker::start(const QJsonObject& job, QString* error)
         if (e == QProcess::FailedToStart && !m_done) {
             m_done = true;
             QJsonObject r{{QStringLiteral("status"), QStringLiteral("FAILED")},
-                          {QStringLiteral("headline"), QStringLiteral("Could not start the backport worker: %1").arg(m_proc->errorString())}};
+                          {QStringLiteral("headline"), FW_TR("Could not start the backport worker: %1").arg(m_proc->errorString())}};
             QFile::remove(m_jobPath);
             emit finished(r);
         }
@@ -428,19 +430,22 @@ void Worker::onFinished()
         const QString tail = m_errTail.join(u'\n').right(2000);
         if (m_cancelled && killable()) {
             r = {{QStringLiteral("status"), QStringLiteral("CANCELLED")},
-                 {QStringLiteral("headline"), QStringLiteral("Cancelled during the build; no files were written")}};
+                 {QStringLiteral("headline"), FW_TR("Cancelled during the build; no files were written")}};
         } else if (m_cancelled) {
             // Past the engine stage (or a restore): files may have been written
             // or half restored, so this is not a clean cancel.
             const QString headline = m_cmd == QLatin1String("restore")
-                ? QStringLiteral("The restore stopped before it finished; check the game folder and run Restore originals from a backup\u2026 again")
-                : QStringLiteral("The backport worker stopped during %1 without finishing; check the output and, if the backport was being "
-                                 "applied, the game folder (Restore originals from a backup\u2026)")
-                      .arg(m_phase.isEmpty() ? QStringLiteral("its work") : m_phase);
+                ? FW_TR("The restore stopped before it finished; check the game folder and run Restore originals from a backup\u2026 again")
+                : m_phase.isEmpty()
+                ? FW_TR("The backport worker stopped during its work without finishing; check the output and, if the backport was "
+                        "being applied, the game folder (Restore originals from a backup\u2026)")
+                : FW_TR("The backport worker stopped during %1 without finishing; check the output and, if the backport was being "
+                        "applied, the game folder (Restore originals from a backup\u2026)")
+                      .arg(m_phase);
             r = {{QStringLiteral("status"), QStringLiteral("FAILED")}, {QStringLiteral("headline"), headline}, {QStringLiteral("stderr"), tail}};
         } else {
             r = {{QStringLiteral("status"), QStringLiteral("FAILED")},
-                 {QStringLiteral("headline"), QStringLiteral("The backport worker stopped unexpectedly")},
+                 {QStringLiteral("headline"), FW_TR("The backport worker stopped unexpectedly")},
                  {QStringLiteral("stderr"), tail}};
         }
     }

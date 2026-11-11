@@ -84,10 +84,9 @@ QString resolveBuildOutput(const QString& source, const QString& output)
         return {};
     QString out = QDir::cleanPath(QFileInfo(output).absoluteFilePath());
     if (output.endsWith(u'/') || output.endsWith(u'\\') || QFileInfo(out).isDir()) {
-        // "D:/Games/Game/" still names the image Game; a zipped dump gives
-        // its name without ".zip".
-        const QFileInfo src(QDir::cleanPath(source));
-        const QString base = archive::isZipSource(source) ? src.completeBaseName() : src.fileName();
+        // "D:/Games/Game/" still names the image Game; an archived dump gives
+        // its name without its suffix.
+        const QString base = archive::sourceName(source);
         out += u'/' + sanitizeFileName(base) + QStringLiteral(".exfat");
     }
     return out;

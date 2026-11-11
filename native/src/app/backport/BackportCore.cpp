@@ -2,6 +2,7 @@
 
 #include "app/backport/BackportHost.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "core/Zip.h"
 #include "engines/backport/CanonicalTrio.h"
 #include "engines/backport/GameMetadata.h"
@@ -293,20 +294,20 @@ Game readGame(const QString& folder, const QJsonArray& ledger)
                 if (plausibleVersion(sdk))
                     g.sdk = sdk;
                 else
-                    g.notes << QStringLiteral("param.json sdkVersion reads as %1, which is not an SDK; using eboot.bin").arg(sdk);
+                    g.notes << FW_TR("param.json sdkVersion reads as %1, which is not an SDK; using eboot.bin").arg(sdk);
             }
             if (!fw.isEmpty()) {
                 if (plausibleVersion(fw))
                     g.fw = fw;
                 else
-                    g.notes << QStringLiteral("param.json requiredSystemSoftwareVersion reads as %1, which is not a firmware").arg(fw);
+                    g.notes << FW_TR("param.json requiredSystemSoftwareVersion reads as %1, which is not a firmware").arg(fw);
             }
         }
         if (g.sdk.isEmpty()) {
             const QString s = ebootSdk(folder);
             if (plausibleVersion(s)) {
                 g.sdk = s;
-                g.notes << QStringLiteral("SDK read from eboot.bin (param.json has none or an invalid value)");
+                g.notes << FW_TR("SDK read from eboot.bin (param.json has none or an invalid value)");
             }
         }
         const QString folderName = QFileInfo(folder).fileName();
@@ -328,7 +329,7 @@ Game readGame(const QString& folder, const QJsonArray& ledger)
                 used = true;
             }
             if (used)
-                g.notes << QStringLiteral("Title and version read from the folder name (param.json has none)");
+                g.notes << FW_TR("Title and version read from the folder name (param.json has none)");
         }
         // Already backported: any canonical trio member, by size and SHA-256.
         const QString fakelib = dir.filePath(QStringLiteral("fakelib"));
@@ -347,14 +348,14 @@ Game readGame(const QString& folder, const QJsonArray& ledger)
         }
         if (hits > 0) {
             g.alreadyBackported = true;
-            g.notes << QStringLiteral("%1 canonical backport fakelib(s) already present in this folder").arg(hits);
+            g.notes << FW_TR("%1 canonical backport fakelib(s) already present in this folder").arg(hits);
         } else if (present == 3) {
-            g.notes << QStringLiteral("fakelib holds another tool's AGC / AGCDriver / PSML: the build replaces them with this "
+            g.notes << FW_TR("fakelib holds another tool's AGC / AGCDriver / PSML: the build replaces them with this "
                                       "program's set and the originals backup keeps the dump's copies");
         }
         g.appliedRecord = activeLedgerRecord(folder, ledger);
     } catch (const std::exception& e) {
-        g.error = QStringLiteral("Error: %1").arg(QString::fromLocal8Bit(e.what()));
+        g.error = FW_TR("Error: %1").arg(QString::fromLocal8Bit(e.what()));
     }
     return g;
 }
@@ -499,7 +500,7 @@ bool saveSettings(const Settings& s, int keys, QString* error)
     QJsonObject o = readSettingsObject(&state, &err);
     if (state == SettingsFile::Unreadable) {
         if (error)
-            *error = QStringLiteral("%1 cannot be read (%2); it was left as it is")
+            *error = FW_TR("%1 cannot be read (%2); it was left as it is")
                          .arg(QDir::toNativeSeparators(folders().settingsPath), err);
         return false;
     }
@@ -557,43 +558,64 @@ Preflight preflight(const QString& output, const QString& backup, const QStringL
     const qint64 needOut = qint64(double(est) * 2.2) + 50LL * 1024 * 1024;
     const qint64 needBak = qint64(double(est) * 1.1) + 20LL * 1024 * 1024;
     const QString home = engineHome();
-    for (const auto& [label, d] : {std::pair{QStringLiteral("Backport output folder"), output},
-                                   std::pair{QStringLiteral("Originals backup folder"), backup}}) {
-        if (d.isEmpty())
-            r.errors << QStringLiteral("%1 is not set.").arg(label);
-        else if (QDir::isRelativePath(d))
-            r.errors << QStringLiteral("%1 must be a full path: %2").arg(label, d);
+    // One whole sentence per folder and problem (the texts are shown and translated).
+    struct Dest {
+        QString dir;
+        qint64 need;
+        QString notSet, notFull, insideGame, gameInside, insideEngine, cannotCreate, cannotWrite, noSpace, lowSpace;
+    };
+    const Dest dests[] = {
+        {output, needOut, FW_TR("Backport output folder is not set."), FW_TR("Backport output folder must be a full path: %1"),
+         FW_TR("The backport output folder is inside the game folder %1."),
+         FW_TR("The game folder %1 is inside the backport output folder."),
+         FW_TR("The backport output folder is inside the program's engine folder."),
+         FW_TR("Cannot write to the backport output folder %1: the folder cannot be created"),
+         FW_TR("Cannot write to the backport output folder %1: %2"),
+         FW_TR("Not enough free space for the backport output folder: about %1 GB needed, %2 GB free."),
+         FW_TR("Free space on the backport output drive is low (%1 GB).")},
+        {backup, needBak, FW_TR("Originals backup folder is not set."), FW_TR("Originals backup folder must be a full path: %1"),
+         FW_TR("The originals backup folder is inside the game folder %1."),
+         FW_TR("The game folder %1 is inside the originals backup folder."),
+         FW_TR("The originals backup folder is inside the program's engine folder."),
+         FW_TR("Cannot write to the originals backup folder %1: the folder cannot be created"),
+         FW_TR("Cannot write to the originals backup folder %1: %2"),
+         FW_TR("Not enough free space for the originals backup folder: about %1 GB needed, %2 GB free."),
+         FW_TR("Free space on the originals backup drive is low (%1 GB).")},
+    };
+    for (const Dest& t : dests) {
+        if (t.dir.isEmpty())
+            r.errors << t.notSet;
+        else if (QDir::isRelativePath(t.dir))
+            r.errors << t.notFull.arg(t.dir);
     }
     if (!r.errors.isEmpty())
         return r;
     if (within(output, backup) || within(backup, output))
-        r.errors << QStringLiteral("The backport output folder and the originals backup folder must be separate (not the same "
-                                   "folder and not inside each other).");
+        r.errors << FW_TR("The backport output folder and the originals backup folder must be separate (not the same "
+                          "folder and not inside each other).");
     for (const QString& g : games) {
-        for (const auto& [label, d] : {std::pair{QStringLiteral("backport output"), output},
-                                       std::pair{QStringLiteral("originals backup"), backup}}) {
-            if (within(d, g))
-                r.errors << QStringLiteral("The %1 folder is inside the game folder %2.").arg(label, g);
-            if (within(g, d))
-                r.errors << QStringLiteral("The game folder %1 is inside the %2 folder.").arg(g, label);
+        for (const Dest& t : dests) {
+            if (within(t.dir, g))
+                r.errors << t.insideGame.arg(g);
+            if (within(g, t.dir))
+                r.errors << t.gameInside.arg(g);
         }
     }
-    for (const auto& [label, d] : {std::pair{QStringLiteral("backport output"), output},
-                                   std::pair{QStringLiteral("originals backup"), backup}})
-        if (within(d, home))
-            r.errors << QStringLiteral("The %1 folder is inside the program's engine folder.").arg(label);
+    for (const Dest& t : dests)
+        if (within(t.dir, home))
+            r.errors << t.insideEngine;
     if (!r.errors.isEmpty())
         return r;
-    for (const auto& [label, d, need] : {std::tuple{QStringLiteral("backport output"), output, needOut},
-                                         std::tuple{QStringLiteral("originals backup"), backup, needBak}}) {
+    for (const Dest& t : dests) {
+        const QString& d = t.dir;
         if (!QDir().mkpath(d)) {
-            r.errors << QStringLiteral("Cannot write to the %1 folder %2: the folder cannot be created").arg(label, d);
+            r.errors << t.cannotCreate.arg(d);
             continue;
         }
         const QString probe = QDir(d).filePath(QStringLiteral(".d97_write_test_%1").arg(QCoreApplication::applicationPid()));
         QFile pf(probe);
         if (!pf.open(QIODevice::WriteOnly) || pf.write("ok") != 2) {
-            r.errors << QStringLiteral("Cannot write to the %1 folder %2: %3").arg(label, d, pf.errorString());
+            r.errors << t.cannotWrite.arg(d, pf.errorString());
             pf.close();
             QFile::remove(probe); // it may have been created before the write failed
             continue;
@@ -601,10 +623,10 @@ Preflight preflight(const QString& output, const QString& backup, const QStringL
         pf.close();
         QFile::remove(probe);
         const qint64 free = freeBytes(d);
-        if (free < need)
-            r.errors << QStringLiteral("Not enough free space for the %1 folder: about %2 GB needed, %3 GB free.").arg(label, gb(need), gb(free));
-        else if (free < need * 2)
-            r.warnings << QStringLiteral("Free space on the %1 drive is low (%2 GB).").arg(label, gb(free));
+        if (free < t.need)
+            r.errors << t.noSpace.arg(gb(t.need), gb(free));
+        else if (free < t.need * 2)
+            r.warnings << t.lowSpace.arg(gb(free));
     }
     const qint64 engineFree = freeBytes(home);
     if (engineFree > 0 && engineFree < largest * 6 + 500LL * 1024 * 1024) {
@@ -612,12 +634,12 @@ Preflight preflight(const QString& output, const QString& backup, const QStringL
         QString drive = QDir::toNativeSeparators(root);
         while (drive.endsWith(u'\\'))
             drive.chop(1);
-        r.errors << QStringLiteral("Not enough free space for the backport engine's working files on %1 (%2 GB free).")
+        r.errors << FW_TR("Not enough free space for the backport engine's working files on %1 (%2 GB free).")
                         .arg(drive.isEmpty() ? QDir::toNativeSeparators(home) : drive, gb(engineFree));
     }
     for (const QString& g : games)
         if (!QFileInfo(QDir(g).filePath(QStringLiteral("eboot.bin"))).isFile())
-            r.errors << QStringLiteral("%1 is no longer a game folder (no eboot.bin).").arg(g);
+            r.errors << FW_TR("%1 is no longer a game folder (no eboot.bin).").arg(g);
     return r;
 }
 
@@ -626,32 +648,32 @@ Preflight preflight(const QString& output, const QString& backup, const QStringL
 const std::vector<Variant>& variants()
 {
     static const std::vector<Variant> v = {
-        {QStringLiteral("82484486"), QStringLiteral("ampr"), QStringLiteral("Known-good AMPR (82484486)"),
-         QStringLiteral("The AMPR the backport engine adds to Unity games that have none (BLUE REFLECTION, Trails through "
+        {QStringLiteral("82484486"), QStringLiteral("ampr"), FW_TR_NOOP("Known-good AMPR (82484486)"),
+         FW_TR_NOOP("The AMPR the backport engine adds to Unity games that have none (BLUE REFLECTION, Trails through "
                         "Daybreak II and others confirmed on base 4.50). Try it first for Unity games."),
          QStringLiteral("experimental_outputs/known_good_fakelibs/libSceAmpr.sprx (pinned control)"),
-         QStringLiteral("unknown (community fakelib)"), 218678},
+         FW_TR_NOOP("unknown (community fakelib)"), 218678},
         {QStringLiteral("0aadd31d"), QStringLiteral("ampr"), QStringLiteral("Unreal Engine AMPR (0aadd31d)"),
-         QStringLiteral("The AMPR shipped with South of Midnight V3 and Borderlands 4 V2, both confirmed on base 4.50. Try it "
+         FW_TR_NOOP("The AMPR shipped with South of Midnight V3 and Borderlands 4 V2, both confirmed on base 4.50. Try it "
                         "for Unreal Engine games that load no content or play no audio (apr_resolve_vnode error 25 in the klog)."),
          QStringLiteral("FW 4xx PPSA29642 South of Midnight (01.001.000) backport files.zip"),
-         QStringLiteral("unknown (community fakelib)"), 303878},
+         FW_TR_NOOP("unknown (community fakelib)"), 303878},
         {QStringLiteral("2feef6a2"), QStringLiteral("ampr"), QStringLiteral("drakmor ampr_emu 0.4.2.1 AMPR (2feef6a2)"),
-         QStringLiteral("drakmor's AMPR emulator, release 0.4.2.1 (folder variant). Fixed DAVE THE DIVER's start-up crash on "
+         FW_TR_NOOP("drakmor's AMPR emulator, release 0.4.2.1 (folder variant). Fixed DAVE THE DIVER's start-up crash on "
                         "base 4.50 together with its PlayGo (below). Try it when a game stops right after launch with "
                         "0xa0020104 and the dump brought its own fakelib folder."),
          QStringLiteral("https://github.com/drakmor/ampr_emu (release 0.4.2.1)"),
-         QStringLiteral("GPL-3.0 (drakmor/ampr_emu); redistributed unchanged"), 325296},
-        {QStringLiteral("a0f20f40"), QStringLiteral("playgo"), QStringLiteral("Known-good PlayGo (a0f20f40)"),
-         QStringLiteral("The PlayGo stub used in eight delivered backports (Unity and others; Street Fighter 6 Year 4 DLC on "
+         FW_TR_NOOP("GPL-3.0 (drakmor/ampr_emu); redistributed unchanged"), 325296},
+        {QStringLiteral("a0f20f40"), QStringLiteral("playgo"), FW_TR_NOOP("Known-good PlayGo (a0f20f40)"),
+         FW_TR_NOOP("The PlayGo stub used in eight delivered backports (Unity and others; Street Fighter 6 Year 4 DLC on "
                         "Pro 13.20 among them). Try it first."),
          QStringLiteral("experimental_outputs/known_good_fakelibs/libScePlayGo.sprx (pinned control)"),
-         QStringLiteral("unknown (community fakelib)"), 11590},
+         FW_TR_NOOP("unknown (community fakelib)"), 11590},
         {QStringLiteral("f5fdb0ed"), QStringLiteral("playgo"), QStringLiteral("drakmor ampr_emu 0.4.2.1 PlayGo (f5fdb0ed)"),
-         QStringLiteral("The PlayGo that ships with drakmor's ampr_emu 0.4.2.1. Use it together with that AMPR (DAVE THE "
+         FW_TR_NOOP("The PlayGo that ships with drakmor's ampr_emu 0.4.2.1. Use it together with that AMPR (DAVE THE "
                         "DIVER, base 4.50)."),
          QStringLiteral("https://github.com/drakmor/ampr_emu (release 0.4.2.1)"),
-         QStringLiteral("GPL-3.0 (drakmor/ampr_emu); redistributed unchanged"), 18150},
+         FW_TR_NOOP("GPL-3.0 (drakmor/ampr_emu); redistributed unchanged"), 18150},
     };
     return v;
 }
@@ -683,28 +705,28 @@ UserLibrary checkUserLibrary(const QString& path, const QString& kind)
     const QString name = QFileInfo(path).fileName();
     QFile f(toLongPath(path));
     if (!f.open(QIODevice::ReadOnly)) {
-        u.error = QStringLiteral("%1: cannot be read (%2)").arg(name, f.errorString());
+        u.error = FW_TR("%1: cannot be read (%2)").arg(name, f.errorString());
         return u;
     }
     // Every known AMPR / PlayGo library is well below 1 MiB; anything far
     // larger is not one, and is not read into memory to find that out.
     if (f.size() > 32LL * 1024 * 1024) {
-        u.error = QStringLiteral("%1 is not a signed PS5 library (.sprx)").arg(name);
+        u.error = FW_TR("%1 is not a signed PS5 library (.sprx)").arg(name);
         return u;
     }
     const QByteArray data = f.readAll();
     if (data.startsWith(QByteArray("\x7f" "ELF", 4))) {
-        u.error = QStringLiteral("%1 is a plain ELF, not a signed library. A decoded copy (for example one downloaded from a "
+        u.error = FW_TR("%1 is a plain ELF, not a signed library. A decoded copy (for example one downloaded from a "
                                  "console over FTP) does not load on the console. Use the signed .sprx from the library's own release.")
                       .arg(name);
         return u;
     }
     if (!data.startsWith(QByteArray("\x4f\x15\x3d\x1d", 4)) && !data.startsWith(QByteArray("\x54\x14\xf5\xee", 4))) {
-        u.error = QStringLiteral("%1 is not a signed PS5 library (.sprx)").arg(name);
+        u.error = FW_TR("%1 is not a signed PS5 library (.sprx)").arg(name);
         return u;
     }
     if (data.size() < 64) {
-        u.error = QStringLiteral("%1 is too small to be a library").arg(name);
+        u.error = FW_TR("%1 is too small to be a library").arg(name);
         return u;
     }
     const QString sha = QString::fromLatin1(QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex());
@@ -714,16 +736,16 @@ UserLibrary checkUserLibrary(const QString& path, const QString& kind)
             if (v.kind != kind) {
                 const QString theirs = v.kind == QLatin1String("ampr") ? QStringLiteral("AMPR") : QStringLiteral("PlayGo");
                 const QString want = kind == QLatin1String("ampr") ? QStringLiteral("AMPR") : QStringLiteral("PlayGo");
-                u.error = QStringLiteral("%1 is the bundled %2 library %3, not a %4 library").arg(name, theirs, v.label, want);
+                u.error = FW_TR("%1 is the bundled %2 library %3, not a %4 library").arg(name, theirs, i18n::translate(v.label), want);
                 return u;
             }
             u.ok = true;
-            u.label = v.label;
+            u.label = i18n::translate(v.label);
             return u;
         }
     }
     u.ok = true;
-    u.label = QStringLiteral("your file %1 (%2)").arg(name, u.sha8);
+    u.label = FW_TR("your file %1 (%2)").arg(name, u.sha8);
     return u;
 }
 

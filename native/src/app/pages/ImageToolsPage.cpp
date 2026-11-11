@@ -9,6 +9,7 @@
 #include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/gameinfo/Naming.h"
 #include "engines/general/Module.h"
 
@@ -38,7 +39,12 @@ namespace {
 
 const QString kCompareKind = QStringLiteral("image.compare");
 const QString kConvertKind = QStringLiteral("image.convert");
-const QString kImageFilter = QStringLiteral("Images (*.exfat *.ffpkg *.ffpfs *.ffpfsc);;FPKG packages (*.pkg);;All files (*)");
+// A function, not a constant: the descriptions are translated when the dialog is set up.
+QString imageFilter()
+{
+    return FW_TR("Images") + QStringLiteral(" (*.exfat *.ffpkg *.ffpfs *.ffpfsc);;") + FW_TR("FPKG packages") + QStringLiteral(" (*.pkg);;")
+           + FW_TR("All files") + QStringLiteral(" (*)");
+}
 
 // Badge::setIconName sticks, so every state sets its glyph.
 void setBadge(Badge* b, const QString& text, Tone tone, const QString& icon = {})
@@ -67,11 +73,11 @@ QString nextToImage(const QString& image, const QString& suffix = {})
 QString imageNameProblem(const QString& name, const QString& format)
 {
     if (name.isEmpty())
-        return QStringLiteral("Enter a name.");
+        return FW_TR("Enter a name.");
     if (name.contains(u'/'))
-        return QStringLiteral("A name cannot contain \"/\". Create the folders one at a time.");
+        return FW_TR("A name cannot contain \"/\". Create the folders one at a time.");
     if (name == QLatin1String(".") || name == QLatin1String(".."))
-        return QStringLiteral("\".\" and \"..\" cannot be used as names.");
+        return FW_TR("\".\" and \"..\" cannot be used as names.");
     // exFAT has the Windows rules; a UFS2 image (.ffpkg) takes any other name.
     return format == QLatin1String("ffpkg") ? QString() : gameinfo::folderNameProblem(name);
 }
@@ -92,7 +98,7 @@ public:
         setMouseTracking(true);
         setAttribute(Qt::WA_Hover);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        setAccessibleName(QStringLiteral("Action"));
+        setAccessibleName(FW_TR("Action"));
         m_hover = new motion::HoverFade(this, [this](int i) {
             if (i >= 0 && i < int(m_items.size()))
                 update(tile(i));
@@ -119,7 +125,7 @@ public:
         if (i == m_current || i < 0 || i >= int(m_items.size()))
             return;
         m_current = i;
-        setAccessibleDescription(QStringLiteral("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
+        setAccessibleDescription(FW_TR("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
         update();
         syncGlow();
         if (onChanged)
@@ -294,26 +300,26 @@ QString StagedOp::describe() const
 {
     const QString shown = QStringLiteral("/") + imagePath;
     if (op == QLatin1String("add"))
-        return QStringLiteral("Add %1 → %2").arg(nativePath(localPath), shown);
+        return FW_TR("Add %1 → %2").arg(nativePath(localPath), shown);
     if (op == QLatin1String("replace"))
-        return QStringLiteral("Replace %1 with %2").arg(shown, nativePath(localPath));
+        return FW_TR("Replace %1 with %2").arg(shown, nativePath(localPath));
     if (op == QLatin1String("delete"))
-        return QStringLiteral("Delete %1").arg(shown);
+        return FW_TR("Delete %1").arg(shown);
     if (op == QLatin1String("mkdir"))
-        return QStringLiteral("New folder %1").arg(shown);
+        return FW_TR("New folder %1").arg(shown);
     if (op == QLatin1String("rename"))
-        return QStringLiteral("Rename %1 → %2").arg(shown, newName);
+        return FW_TR("Rename %1 → %2").arg(shown, newName);
     return op;
 }
 
 // ---- construction --------------------------------------------------------------------
 
 ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
-    : JobFormPage(ctx, queueModel, QStringLiteral("imagetools"), QStringLiteral("Image tools"),
-                  QStringLiteral("Extract, verify, convert or edit an image you already have."),
-                  QStringLiteral("Extract"), QStringLiteral("Image tools"), parent)
+    : JobFormPage(ctx, queueModel, QStringLiteral("imagetools"), FW_TR("Image tools"),
+                  FW_TR("Extract, verify, convert or edit an image you already have."),
+                  FW_TR("Extract"), FW_TR("Image tools"), parent)
 {
-    setNewJobText(QStringLiteral("Back to the image"));
+    setNewJobText(FW_TR("Back to the image"));
     m_info = new ImageSummaryReader(this);
     connect(m_info, &ImageSummaryReader::ready, this, &ImageToolsPage::onSummary);
     m_reader = new ImageTreeReader(this);
@@ -322,10 +328,10 @@ ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     buildImageCard();
 
     auto* actions = new ActionBar(this);
-    actions->add(QStringLiteral("Extract"), QStringLiteral("Copy the files out"), QStringLiteral("folder_out"));
-    actions->add(QStringLiteral("Verify"), QStringLiteral("Check or compare"), QStringLiteral("shield_check"));
-    actions->add(QStringLiteral("Convert"), QStringLiteral("Change the format"), QStringLiteral("convert"));
-    actions->add(QStringLiteral("Edit"), QStringLiteral("Change its files"), QStringLiteral("file_edit"));
+    actions->add(FW_TR("Extract"), FW_TR("Copy the files out"), QStringLiteral("folder_out"));
+    actions->add(FW_TR("Verify"), FW_TR("Check or compare"), QStringLiteral("shield_check"));
+    actions->add(FW_TR("Convert"), FW_TR("Change the format"), QStringLiteral("convert"));
+    actions->add(FW_TR("Edit"), FW_TR("Change its files"), QStringLiteral("file_edit"));
     actions->onChanged = [this](int i) { setAction(Action(i)); };
     m_actionsBar = actions;
     form()->addWidget(actions);
@@ -335,8 +341,8 @@ ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     buildConvertPanel();
     buildEditPanel();
 
-    addJobOptionsCard(QStringLiteral("Verification, threads"), {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance")}, {},
-                      QStringLiteral("All job settings"));
+    addJobOptionsCard(FW_TR("Verification, threads"), {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance")}, {},
+                      FW_TR("All job settings"));
     for (QWidget* w = options(); w; w = w->parentWidget())
         if ((m_advanced = qobject_cast<Disclosure*>(w)))
             break;
@@ -361,12 +367,12 @@ void ImageToolsPage::buildImageCard()
 {
     m_imageCard = new Card(this);
     setSourceCard(m_imageCard);
-    m_imageBadge = new Badge(QStringLiteral("Step 1"), Tone::Neutral, m_imageCard);
+    m_imageBadge = new Badge(FW_TR("Step 1"), Tone::Neutral, m_imageCard);
     m_imageBadge->setIconName(QString());
-    m_imageCard->setTitle(QStringLiteral("Image"), m_imageBadge);
+    m_imageCard->setTitle(FW_TR("Image"), m_imageBadge);
     m_imageField = new PathField(PathField::Mode::OpenFile, m_imageCard);
-    m_imageField->setFilter(kImageFilter);
-    m_imageField->setDialogTitle(QStringLiteral("Open an image"));
+    m_imageField->setFilter(imageFilter());
+    m_imageField->setDialogTitle(FW_TR("Open an image"));
     m_imageField->setStartDir(m_ctx.settings().value(general::keys::kDefaultOutputDir).toString());
     m_imageField->hide(); // the model behind the drop zone and Change…
     m_imageCard->body()->addWidget(m_imageField);
@@ -375,9 +381,9 @@ void ImageToolsPage::buildImageCard()
             requestImage(p);
     });
 
-    m_drop = new DropZone(QStringLiteral("drive"), QStringLiteral("Open an image"),
-                          QStringLiteral("Drop an .exfat, .ffpkg, .ffpfs or .ffpfsc file here, or click to browse"), m_imageCard);
-    m_drop->setToolTip(QStringLiteral("FPKG packages (.pkg) can be opened too, to extract or verify them."));
+    m_drop = new DropZone(QStringLiteral("drive"), FW_TR("Open an image"),
+                          FW_TR("Drop an .exfat, .ffpkg, .ffpfs or .ffpfsc file here, or click to browse"), m_imageCard);
+    m_drop->setToolTip(FW_TR("FPKG packages (.pkg) can be opened too, to extract or verify them."));
     connect(m_drop, &DropZone::clicked, m_imageField->browseButton(), &QPushButton::click);
     m_imageCard->body()->addWidget(m_drop);
 
@@ -403,15 +409,15 @@ void ImageToolsPage::buildImageCard()
     col->addWidget(m_stripMeta);
     col->addWidget(m_stripPath);
     sh->addLayout(col, 1);
-    auto* show = new IconButton(QStringLiteral("folder_open"), QStringLiteral("Show in folder"), IconButton::Size::Regular, m_strip);
-    show->setToolTip(QStringLiteral("Show in folder"));
+    auto* show = new IconButton(QStringLiteral("folder_open"), FW_TR("Show in folder"), IconButton::Size::Regular, m_strip);
+    show->setToolTip(FW_TR("Show in folder"));
     connect(show, &QToolButton::clicked, this, [this] { openInFileManager(m_path); });
     sh->addWidget(show);
-    auto* change = button(QStringLiteral("Change…"), ButtonVariant::Secondary, QStringLiteral("folder"), m_strip);
+    auto* change = button(FW_TR("Change…"), ButtonVariant::Secondary, QStringLiteral("folder"), m_strip);
     connect(change, &QPushButton::clicked, m_imageField->browseButton(), &QPushButton::click);
     sh->addWidget(change);
-    auto* close = new IconButton(QStringLiteral("close"), QStringLiteral("Close the image"), IconButton::Size::Regular, m_strip);
-    close->setToolTip(QStringLiteral("Close the image"));
+    auto* close = new IconButton(QStringLiteral("close"), FW_TR("Close the image"), IconButton::Size::Regular, m_strip);
+    close->setToolTip(FW_TR("Close the image"));
     connect(close, &QToolButton::clicked, this, [this] { requestImage({}); });
     sh->addWidget(close);
     m_strip->body()->addLayout(sh);
@@ -425,26 +431,26 @@ void ImageToolsPage::buildImageCard()
 void ImageToolsPage::buildExtractPanel()
 {
     auto* card = new Card(this);
-    card->setTitle(QStringLiteral("Extract to"));
+    card->setTitle(FW_TR("Extract to"));
     m_destination = new PathField(PathField::Mode::Directory, card);
-    m_destination->setDialogTitle(QStringLiteral("Choose where to extract"));
-    m_destination->setPlaceholder(QStringLiteral("A new folder next to the image"));
-    m_destination->setToolTip(QStringLiteral("The folder is created if it does not exist. Existing files are never overwritten."));
+    m_destination->setDialogTitle(FW_TR("Choose where to extract"));
+    m_destination->setPlaceholder(FW_TR("A new folder next to the image"));
+    m_destination->setToolTip(FW_TR("The folder is created if it does not exist. Existing files are never overwritten."));
     card->body()->addWidget(m_destination);
-    m_extractNote = caption(QStringLiteral("Existing files are never overwritten."), card);
+    m_extractNote = caption(FW_TR("Existing files are never overwritten."), card);
     card->body()->addWidget(m_extractNote);
     // A game whose files are in zstd or LZ4 packs: extract them as plain files.
     m_unpackRow = new QWidget(card);
     auto* uh = hbox(m_unpackRow, space::lg, QMargins(0, space::sm, 0, 0));
     auto* ul = new QWidget(m_unpackRow);
     auto* uv = vbox(ul, 2);
-    uv->addWidget(label(QStringLiteral("Unpack the zstd and LZ4 packs"), TextStyle::Body, color::fg_1, ul));
-    uv->addWidget(caption(QStringLiteral("On: the game's own files come out of the packs (and ampr_emu.index is rewritten). "
+    uv->addWidget(label(FW_TR("Unpack the zstd and LZ4 packs"), TextStyle::Body, color::fg_1, ul));
+    uv->addWidget(caption(FW_TR("On: the game's own files come out of the packs (and ampr_emu.index is rewritten). "
                                          "Off: the pack files are copied as they are."), ul));
     uh->addWidget(ul, 1);
     m_unpackPacks = new Switch(m_unpackRow);
     m_unpackPacks->setChecked(true);
-    m_unpackPacks->setAccessibleName(QStringLiteral("Unpack the zstd and LZ4 packs"));
+    m_unpackPacks->setAccessibleName(FW_TR("Unpack the zstd and LZ4 packs"));
     uh->addWidget(m_unpackPacks, 0, Qt::AlignTop);
     m_unpackRow->setVisible(false);
     card->body()->addWidget(m_unpackRow);
@@ -455,11 +461,11 @@ void ImageToolsPage::buildExtractPanel()
 void ImageToolsPage::buildVerifyPanel()
 {
     auto* card = new Card(this);
-    card->setTitle(QStringLiteral("Check against"));
+    card->setTitle(FW_TR("Check against"));
     m_verifyMode = new Segmented(card);
-    m_verifyMode->addSegment(QStringLiteral("Its own checksums"), QStringLiteral("shield_check"), QStringLiteral("self"));
-    m_verifyMode->addSegment(QStringLiteral("A folder or another image"), QStringLiteral("files"), QStringLiteral("compare"));
-    m_verifyMode->setAccessibleName(QStringLiteral("Check against"));
+    m_verifyMode->addSegment(FW_TR("Its own checksums"), QStringLiteral("shield_check"), QStringLiteral("self"));
+    m_verifyMode->addSegment(FW_TR("A folder or another image"), QStringLiteral("files"), QStringLiteral("compare"));
+    m_verifyMode->setAccessibleName(FW_TR("Check against"));
     m_verifyMode->setCurrentIndex(0);
     card->body()->addWidget(m_verifyMode, 0, Qt::AlignLeft);
     m_verifyHelp = caption({}, card);
@@ -469,36 +475,36 @@ void ImageToolsPage::buildVerifyPanel()
     auto* cl = vbox(m_compareBox, space::md);
     auto* bHead = new QWidget(m_compareBox);
     auto* bh = hbox(bHead, space::sm);
-    bh->addWidget(label(QStringLiteral("Compare with"), TextStyle::Body, color::fg_1, bHead));
+    bh->addWidget(label(FW_TR("Compare with"), TextStyle::Body, color::fg_1, bHead));
     bh->addStretch(1);
     m_compareBKind = new Segmented(bHead);
-    m_compareBKind->addSegment(QStringLiteral("Folder"), QStringLiteral("folder"), QStringLiteral("folder"));
-    m_compareBKind->addSegment(QStringLiteral("Image"), QStringLiteral("drive"), QStringLiteral("image"));
-    m_compareBKind->setAccessibleName(QStringLiteral("B is an image or a folder"));
+    m_compareBKind->addSegment(FW_TR("Folder"), QStringLiteral("folder"), QStringLiteral("folder"));
+    m_compareBKind->addSegment(FW_TR("Image"), QStringLiteral("drive"), QStringLiteral("image"));
+    m_compareBKind->setAccessibleName(FW_TR("B is an image or a folder"));
     m_compareBKind->setCurrentIndex(0);
     bh->addWidget(m_compareBKind);
     cl->addWidget(bHead);
     m_compareB = new PathField(PathField::Mode::Directory, m_compareBox);
     m_compareB->setStartDir(m_ctx.settings().value(general::keys::kDefaultOutputDir).toString());
-    m_compareB->setAccessibleName(QStringLiteral("Image or folder B"));
+    m_compareB->setAccessibleName(FW_TR("Image or folder B"));
     cl->addWidget(m_compareB);
     m_compareDepth = new Segmented(m_compareBox);
-    m_compareDepth->addSegment(QStringLiteral("Names, sizes and contents"), QStringLiteral("file_search"), QStringLiteral("full"));
-    m_compareDepth->addSegment(QStringLiteral("Names and sizes"), QStringLiteral("list"), QStringLiteral("structure"));
-    m_compareDepth->setAccessibleName(QStringLiteral("Depth"));
+    m_compareDepth->addSegment(FW_TR("Names, sizes and contents"), QStringLiteral("file_search"), QStringLiteral("full"));
+    m_compareDepth->addSegment(FW_TR("Names and sizes"), QStringLiteral("list"), QStringLiteral("structure"));
+    m_compareDepth->setAccessibleName(FW_TR("Depth"));
     m_compareDepth->setCurrentIndex(0);
-    m_compareDepth->setToolTip(QStringLiteral("Comparing contents reads every file on both sides (as long as a full verify); names and sizes take seconds."));
-    cl->addWidget(field(QStringLiteral("Depth"), m_compareDepth, {}, m_compareBox));
+    m_compareDepth->setToolTip(FW_TR("Comparing contents reads every file on both sides (as long as a full verify); names and sizes take seconds."));
+    cl->addWidget(field(FW_TR("Depth"), m_compareDepth, {}, m_compareBox));
 
     m_compareResultRow = new Card(m_compareBox, Card::Variant::Inset);
     auto* rh = new QHBoxLayout;
     rh->setSpacing(space::md);
-    m_compareBadge = new Badge(QStringLiteral("Not compared"), Tone::Neutral, m_compareResultRow);
+    m_compareBadge = new Badge(FW_TR("Not compared"), Tone::Neutral, m_compareResultRow);
     rh->addWidget(m_compareBadge, 0, Qt::AlignTop);
     m_compareSummary = caption({}, m_compareResultRow);
     m_compareSummary->setWordWrap(true);
     rh->addWidget(m_compareSummary, 1);
-    m_compareView = button(QStringLiteral("View result"), ButtonVariant::Secondary, QStringLiteral("list"), m_compareResultRow);
+    m_compareView = button(FW_TR("View result"), ButtonVariant::Secondary, QStringLiteral("list"), m_compareResultRow);
     m_compareView->hide();
     rh->addWidget(m_compareView, 0, Qt::AlignVCenter);
     m_compareResultRow->body()->addLayout(rh);
@@ -525,26 +531,26 @@ void ImageToolsPage::buildVerifyPanel()
 void ImageToolsPage::buildConvertPanel()
 {
     auto* card = new Card(this);
-    card->setTitle(QStringLiteral("Convert to"));
+    card->setTitle(FW_TR("Convert to"));
     m_convertTilesHost = new QWidget(card);
     vbox(m_convertTilesHost, 0);
     card->body()->addWidget(m_convertTilesHost);
     m_methodRow = new QWidget(card);
     auto* ml = vbox(m_methodRow, space::xs);
     m_method = new Segmented(m_methodRow);
-    m_method->addSegment(QStringLiteral("Pack the image as it is"), QStringLiteral("zap"), QStringLiteral("direct"));
-    m_method->addSegment(QStringLiteral("Repack the files"), QStringLiteral("files"), QStringLiteral("repack"));
-    m_method->setAccessibleName(QStringLiteral("Method"));
+    m_method->addSegment(FW_TR("Pack the image as it is"), QStringLiteral("zap"), QStringLiteral("direct"));
+    m_method->addSegment(FW_TR("Repack the files"), QStringLiteral("files"), QStringLiteral("repack"));
+    m_method->setAccessibleName(FW_TR("Method"));
     m_method->setCurrentIndex(0);
     m_methodHelp = caption({}, m_methodRow);
-    ml->addWidget(label(QStringLiteral("Method"), TextStyle::Body, color::fg_1, m_methodRow));
+    ml->addWidget(label(FW_TR("Method"), TextStyle::Body, color::fg_1, m_methodRow));
     ml->addWidget(m_method, 0, Qt::AlignLeft);
     ml->addWidget(m_methodHelp);
     card->body()->addWidget(m_methodRow);
     m_convertOutput = new PathField(PathField::Mode::SaveFile, card);
-    m_convertOutput->setDialogTitle(QStringLiteral("Save the converted image as"));
-    m_convertOutput->setToolTip(QStringLiteral("The new image is written and verified first; the original stays."));
-    card->body()->addWidget(field(QStringLiteral("Save as"), m_convertOutput, {}, card));
+    m_convertOutput->setDialogTitle(FW_TR("Save the converted image as"));
+    m_convertOutput->setToolTip(FW_TR("The new image is written and verified first; the original stays."));
+    card->body()->addWidget(field(FW_TR("Save as"), m_convertOutput, {}, card));
     m_convertPanel = card;
     form()->addWidget(card);
     connect(m_method, &Segmented::currentChanged, this, [this](int) { updateConvert(); });
@@ -558,23 +564,23 @@ void ImageToolsPage::buildEditPanel()
 
     auto* treeCard = new Card(m_editPanel, Card::Variant::Table);
     auto* h = treeCard->header();
-    h->addWidget(heading(QStringLiteral("Contents"), TextStyle::Subtitle, treeCard));
+    h->addWidget(heading(FW_TR("Contents"), TextStyle::Subtitle, treeCard));
     m_treeCount = caption({}, treeCard);
     h->addWidget(m_treeCount);
     h->addStretch(1);
-    m_btnAddFiles = button(QStringLiteral("Add files…"), ButtonVariant::Secondary, QStringLiteral("file_plus"), treeCard);
-    m_btnAddFolder = button(QStringLiteral("Add folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), treeCard);
+    m_btnAddFiles = button(FW_TR("Add files…"), ButtonVariant::Secondary, QStringLiteral("file_plus"), treeCard);
+    m_btnAddFolder = button(FW_TR("Add folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), treeCard);
     h->addWidget(m_btnAddFiles);
     h->addWidget(m_btnAddFolder);
     h->addSpacing(space::xs);
-    m_btnMkdir = new IconButton(QStringLiteral("folder_plus"), QStringLiteral("New folder"), IconButton::Size::Regular, treeCard);
-    m_btnReplace = new IconButton(QStringLiteral("replace"), QStringLiteral("Replace…"), IconButton::Size::Regular, treeCard);
-    m_btnRename = new IconButton(QStringLiteral("pencil"), QStringLiteral("Rename"), IconButton::Size::Regular, treeCard);
-    m_btnDelete = new IconButton(QStringLiteral("trash"), QStringLiteral("Delete"), IconButton::Size::Regular, treeCard);
-    m_btnMkdir->setToolTip(QStringLiteral("New folder"));
-    m_btnReplace->setToolTip(QStringLiteral("Replace the selected file…"));
-    m_btnRename->setToolTip(QStringLiteral("Rename (FFPKG images)"));
-    m_btnDelete->setToolTip(QStringLiteral("Delete the selection"));
+    m_btnMkdir = new IconButton(QStringLiteral("folder_plus"), FW_TR("New folder"), IconButton::Size::Regular, treeCard);
+    m_btnReplace = new IconButton(QStringLiteral("replace"), FW_TR("Replace…"), IconButton::Size::Regular, treeCard);
+    m_btnRename = new IconButton(QStringLiteral("pencil"), FW_TR("Rename"), IconButton::Size::Regular, treeCard);
+    m_btnDelete = new IconButton(QStringLiteral("trash"), FW_TR("Delete"), IconButton::Size::Regular, treeCard);
+    m_btnMkdir->setToolTip(FW_TR("New folder"));
+    m_btnReplace->setToolTip(FW_TR("Replace the selected file…"));
+    m_btnRename->setToolTip(FW_TR("Rename (FFPKG images)"));
+    m_btnDelete->setToolTip(FW_TR("Delete the selection"));
     for (auto* b : {m_btnMkdir, m_btnReplace, m_btnRename, m_btnDelete})
         h->addWidget(b);
     connect(m_btnAddFiles, &QPushButton::clicked, this, [this] { addFiles(false); });
@@ -585,7 +591,7 @@ void ImageToolsPage::buildEditPanel()
     connect(m_btnDelete, &QToolButton::clicked, this, &ImageToolsPage::deleteSelected);
 
     m_treeView = new QTreeWidget(treeCard);
-    m_treeView->setHeaderLabels({QStringLiteral("Name"), QStringLiteral("Size"), QStringLiteral("Modified")});
+    m_treeView->setHeaderLabels({FW_TR("Name"), FW_TR("Size"), FW_TR("Modified")});
     m_treeView->header()->setFixedHeight(32);
     m_treeView->header()->setStretchLastSection(false);
     m_treeView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -598,7 +604,7 @@ void ImageToolsPage::buildEditPanel()
     m_treeView->setIndentation(20);
     m_treeView->setFont(font::mono());
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_treeView->setToolTip(QStringLiteral("Double-click a file to preview its bytes · right-click for more"));
+    m_treeView->setToolTip(FW_TR("Double-click a file to preview its bytes · right-click for more"));
     connect(m_treeView, &QTreeWidget::customContextMenuRequested, this, &ImageToolsPage::showTreeMenu);
     connect(m_treeView, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* it, int) {
         if (it && !it->data(0, Qt::UserRole + 1).toBool())
@@ -606,20 +612,20 @@ void ImageToolsPage::buildEditPanel()
     });
     connect(m_treeView, &QTreeWidget::itemSelectionChanged, this, &ImageToolsPage::updateTreeButtons);
     treeCard->body()->addWidget(m_treeView);
-    m_treeEmpty = new EmptyState(QStringLiteral("folder_tree"), QStringLiteral("Reading the image…"), QStringLiteral("Its folders and files appear here."), treeCard);
+    m_treeEmpty = new EmptyState(QStringLiteral("folder_tree"), FW_TR("Reading the image…"), FW_TR("Its folders and files appear here."), treeCard);
     m_treeEmpty->setCompact(true);
     treeCard->body()->addWidget(m_treeEmpty);
-    m_treeError = new ErrorState(QStringLiteral("This image cannot be edited"), {}, {}, treeCard);
+    m_treeError = new ErrorState(FW_TR("This image cannot be edited"), {}, {}, treeCard);
     m_treeError->hide();
     treeCard->body()->addWidget(m_treeError);
     el->addWidget(treeCard);
 
     m_stagedCard = new Card(m_editPanel);
-    m_clear = button(QStringLiteral("Clear"), ButtonVariant::Subtle, QStringLiteral("close"), m_stagedCard);
+    m_clear = button(FW_TR("Clear"), ButtonVariant::Subtle, QStringLiteral("close"), m_stagedCard);
     setButtonSmall(m_clear, true);
-    m_stagedCard->setTitle(QStringLiteral("Staged changes"), m_clear);
+    m_stagedCard->setTitle(FW_TR("Staged changes"), m_clear);
     m_stagedCard->body()->setSpacing(0);
-    m_stagedCaption = caption(QStringLiteral("Nothing staged yet. Changes are applied together, in one job."), m_stagedCard);
+    m_stagedCaption = caption(FW_TR("Nothing staged yet. Changes are applied together, in one job."), m_stagedCard);
     m_stagedCard->body()->addWidget(m_stagedCaption);
     auto* stagedList = new QWidget(m_stagedCard);
     m_stagedLayout = vbox(stagedList, 0);
@@ -644,10 +650,11 @@ void ImageToolsPage::openImage(const QString& path)
 void ImageToolsPage::requestImage(const QString& path)
 {
     if (path != m_path && !m_ops.empty() && !m_demo) {
-        const QString what = QStringLiteral("%1 staged change%2").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s"));
-        if (!Sheet::confirm(window(), QStringLiteral("Discard %1?").arg(what),
-                            QStringLiteral("They have not been applied to %1.").arg(Sheet::monoSpan(QFileInfo(m_path).fileName())),
-                            QStringLiteral("Keep editing"), QStringLiteral("Discard"))) {
+        const QString title = m_ops.size() == 1 ? FW_TR("Discard %1 staged change?").arg(m_ops.size())
+                                                : FW_TR("Discard %1 staged changes?").arg(m_ops.size());
+        if (!Sheet::confirm(window(), title,
+                            FW_TR("They have not been applied to %1.").arg(Sheet::monoSpan(QFileInfo(m_path).fileName())),
+                            FW_TR("Keep editing"), FW_TR("Discard"))) {
             const QSignalBlocker block(m_imageField);
             m_imageField->setPath(m_path);
             return;
@@ -698,19 +705,19 @@ void ImageToolsPage::loadImage(const QString& path)
     }
     const QFileInfo fi(path);
     if (path.isEmpty()) {
-        m_imageBadge->set(QStringLiteral("Step 1"), Tone::Neutral);
+        m_imageBadge->set(FW_TR("Step 1"), Tone::Neutral);
         m_imageBadge->setIconName(QString());
     } else if (!fi.isFile()) {
-        setBadge(m_imageBadge, QStringLiteral("Not found"), Tone::Err);
-        m_imageMsg->set(QStringLiteral("This file does not exist. Choose another or check the drive."), Tone::Err);
+        setBadge(m_imageBadge, FW_TR("Not found"), Tone::Err);
+        m_imageMsg->set(FW_TR("This file does not exist. Choose another or check the drive."), Tone::Err);
     } else if (m_summary.format.isEmpty()) {
-        setBadge(m_imageBadge, QStringLiteral("Unknown format"), Tone::Warn);
-        m_imageMsg->set(QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file."), Tone::Warn);
+        setBadge(m_imageBadge, FW_TR("Unknown format"), Tone::Warn);
+        m_imageMsg->set(FW_TR("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file."), Tone::Warn);
     } else {
         m_summary.exists = true;
         m_summary.bytes = fi.size();
         guessFromFileName(m_summary);
-        setBadge(m_imageBadge, QStringLiteral("Reading…"), Tone::Info, QStringLiteral("loader"));
+        setBadge(m_imageBadge, FW_TR("Reading…"), Tone::Info, QStringLiteral("loader"));
         m_info->read(path);
     }
     showStrip();
@@ -727,11 +734,11 @@ void ImageToolsPage::onSummary(const ImageSummary& s)
         return;
     m_summary = s;
     if (!s.exists)
-        setBadge(m_imageBadge, QStringLiteral("Not found"), Tone::Err);
+        setBadge(m_imageBadge, FW_TR("Not found"), Tone::Err);
     else if (!s.error.isEmpty() && s.format != u"pkg")
-        setBadge(m_imageBadge, QStringLiteral("Not readable"), Tone::Warn);
+        setBadge(m_imageBadge, FW_TR("Not readable"), Tone::Warn);
     else
-        setBadge(m_imageBadge, QStringLiteral("Ready"), Tone::Ok);
+        setBadge(m_imageBadge, FW_TR("Ready"), Tone::Ok);
     if (!s.error.isEmpty() && s.exists && s.format != u"pkg")
         m_imageMsg->set(s.error, Tone::Warn);
     showStrip();
@@ -753,9 +760,9 @@ void ImageToolsPage::showStrip()
     m_stripTitle->setFullText(s.title.isEmpty() ? QFileInfo(s.path).fileName() : s.title);
     QString meta = s.metaLine();
     if (!s.inner.isEmpty())
-        meta += QStringLiteral(" · holds %1").arg(s.inner);
+        meta += QStringLiteral(" · ") + FW_TR("holds %1").arg(s.inner);
     if (!s.packs.isEmpty())
-        meta += QStringLiteral(" · %1-packed").arg(s.packs);
+        meta += QStringLiteral(" · ") + FW_TR("%1-packed").arg(s.packs);
     if (m_unpackRow)
         m_unpackRow->setVisible(!s.packs.isEmpty());
     m_stripMeta->setFullText(meta);
@@ -801,10 +808,10 @@ void ImageToolsPage::updateActions()
     const QString f = m_summary.format;
     ab->setEnabledAt(int(Action::Extract), open);
     ab->setEnabledAt(int(Action::Verify), open);
-    ab->setEnabledAt(int(Action::Convert), open && f != u"pkg", f == u"pkg" ? QStringLiteral("FPKG packages cannot be converted here.") : QString());
+    ab->setEnabledAt(int(Action::Convert), open && f != u"pkg", f == u"pkg" ? FW_TR("FPKG packages cannot be converted here.") : QString());
     ab->setEnabledAt(int(Action::Edit), open && (f == u"exfat" || f == u"ffpkg"),
-                     f == u"ffpfs" || f == u"ffpfsc" ? QStringLiteral("PFS images cannot be edited. Convert to exFAT or FFPKG first.")
-                     : f == u"pkg" ? QStringLiteral("FPKG packages cannot be edited.") : QString());
+                     f == u"ffpfs" || f == u"ffpfsc" ? FW_TR("PFS images cannot be edited. Convert to exFAT or FFPKG first.")
+                     : f == u"pkg" ? FW_TR("FPKG packages cannot be edited.") : QString());
     if (open && !isActionEnabled(m_action))
         m_action = Action::Extract;
     if (ab->current() != int(m_action)) {
@@ -825,16 +832,16 @@ void ImageToolsPage::updateActions()
         m_verifyMode->setCurrentIndex(0);
     const bool cmp = compareMode();
     m_compareBox->setVisible(cmp);
-    m_verifyHelp->setText(cmp ? QString() : QStringLiteral("Reads the whole image and checks every checksum. Nothing is written."));
+    m_verifyHelp->setText(cmp ? QString() : FW_TR("Reads the whole image and checks every checksum. Nothing is written."));
     m_verifyHelp->setVisible(!cmp);
 
     if (open)
         m_destination->setPlaceholder(nativePath(nextToImage(m_path)));
     // The exFAT extract job takes a new or empty folder only; the others add to a folder.
     const bool emptyOnly = f == u"exfat" && !usesGameExtract();
-    m_extractNote->setText(emptyOnly ? QStringLiteral("The folder must be new or empty.") : QStringLiteral("Existing files are never overwritten."));
-    m_destination->setToolTip(emptyOnly ? QStringLiteral("The folder is created if it does not exist. A folder that has files in it is refused.")
-                                        : QStringLiteral("The folder is created if it does not exist. Existing files are never overwritten."));
+    m_extractNote->setText(emptyOnly ? FW_TR("The folder must be new or empty.") : FW_TR("Existing files are never overwritten."));
+    m_destination->setToolTip(emptyOnly ? FW_TR("The folder is created if it does not exist. A folder that has files in it is refused.")
+                                        : FW_TR("The folder is created if it does not exist. Existing files are never overwritten."));
     queueButton()->setVisible(!(m_action == Action::Edit || (m_action == Action::Verify && cmp)) || !open);
     // A comparison's result is the row in this card (and its sheet): keep the form.
     setMonitorOnStart(!(m_action == Action::Verify && cmp));
@@ -848,23 +855,23 @@ void ImageToolsPage::updateActions()
 
 void ImageToolsPage::updatePrimary()
 {
-    QString text = QStringLiteral("Extract");
+    QString text = FW_TR("Extract");
     QString icon = QStringLiteral("play");
     switch (m_action) {
-    case Action::Extract: text = QStringLiteral("Extract"); break;
-    case Action::Verify: text = compareMode() ? QStringLiteral("Compare") : QStringLiteral("Verify"); break;
-    case Action::Convert: text = QStringLiteral("Convert"); break;
+    case Action::Extract: text = FW_TR("Extract"); break;
+    case Action::Verify: text = compareMode() ? FW_TR("Compare") : FW_TR("Verify"); break;
+    case Action::Convert: text = FW_TR("Convert"); break;
     case Action::Edit:
-        text = m_ops.empty() ? QStringLiteral("Apply changes")
-                             : QStringLiteral("Apply %1 change%2").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s"));
+        text = m_ops.empty() ? FW_TR("Apply changes")
+                             : m_ops.size() == 1 ? FW_TR("Apply %1 change").arg(m_ops.size()) : FW_TR("Apply %1 changes").arg(m_ops.size());
         break;
     }
     primaryButton()->setText(text);
     // What is known to be missing, in validateForm()'s words.
     if (m_path.isEmpty())
-        setStartHint(QStringLiteral("Open an image first."));
+        setStartHint(FW_TR("Open an image first."));
     else if (m_action == Action::Edit && m_ops.empty() && m_tree.error.isEmpty())
-        setStartHint(QStringLiteral("Stage at least one change."));
+        setStartHint(FW_TR("Stage at least one change."));
     else
         setStartHint({});
 }
@@ -898,7 +905,7 @@ void ImageToolsPage::updateAdvanced()
             row->setVisible(writes || !d || d->section != QLatin1String("Build"));
     }
     refreshOptionsSummary();
-    m_advanced->setCaption(writes ? QStringLiteral("Cluster size, verification, threads") : QStringLiteral("Verification, threads"));
+    m_advanced->setCaption(writes ? FW_TR("Cluster size, verification, threads") : FW_TR("Verification, threads"));
     m_advanced->setVisible(open && !(m_action == Action::Verify && compareMode()));
 }
 
@@ -933,9 +940,9 @@ void ImageToolsPage::updateCompareKind()
 {
     const bool folder = m_compareBKind->currentValue().toString() == QLatin1String("folder");
     m_compareB->setMode(folder ? PathField::Mode::Directory : PathField::Mode::OpenFile);
-    m_compareB->setFilter(QStringLiteral("Images (*.exfat *.ffpkg *.ffpfs *.ffpfsc);;All files (*)"));
-    m_compareB->setDialogTitle(folder ? QStringLiteral("Choose the folder to compare with") : QStringLiteral("Choose the image to compare with"));
-    m_compareB->setPlaceholder(folder ? QStringLiteral("A game folder, e.g. the dump the image was built from") : QStringLiteral(".exfat, .ffpkg, .ffpfs or .ffpfsc"));
+    m_compareB->setFilter(FW_TR("Images") + QStringLiteral(" (*.exfat *.ffpkg *.ffpfs *.ffpfsc);;") + FW_TR("All files") + QStringLiteral(" (*)"));
+    m_compareB->setDialogTitle(folder ? FW_TR("Choose the folder to compare with") : FW_TR("Choose the image to compare with"));
+    m_compareB->setPlaceholder(folder ? FW_TR("A game folder, e.g. the dump the image was built from") : FW_TR(".exfat, .ffpkg, .ffpfs or .ffpfsc"));
     m_compareB->setError({});
 }
 
@@ -968,15 +975,15 @@ bool ImageToolsPage::checkCompareInputs(QString* problem)
     const QFileInfo fa(m_path), fb(b);
     QString msg;
     if (!isCompareImage(m_path))
-        msg = QStringLiteral("Only .exfat, .ffpkg, .ffpfs and .ffpfsc images can be compared.");
+        msg = FW_TR("Only .exfat, .ffpkg, .ffpfs and .ffpfsc images can be compared.");
     else if (b.isEmpty())
-        msg = bFolder ? QStringLiteral("Choose the folder to compare with.") : QStringLiteral("Choose the image to compare with.");
+        msg = bFolder ? FW_TR("Choose the folder to compare with.") : FW_TR("Choose the image to compare with.");
     else if (bFolder ? !fb.isDir() : !fb.isFile())
-        msg = bFolder ? QStringLiteral("This folder does not exist.") : QStringLiteral("This file does not exist.");
+        msg = bFolder ? FW_TR("This folder does not exist.") : FW_TR("This file does not exist.");
     else if (!bFolder && !isCompareImage(b))
-        msg = QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs or .ffpfsc image, or switch to Folder.");
+        msg = FW_TR("Choose an .exfat, .ffpkg, .ffpfs or .ffpfsc image, or switch to Folder.");
     else if (QDir::cleanPath(fa.absoluteFilePath()) == QDir::cleanPath(fb.absoluteFilePath()))
-        msg = QStringLiteral("Choose a different image than the one that is open.");
+        msg = FW_TR("Choose a different image than the one that is open.");
     m_compareB->setError(msg);
     if (problem)
         *problem = msg;
@@ -1023,12 +1030,12 @@ void ImageToolsPage::showCompareState()
     m_compareResultRow->setVisible(pending || m_compareResult.valid);
     if (pending) {
         if (rec->state == JobState::Running)
-            setBadge(m_compareBadge, QStringLiteral("Comparing…"), Tone::Info, QStringLiteral("loader"));
+            setBadge(m_compareBadge, FW_TR("Comparing…"), Tone::Info, QStringLiteral("loader"));
         else
-            setBadge(m_compareBadge, rec->state == JobState::Paused ? QStringLiteral("Paused")
-                                     : rec->state == JobState::Cancelling ? QStringLiteral("Cancelling…") : QStringLiteral("Queued"),
+            setBadge(m_compareBadge, rec->state == JobState::Paused ? FW_TR("Paused")
+                                     : rec->state == JobState::Cancelling ? FW_TR("Cancelling…") : FW_TR("Queued"),
                      Tone::Neutral);
-        m_compareSummary->setText(QStringLiteral("%1 · follow it in the Jobs dock.").arg(rec->title));
+        m_compareSummary->setText(FW_TR("%1 · follow it in the Jobs dock.").arg(rec->title));
         m_compareView->hide();
         return;
     }
@@ -1036,34 +1043,34 @@ void ImageToolsPage::showCompareState()
     const bool hasDetails = r.valid && r.state == JobState::Succeeded && r.details.contains(QStringLiteral("counts"));
     m_compareView->setVisible(hasDetails);
     if (!r.valid) {
-        setBadge(m_compareBadge, QStringLiteral("Not compared"), Tone::Neutral);
-        m_compareSummary->setText(jobs::isAvailable(m_ctx, kCompareKind) ? QString() : QStringLiteral("Comparing images is not available in this build."));
+        setBadge(m_compareBadge, FW_TR("Not compared"), Tone::Neutral);
+        m_compareSummary->setText(jobs::isAvailable(m_ctx, kCompareKind) ? QString() : FW_TR("Comparing images is not available in this build."));
         return;
     }
     switch (r.state) {
     case JobState::Succeeded: {
         if (!hasDetails) {
-            setBadge(m_compareBadge, QStringLiteral("Done"), Tone::Neutral);
+            setBadge(m_compareBadge, FW_TR("Done"), Tone::Neutral);
             m_compareSummary->setText(r.summary);
             break;
         }
         const qint64 n = r.details.value(QStringLiteral("counts")).toObject().value(QStringLiteral("differences")).toInteger();
         if (n == 0)
-            setBadge(m_compareBadge, QStringLiteral("Identical"), Tone::Ok);
+            setBadge(m_compareBadge, FW_TR("Identical"), Tone::Ok);
         else
-            setBadge(m_compareBadge, QStringLiteral("%1 difference%2").arg(formatCount(n), n == 1 ? QString() : QStringLiteral("s")), Tone::Warn);
+            setBadge(m_compareBadge, n == 1 ? FW_TR("%1 difference").arg(formatCount(n)) : FW_TR("%1 differences").arg(formatCount(n)), Tone::Warn);
         const QString a = QFileInfo(r.details.value(QStringLiteral("a")).toObject().value(QStringLiteral("path")).toString()).fileName();
         const QString b = QFileInfo(r.details.value(QStringLiteral("b")).toObject().value(QStringLiteral("path")).toString()).fileName();
         m_compareSummary->setText(a.isEmpty() ? r.summary : QStringLiteral("%1 ↔ %2\n%3").arg(a, b, r.summary));
         break;
     }
     case JobState::Failed:
-        setBadge(m_compareBadge, QStringLiteral("Failed"), Tone::Err);
+        setBadge(m_compareBadge, FW_TR("Failed"), Tone::Err);
         m_compareSummary->setText(r.error);
         break;
     default:
-        setBadge(m_compareBadge, r.state == JobState::Cancelled ? QStringLiteral("Cancelled") : QStringLiteral("Interrupted"), Tone::Neutral);
-        m_compareSummary->setText(QStringLiteral("The comparison did not finish."));
+        setBadge(m_compareBadge, r.state == JobState::Cancelled ? FW_TR("Cancelled") : FW_TR("Interrupted"), Tone::Neutral);
+        m_compareSummary->setText(FW_TR("The comparison did not finish."));
         break;
     }
 }
@@ -1090,15 +1097,15 @@ void ImageToolsPage::rebuildConvertChoices()
     delete m_convertTo;
     m_convertFrom = from;
     m_convertTo = new ChoiceTiles(m_convertTilesHost);
-    m_convertTo->setAccessibleName(QStringLiteral("Target format"));
+    m_convertTo->setAccessibleName(FW_TR("Target format"));
     struct Target {
         QString title, text, icon, value, tag;
     };
     const QList<Target> all = {
-        {QStringLiteral("exFAT"), QStringLiteral("Mounts with ShadowMount+, any loader and on a PC."), QStringLiteral("drive"), jobs::kFormatExfat, {}},
-        {QStringLiteral("FFPKG"), QStringLiteral("UFS2 image. ShadowMount+ mounts it without extracting."), QStringLiteral("package"), jobs::kFormatFfpkg, {}},
-        {QStringLiteral("FFPFSC"), QStringLiteral("Compressed PFS image. Saves space; how much depends on the game."), QStringLiteral("compress"), jobs::kFormatFfpfsc, {}},
-        {QStringLiteral("FFPFS"), QStringLiteral("Uncompressed PFS image. Fastest to read."), QStringLiteral("layers"), jobs::kFormatFfpfs, {}},
+        {QStringLiteral("exFAT"), FW_TR("Mounts with ShadowMount+, any loader and on a PC."), QStringLiteral("drive"), jobs::kFormatExfat, {}},
+        {QStringLiteral("FFPKG"), FW_TR("UFS2 image. ShadowMount+ mounts it without extracting."), QStringLiteral("package"), jobs::kFormatFfpkg, {}},
+        {QStringLiteral("FFPFSC"), FW_TR("Compressed PFS image. Saves space; how much depends on the game."), QStringLiteral("compress"), jobs::kFormatFfpfsc, {}},
+        {QStringLiteral("FFPFS"), FW_TR("Uncompressed PFS image. Fastest to read."), QStringLiteral("layers"), jobs::kFormatFfpfs, {}},
     };
     for (const Target& t : all)
         if (t.value != from)
@@ -1153,11 +1160,11 @@ void ImageToolsPage::updateConvert()
         return;
     const QString method = convertMethod();
     m_methodRow->setVisible(!method.isEmpty());
-    m_methodHelp->setText(method == u"repack" ? QStringLiteral("Rebuilds a PFS image of the game; needs room for a temporary copy.")
-                                              : QStringLiteral("Fast and needs no extra space; the .ffpfsc holds the image file."));
+    m_methodHelp->setText(method == u"repack" ? FW_TR("Rebuilds a PFS image of the game; needs room for a temporary copy.")
+                                              : FW_TR("Fast and needs no extra space; the .ffpfsc holds the image file."));
     if (!m_path.isEmpty()) {
         m_convertOutput->setPlaceholder(nativePath(nextToImage(m_path, jobs::outputExtension(convertTarget()))));
-        m_convertOutput->setFilter(QStringLiteral("%1 image (*%2)").arg(imageFormatName(convertTarget()), jobs::outputExtension(convertTarget())));
+        m_convertOutput->setFilter(FW_TR("%1 image").arg(imageFormatName(convertTarget())) + QStringLiteral(" (*%1)").arg(jobs::outputExtension(convertTarget())));
     }
     // A chosen name that carries another image format's extension is written
     // with the target's: the field shows the file the job will make.
@@ -1190,10 +1197,10 @@ void ImageToolsPage::rebuildTree()
     m_btnAddFolder->setEnabled(open);
     m_btnMkdir->setEnabled(open);
     if (open) {
-        QStringList parts{m_tree.fileCount == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(formatCount(m_tree.fileCount)),
+        QStringList parts{m_tree.fileCount == 1 ? FW_TR("1 file") : FW_TR("%1 files").arg(formatCount(m_tree.fileCount)),
                           formatBytes(m_tree.totalBytes)};
         if (!m_tree.problems.isEmpty())
-            parts << QStringLiteral("%1 problem%2").arg(m_tree.problems.size()).arg(m_tree.problems.size() == 1 ? QString() : QStringLiteral("s"));
+            parts << (m_tree.problems.size() == 1 ? FW_TR("%1 problem").arg(m_tree.problems.size()) : FW_TR("%1 problems").arg(m_tree.problems.size()));
         m_treeCount->setText(parts.join(QStringLiteral(" · ")));
         m_treeCount->setToolTip((m_tree.problems + m_tree.warnings).join(u'\n'));
     } else {
@@ -1211,7 +1218,7 @@ void ImageToolsPage::rebuildTree()
         it->setData(0, Qt::UserRole + 1, n.isDir);
         it->setIcon(0, icon(n.isDir ? QStringLiteral("folder") : QStringLiteral("file"), color::fg_3));
         if (!n.isDir)
-            it->setToolTip(0, plainTip(QStringLiteral("/%1\nDouble-click to preview its bytes").arg(n.path)));
+            it->setToolTip(0, plainTip(FW_TR("/%1\nDouble-click to preview its bytes").arg(n.path)));
         it->setText(1, n.isDir ? QString() : formatBytes(n.size));
         it->setForeground(1, color::fg_3);
         it->setText(2, n.modified.isValid() ? humanTime(n.modified) : QString());
@@ -1282,7 +1289,7 @@ void ImageToolsPage::rebuildStaged()
     m_stagedRemove.clear();
     m_stagedCaption->setVisible(m_ops.empty());
     m_clear->setVisible(!m_ops.empty());
-    m_stagedCard->setTitleText(m_ops.empty() ? QStringLiteral("Staged changes") : QStringLiteral("Staged changes · %1").arg(m_ops.size()));
+    m_stagedCard->setTitleText(m_ops.empty() ? FW_TR("Staged changes") : FW_TR("Staged changes · %1").arg(m_ops.size()));
     for (size_t i = 0; i < m_ops.size(); ++i) {
         auto* row = new QWidget(m_stagedCard);
         auto* h = hbox(row, space::sm, QMargins(0, 6, 0, 6));
@@ -1298,7 +1305,7 @@ void ImageToolsPage::rebuildStaged()
         setTextColor(t, color::fg_1);
         t->setToolTip(m_ops[i].describe());
         h->addWidget(t, 1);
-        auto* x = new IconButton(QStringLiteral("close"), QStringLiteral("Remove this change"), IconButton::Size::Small, row);
+        auto* x = new IconButton(QStringLiteral("close"), FW_TR("Remove this change"), IconButton::Size::Small, row);
         connect(x, &QToolButton::clicked, this, [this, i] {
             if (i < m_ops.size())
                 m_ops.erase(m_ops.begin() + long(i));
@@ -1326,14 +1333,14 @@ void ImageToolsPage::addFiles(bool folder)
     if (!target.isEmpty() && !dir)
         target = target.contains(u'/') ? target.section(u'/', 0, -2) : QString();
     if (folder) {
-        const QString d = QFileDialog::getExistingDirectory(window(), QStringLiteral("Choose a folder to add"));
+        const QString d = QFileDialog::getExistingDirectory(window(), FW_TR("Choose a folder to add"));
         if (d.isEmpty())
             return;
         stage({QStringLiteral("add"), target.isEmpty() ? QFileInfo(d).fileName() : target + u'/' + QFileInfo(d).fileName(), d, {}});
         return;
     }
     // One rebuild of the list for the whole selection, not one per file.
-    const QStringList files = QFileDialog::getOpenFileNames(window(), QStringLiteral("Choose files to add"));
+    const QStringList files = QFileDialog::getOpenFileNames(window(), FW_TR("Choose files to add"));
     for (const QString& f : files)
         m_ops.push_back({QStringLiteral("add"), target.isEmpty() ? QFileInfo(f).fileName() : target + u'/' + QFileInfo(f).fileName(), f, {}});
     if (!files.isEmpty())
@@ -1346,7 +1353,7 @@ void ImageToolsPage::replaceSelected()
     const QString p = selectedPath(&dir);
     if (p.isEmpty() || dir)
         return;
-    const QString f = QFileDialog::getOpenFileName(window(), QStringLiteral("Choose the new content for %1").arg(p));
+    const QString f = QFileDialog::getOpenFileName(window(), FW_TR("Choose the new content for %1").arg(p));
     if (!f.isEmpty())
         stage({QStringLiteral("replace"), p, f, {}});
 }
@@ -1364,9 +1371,9 @@ void ImageToolsPage::newFolder()
     QString target = selectedPath(&dir);
     if (!target.isEmpty() && !dir)
         target = target.contains(u'/') ? target.section(u'/', 0, -2) : QString();
-    auto* s = new Sheet(window(), QStringLiteral("New folder"), Sheet::Icon::None);
-    auto* name = textInput(QStringLiteral("Folder name"), true, s);
-    auto* nameField = field(target.isEmpty() ? QStringLiteral("Name (in the image root)") : QStringLiteral("Name (in /%1)").arg(target), name, {}, s);
+    auto* s = new Sheet(window(), FW_TR("New folder"), Sheet::Icon::None);
+    auto* name = textInput(FW_TR("Folder name"), true, s);
+    auto* nameField = field(target.isEmpty() ? FW_TR("Name (in the image root)") : FW_TR("Name (in /%1)").arg(target), name, {}, s);
     s->body()->addWidget(nameField);
     const QString n = askName(s, name);
     if (!n.isEmpty())
@@ -1380,8 +1387,8 @@ QString ImageToolsPage::askName(Sheet* s, QLineEdit* name)
 {
     auto* why = new MessageRow(s);
     s->body()->addWidget(why);
-    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
-    QPushButton* stageButton = s->addButton(QStringLiteral("Stage"), Sheet::Role::Primary);
+    s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
+    QPushButton* stageButton = s->addButton(FW_TR("Stage"), Sheet::Role::Primary);
     const QString format = m_tree.format;
     const auto check = [name, why, format] {
         const QString problem = imageNameProblem(name->text().trimmed(), format);
@@ -1411,7 +1418,7 @@ QString ImageToolsPage::askName(Sheet* s, QLineEdit* name)
     const QString n = name->text().trimmed();
     const QString problem = imageNameProblem(n, format);
     if (!problem.isEmpty()) { // closed some other way with a name that cannot be used
-        showFormError(QStringLiteral("The name cannot be used"), problem);
+        showFormError(FW_TR("The name cannot be used"), problem);
         return {};
     }
     return n;
@@ -1422,10 +1429,10 @@ void ImageToolsPage::renameSelected()
     const QString p = selectedPath();
     if (p.isEmpty())
         return;
-    auto* s = new Sheet(window(), QStringLiteral("Rename"), Sheet::Icon::None);
+    auto* s = new Sheet(window(), FW_TR("Rename"), Sheet::Icon::None);
     auto* name = textInput({}, true, s);
     name->setText(p.section(u'/', -1));
-    s->body()->addWidget(field(QStringLiteral("New name"), name, {}, s));
+    s->body()->addWidget(field(FW_TR("New name"), name, {}, s));
     const QString n = askName(s, name);
     if (!n.isEmpty() && n != p.section(u'/', -1))
         stage({QStringLiteral("rename"), p, {}, n});
@@ -1440,12 +1447,12 @@ void ImageToolsPage::showTreeMenu(const QPoint& pos)
     const bool dir = it->data(0, Qt::UserRole + 1).toBool();
     const QString path = it->data(0, Qt::UserRole).toString();
     QMenu menu(this);
-    QAction* prev = menu.addAction(QStringLiteral("Preview…"), this, [this, path] { (void)preview(path); });
+    QAction* prev = menu.addAction(FW_TR("Preview…"), this, [this, path] { (void)preview(path); });
     prev->setEnabled(!dir);
     menu.addSeparator();
-    menu.addAction(QStringLiteral("Replace…"), this, &ImageToolsPage::replaceSelected)->setEnabled(m_btnReplace->isEnabled());
-    menu.addAction(QStringLiteral("Rename"), this, &ImageToolsPage::renameSelected)->setEnabled(m_btnRename->isEnabled());
-    menu.addAction(QStringLiteral("Delete"), this, &ImageToolsPage::deleteSelected)->setEnabled(m_btnDelete->isEnabled());
+    menu.addAction(FW_TR("Replace…"), this, &ImageToolsPage::replaceSelected)->setEnabled(m_btnReplace->isEnabled());
+    menu.addAction(FW_TR("Rename"), this, &ImageToolsPage::renameSelected)->setEnabled(m_btnRename->isEnabled());
+    menu.addAction(FW_TR("Delete"), this, &ImageToolsPage::deleteSelected)->setEnabled(m_btnDelete->isEnabled());
     menu.exec(m_treeView->viewport()->mapToGlobal(pos));
 }
 
@@ -1496,18 +1503,18 @@ QJsonArray ImageToolsPage::operationsJson() const
 QString ImageToolsPage::validateForm()
 {
     if (m_path.isEmpty())
-        return QStringLiteral("Open an image first.");
+        return FW_TR("Open an image first.");
     if (!QFileInfo(m_path).isFile())
-        return QStringLiteral("The image does not exist.");
+        return FW_TR("The image does not exist.");
     if (m_summary.format.isEmpty())
-        return QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file.");
+        return FW_TR("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file.");
     // What is inside the image (packs, an inner image) decides which job extracts or converts it.
     if ((m_action == Action::Extract || m_action == Action::Convert) && m_info->isBusy())
-        return QStringLiteral("The image is still being read. Try again in a moment.");
+        return FW_TR("The image is still being read. Try again in a moment.");
     switch (m_action) {
     case Action::Extract:
         if (!m_destination->path().isEmpty() && isSameOrInside(m_path, m_destination->path()))
-            return QStringLiteral("The destination cannot contain the image.");
+            return FW_TR("The destination cannot contain the image.");
         return {};
     case Action::Verify: {
         if (!compareMode())
@@ -1517,15 +1524,15 @@ QString ImageToolsPage::validateForm()
     }
     case Action::Convert:
         if (convertTarget().isEmpty())
-            return QStringLiteral("Choose the format to convert to.");
+            return FW_TR("Choose the format to convert to.");
         if (QDir::cleanPath(QFileInfo(convertOutput()).absoluteFilePath()) == QDir::cleanPath(QFileInfo(m_path).absoluteFilePath()))
-            return QStringLiteral("The converted image cannot replace its source.");
+            return FW_TR("The converted image cannot replace its source.");
         return {};
     case Action::Edit:
         if (!m_tree.error.isEmpty())
             return m_tree.error;
         if (m_ops.empty())
-            return QStringLiteral("Stage at least one change.");
+            return FW_TR("Stage at least one change.");
         return {};
     }
     return {};
@@ -1557,9 +1564,9 @@ Result<QString> ImageToolsPage::submit(bool)
         const QString out = convertOutput();
         bool replace = false;
         if (QFileInfo::exists(out)) {
-            if (!Sheet::confirm(window(), QStringLiteral("Replace the existing image?"),
-                                QStringLiteral("%1 exists. It is set aside while the new image is written and put back if the conversion fails.").arg(Sheet::monoSpan(nativePath(out))),
-                                QStringLiteral("Cancel"), QStringLiteral("Replace")))
+            if (!Sheet::confirm(window(), FW_TR("Replace the existing image?"),
+                                FW_TR("%1 exists. It is set aside while the new image is written and put back if the conversion fails.").arg(Sheet::monoSpan(nativePath(out))),
+                                FW_TR("Cancel"), FW_TR("Replace")))
                 return Error(ErrorCode::Cancelled, QStringLiteral("Nothing was converted."));
             replace = true;
         }
@@ -1578,11 +1585,12 @@ Result<QString> ImageToolsPage::submit(bool)
         }
         QString list = Sheet::monoLines(lines); // escapes the names
         if (m_ops.size() > kListed)
-            list += QStringLiteral("<br>… and %1 more").arg(m_ops.size() - kListed);
-        const QString count = QStringLiteral("%1 change%2").arg(m_ops.size()).arg(m_ops.size() == 1 ? QString() : QStringLiteral("s"));
-        if (!Sheet::confirm(window(), QStringLiteral("Apply %1 to %2?").arg(count, QFileInfo(m_path).fileName()),
-                            list + (deletes > 0 ? QStringLiteral("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
-                            QStringLiteral("Keep editing"), QStringLiteral("Apply"), deletes > 0, deletes > 0 ? Sheet::Icon::Warning : Sheet::Icon::Info))
+            list += QStringLiteral("<br>") + FW_TR("… and %1 more").arg(m_ops.size() - kListed);
+        const QString title = m_ops.size() == 1 ? FW_TR("Apply %1 change to %2?").arg(m_ops.size()).arg(QFileInfo(m_path).fileName())
+                                                : FW_TR("Apply %1 changes to %2?").arg(m_ops.size()).arg(QFileInfo(m_path).fileName());
+        if (!Sheet::confirm(window(), title,
+                            list + (deletes > 0 ? FW_TR("<br><br>Deleted and replaced files cannot be recovered from the image afterwards. The edit is verified before the original is replaced.") : QString()),
+                            FW_TR("Keep editing"), FW_TR("Apply"), deletes > 0, deletes > 0 ? Sheet::Icon::Warning : Sheet::Icon::Info))
             return Error(ErrorCode::Cancelled, QStringLiteral("Not applied."));
         auto r = jobs::submitImageEdit(m_ctx, m_path, operationsJson(), jobOverrides());
         if (r.ok()) {
@@ -1685,7 +1693,7 @@ QString ImageToolsPage::statusContext() const
         return {};
     const QString name = QFileInfo(m_path).fileName();
     if (m_action == Action::Edit)
-        return QStringLiteral("%1 · %2 staged").arg(name).arg(m_ops.size());
+        return FW_TR("%1 · %2 staged").arg(name).arg(m_ops.size());
     return m_summary.bytes > 0 ? QStringLiteral("%1 · %2").arg(name, formatBytes(m_summary.bytes)) : name;
 }
 
@@ -1716,7 +1724,7 @@ void ImageToolsPage::setDemoImage(const QString& path, qint64 bytes)
     m_summary.version = QStringLiteral("01.002.000");
     m_summary.files = 18442;
     m_summary.fromImage = true;
-    setBadge(m_imageBadge, QStringLiteral("Ready"), Tone::Ok);
+    setBadge(m_imageBadge, FW_TR("Ready"), Tone::Ok);
     showStrip();
     updateActions();
 }
