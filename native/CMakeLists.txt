@@ -86,11 +86,18 @@ if(MSVC)
     target_compile_options(fw_lz4 PRIVATE /W0)
 endif()
 
+# libarchive (BSD-2-Clause) and liblzma from XZ Utils (0BSD): 7z and RAR
+# archives as build sources. Pinned by hash, library code only.
+include(ArchiveLibs)
+
 include(AmprRuntime)
 
 configure_file(src/core/BuildInfo.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/core/BuildInfo.h @ONLY)
 
 add_subdirectory(src)
+
+# core/ArchiveReader is the only user of libarchive; nothing else sees its headers.
+target_link_libraries(fw_core PRIVATE fw_libarchive)
 
 if(FW_BUILD_TESTS)
     add_subdirectory(tests)

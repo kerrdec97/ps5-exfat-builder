@@ -15,6 +15,8 @@ texts are in LICENSES/.
 | LibProsperoPKG (SvenGDK) | Facts used by the FPKG engine: PS5 flat-path hash, UCP layout | GPL-3.0-or-later |
 | zstd 1.5.7 (Meta Platforms) | zstd asset packs: compression and decompression | BSD-3-Clause (LICENSES/zstd-BSD-3-Clause.txt) |
 | LZ4 1.10.0 (Yann Collet), lib/lz4.c only | Reading (unpacking) LZ4 asset packs; the app never writes them | BSD-2-Clause (LICENSES/LZ4-BSD-2-Clause.txt) |
+| libarchive 3.8.11 (Tim Kientzle and contributors), the 7z, RAR and RAR5 readers only | Reading 7z and RAR archives chosen as a build source | BSD-2-Clause (LICENSES/libarchive-BSD-2-Clause.txt) |
+| liblzma from XZ Utils 5.8.4 (Lasse Collin and contributors), the library only | LZMA/LZMA2 decompression for 7z archives | 0BSD (LICENSES/XZ-liblzma-0BSD.txt) |
 | ps5-dump-forge (quer3q) | The zstd pack writer and reader, the packing rules, the LZ4 (AMPRPAK4) reader and the image-wrapped .ffpfsc rule follow its formats and code (v0.5.4) | GPL-3.0-or-later |
 | ampr-emu-ng (quer3q) | Format of the zstd packs (docs/zstd-format.md); its runtime is bundled (below) | GPL-3.0-or-later |
 | Lucide icons | Interface icons | ISC (LICENSES/Lucide-ISC.txt) |
