@@ -6,6 +6,8 @@
 // it the launcher (src/onefile) unpacks the program into
 // `<exe folder>\exFAT Image Builder.data` and the app keeps settings, queue,
 // history, logs and temporary files in `<exe folder>\data` (core/Paths).
+// The folder edition (the release zip, GitHub #78) has nothing to unpack:
+// `portable.txt` goes next to its own exe and only `data` is new.
 //
 // Everything here takes its paths as arguments, so it can be run against any
 // folder (the tests use a temporary one in place of the exe's).
@@ -24,10 +26,20 @@ struct Plan {
     QString programDir;     // <exeDir>/exFAT Image Builder.data: the unpacked program from the next start
     QString dataDir;        // <exeDir>/data: settings, queue, history, logs and temporary files from the next start
     QString currentDataDir; // where settings, queue and history are now
+    bool unpacks = true;    // false for the folder edition: the program already is in exeDir
 };
 
 // What making the copy at `launcherExe` portable means. Nothing is touched.
 Plan planFor(const QString& launcherExe, const QString& currentDataDir);
+
+// The same for the folder edition, whose exe is the app itself: programDir is
+// the exe's own folder and nothing is unpacked.
+Plan planForFolderEdition(const QString& appExe, const QString& currentDataDir);
+
+// True for a folder laid out as the release ships it (the folder edition or
+// an unpacked copy): LICENCE.txt and Qt6Core.dll next to the exe. A developer
+// build folder has neither.
+bool isFolderEdition(const QString& appDir);
 
 // The files "Copy my settings and queue" takes along: the files directly in
 // the current data folder (settings, queue, history, the library and payload

@@ -154,6 +154,31 @@ private slots:
         QVERIFY(!QFileInfo::exists(plan.dataDir));
     }
 
+    void theFolderEditionHasNothingToUnpack()
+    {
+        // GitHub #78: the release zip is the program already unpacked; portable.txt goes next to its own exe.
+        const Stage s = stage();
+        QVERIFY(!portable::isFolderEdition(s.exeDir)); // a developer build folder: no licence, no Qt next to the exe
+        fwtest::writeTextFile(s.exeDir + QStringLiteral("/LICENCE.txt"), "licence");
+        QVERIFY(!portable::isFolderEdition(s.exeDir));
+        fwtest::writeTextFile(s.exeDir + QStringLiteral("/Qt6Core.dll"), "MZ");
+        QVERIFY(portable::isFolderEdition(s.exeDir));
+        QVERIFY(!portable::isFolderEdition(QString()));
+
+        const portable::Plan plan = portable::planForFolderEdition(s.exe, s.data);
+        QVERIFY(!plan.unpacks);
+        QCOMPARE(plan.programDir, s.exeDir);
+        QCOMPARE(plan.markerFile, s.exeDir + QStringLiteral("/portable.txt"));
+        QCOMPARE(plan.dataDir, s.exeDir + QStringLiteral("/data"));
+        QVERIFY(portable::planFor(s.exe, s.data).unpacks);
+
+        const auto done = portable::makePortable(plan, true);
+        QVERIFY2(done.ok(), qPrintable(done.ok() ? QString() : done.error().message));
+        QVERIFY(QFileInfo::exists(plan.markerFile));
+        QVERIFY(QFileInfo::exists(plan.dataDir + QStringLiteral("/settings.json")));
+        QVERIFY(!QFileInfo::exists(s.exeDir + QStringLiteral("/exFAT Image Builder.data"))); // nothing for a launcher
+    }
+
     void copiesWithoutOverwritingAndCreatesTheMarkerLast()
     {
         const Stage s = stage();

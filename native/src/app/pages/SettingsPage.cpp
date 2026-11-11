@@ -735,6 +735,7 @@ namespace {
 // not the folders of the machine that renders them.
 struct StorageLocations {
     QString launcherExe; // "" when the program was started directly
+    QString folderExe;   // the folder edition's exe when started directly from a release layout (GitHub #78)
     QString program, data, logs, temp, cache;
     QString marker;      // portable.txt, whether it exists or not
     bool portable = false;
@@ -757,6 +758,8 @@ StorageLocations storageLocations(const AppContext& ctx, const QString& temp)
         return l;
     }
     l.launcherExe = Paths::launcherExe();
+    if (l.launcherExe.isEmpty() && portable::isFolderEdition(QCoreApplication::applicationDirPath()))
+        l.folderExe = QDir::cleanPath(QCoreApplication::applicationFilePath());
     l.program = Paths::programDir();
     l.data = Paths::dataDir();
     const QString logFile = ctx.logFilePath(); // the log folder in use (Settings › Logging may name another)
@@ -866,8 +869,9 @@ void SettingsPage::addLocationsCard()
     } else {
         auto* make = button(QStringLiteral("Make this copy portable…"), ButtonVariant::Secondary, {}, prow);
         make->setObjectName(QStringLiteral("make-portable"));
-        make->setEnabled(fromLauncher);
-        if (!fromLauncher) {
+        const bool canMake = fromLauncher || !at.folderExe.isEmpty();
+        make->setEnabled(canMake);
+        if (!canMake) {
             const QString why = QStringLiteral("This copy was started without the single-file exe (a developer run), so there is no exe to make portable.");
             make->setToolTip(why);
             note(why);
@@ -886,8 +890,11 @@ Sheet* SettingsPage::buildPortableSheet(const portable::Plan& plan, QCheckBox*& 
 {
     auto* s = new Sheet(window(), QStringLiteral("Make this copy portable?"), Sheet::Icon::Info, size::dialogWide);
     s->addText(QStringLiteral("This creates %1 next to %2.").arg(Sheet::monoSpan(QStringLiteral("portable.txt")), Sheet::monoSpan(nativePath(plan.exePath))));
-    s->addText(QStringLiteral("From the next start the app unpacks itself to %1 and keeps settings, queue, history and logs in %2.")
-                   .arg(Sheet::monoSpan(nativePath(plan.programDir)), Sheet::monoSpan(nativePath(plan.dataDir))));
+    if (plan.unpacks)
+        s->addText(QStringLiteral("From the next start the app unpacks itself to %1 and keeps settings, queue, history and logs in %2.")
+                       .arg(Sheet::monoSpan(nativePath(plan.programDir)), Sheet::monoSpan(nativePath(plan.dataDir))));
+    else
+        s->addText(QStringLiteral("From the next start the app keeps settings, queue, history and logs in %1.").arg(Sheet::monoSpan(nativePath(plan.dataDir))));
     copy = s->addCheckbox(QStringLiteral("Copy my settings and queue"));
     copy->setChecked(true);
     copy->setToolTip(QStringLiteral("Settings, queue, history and the library list are copied; a file that is already in the new folder is kept."));
@@ -901,9 +908,13 @@ Sheet* SettingsPage::buildPortableSheet(const portable::Plan& plan, QCheckBox*& 
 void SettingsPage::makePortable()
 {
     const QString exe = Paths::launcherExe();
-    if (exe.isEmpty())
+    portable::Plan plan;
+    if (!exe.isEmpty())
+        plan = portable::planFor(exe, Paths::dataDir());
+    else if (portable::isFolderEdition(QCoreApplication::applicationDirPath()))
+        plan = portable::planForFolderEdition(QCoreApplication::applicationFilePath(), Paths::dataDir());
+    else
         return;
-    const portable::Plan plan = portable::planFor(exe, Paths::dataDir());
     QCheckBox* copy = nullptr;
     Sheet* s = buildPortableSheet(plan, copy);
     if (s->exec() != 1)
@@ -919,14 +930,19 @@ void SettingsPage::makePortable()
     Log(QStringLiteral("app")).info(QStringLiteral("Portable mode set up: %1 (%2 file(s) copied, %3 kept)")
                                         .arg(nativePath(plan.markerFile)).arg(done->copied.size()).arg(done->kept.size()));
     rebuild(); // the row now says "After restart"
-    QString text = QStringLiteral("Close the app and start %1 again. It unpacks itself next to the exe once (a few seconds) and uses the folders there from then on.")
-                       .arg(Sheet::monoSpan(nativePath(plan.exePath)));
+    QString text = plan.unpacks ? QStringLiteral("Close the app and start %1 again. It unpacks itself next to the exe once (a few seconds) and uses the folders there from then on.")
+                                      .arg(Sheet::monoSpan(nativePath(plan.exePath)))
+                                : QStringLiteral("Close the app and start %1 again. It uses the folders there from then on.").arg(Sheet::monoSpan(nativePath(plan.exePath)));
     if (!done->copied.isEmpty())
         text += QStringLiteral("<br><br>Copied to %1: %2.").arg(Sheet::monoSpan(nativePath(plan.dataDir)), Sheet::monoSpan(done->copied.join(QStringLiteral(", "))));
     if (!done->kept.isEmpty())
         text += QStringLiteral("<br><br>Already there and kept as they were: %1.").arg(Sheet::monoSpan(done->kept.join(QStringLiteral(", "))));
-    text += QStringLiteral("<br><br>The old folders are still in place: %1 and %2. Delete them once the portable copy works for you.")
-                .arg(Sheet::monoSpan(nativePath(plan.currentDataDir)), Sheet::monoSpan(nativePath(Paths::programDir())));
+    if (plan.unpacks)
+        text += QStringLiteral("<br><br>The old folders are still in place: %1 and %2. Delete them once the portable copy works for you.")
+                    .arg(Sheet::monoSpan(nativePath(plan.currentDataDir)), Sheet::monoSpan(nativePath(Paths::programDir())));
+    else
+        text += QStringLiteral("<br><br>The old folder is still in place: %1. Delete it once the portable copy works for you.")
+                    .arg(Sheet::monoSpan(nativePath(plan.currentDataDir)));
     Sheet::message(window(), QStringLiteral("Portable from the next start"), text, Sheet::Icon::Info);
 }
 

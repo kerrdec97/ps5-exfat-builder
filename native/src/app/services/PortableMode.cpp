@@ -33,6 +33,22 @@ Plan planFor(const QString& launcherExe, const QString& currentDataDir)
     return p;
 }
 
+Plan planForFolderEdition(const QString& appExe, const QString& currentDataDir)
+{
+    Plan p = planFor(appExe, currentDataDir);
+    p.programDir = p.exeDir;
+    p.unpacks = false;
+    return p;
+}
+
+bool isFolderEdition(const QString& appDir)
+{
+    if (appDir.isEmpty())
+        return false;
+    const QDir dir(appDir);
+    return QFileInfo(dir.filePath(QStringLiteral("LICENCE.txt"))).isFile() && QFileInfo(dir.filePath(QStringLiteral("Qt6Core.dll"))).isFile();
+}
+
 QStringList filesToCopy(const Plan& plan)
 {
     QStringList out;

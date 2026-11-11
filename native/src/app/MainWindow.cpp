@@ -465,6 +465,9 @@ void MainWindow::onJobFinished(const QString& id)
     }
     if (jobs::isSystemKind(rec->kind))
         return;
+    // A finished dump check gets the Library's own toast with "Show details" (GitHub #26); a failed one keeps this one.
+    if (rec->kind == QLatin1String("tools.dump.check") && rec->state == JobState::Succeeded)
+        return;
     const QString kindName = m_ctx.jobFactory().displayName(rec->kind);
     QList<ToastHost::Action> actions;
     if (rec->state == JobState::Succeeded) {
