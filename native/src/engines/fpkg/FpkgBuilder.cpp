@@ -558,7 +558,9 @@ Status finalizeParam(BuildPlan& p, const PlanOptions& o, const FpkgSettings& s)
     po.lowerRequiredFirmware = s.lowerRequiredFirmware;
     po.contentVersion = o.contentVersion;
     po.title = o.title;
-    p.paramNotes = applyParamPatch(p.param, po);
+    // An update keeps the versions of its own param.json.
+    const QStringList sdkNotes = o.isUpdate ? QStringList() : applySdkVersionRule(p.param, p.executableSdk);
+    p.paramNotes = sdkNotes + applyParamPatch(p.param, po);
 
     qint64 u = 0;
     for (const PlannedEntry& e : p.entries)
@@ -665,25 +667,106 @@ Result<BuildPlan> planBuild(const PlanOptions& o, const FpkgSettings& s, const C
         if (f.open(QIODevice::ReadOnly) && bytesImportAmpr(f.read(4 * 1024 * 1024)))
             p.warnings << QStringLiteral("eboot.bin imports libSceAmpr. If the game relied on an AMPR emulator in fakelib, "
                                          "it may not start from this package.");
+        p.executableSdk = executableSdkVersion(eboot->absPath);
+        if (p.executableSdk)
+            p.log << QStringLiteral("eboot.bin: SDK version 0x%1 in its .sceversion trailer")
+                         .arg(*p.executableSdk, 16, 16, QLatin1Char('0'));
     }
 
-    QSet<QString> selfRepair, ucpRepair;
-    if (!p.scan.ps4SelfMagic.isEmpty()) {
-        if (s.repairSelf) {
-            for (const QString& r : std::as_const(p.scan.ps4SelfMagic)) {
-                selfRepair.insert(r.toLower());
-                p.log << QStringLiteral("self: %1 (PS4 signature replaced by the PS5 signature in a copy)").arg(r);
+    // Executables Sony's publisher would misread: the PS4 signature and a
+    // .sceversion trailer that starts before the offset the header names.
+    QHash<QString, SelfRepairPlan> selfRepair;
+    QSet<QString> ucpRepair;
+    {
+        QStringList ps4Left;
+        int misplaced = 0;
+        for (const ScannedFile& f : p.scan.files) {
+            if (f.size < 0x20 || !isExecutableName(f.rel.section(u'/', -1)))
+                continue;
+            if (!token.checkpoint())
+                return Error::cancelled();
+            const auto fix = selfRepairPlan(f.absPath);
+            if (!fix)
+                continue;
+            if (s.repairSelf) {
+                selfRepair.insert(f.rel.toLower(), *fix);
+                p.log << QStringLiteral("self: %1 (%2, in a copy)").arg(f.rel, fix->describe());
+            } else {
+                if (fix->rewriteMagic)
+                    ps4Left << f.rel;
+                if (fix->padding > 0)
+                    ++misplaced;
             }
-        } else {
+        }
+        if (!ps4Left.isEmpty())
             p.warnings << QStringLiteral("%1 executable(s) carry the PS4 SELF signature (for example %2); the package may "
                                          "not run. Turn on \"Fix PS4-format executables\".")
-                              .arg(p.scan.ps4SelfMagic.size())
-                              .arg(p.scan.ps4SelfMagic.first());
-        }
+                              .arg(ps4Left.size())
+                              .arg(ps4Left.first());
+        if (misplaced > 0)
+            p.warnings << QStringLiteral("%1 executable(s) have a misplaced version trailer that Sony's publisher cannot "
+                                         "read. Turn on \"Fix PS4-format executables\".").arg(misplaced);
     }
+
+    // sce_sys/uds archives named by npbind.dat: a stale digest is corrected,
+    // a missing or unusable archive is replaced by an empty one.
+    QHash<QString, QByteArray> udsReplace;               // lower rel -> archive
+    std::vector<std::pair<QString, QByteArray>> udsAdd;  // archives the dump lacks
+    QSet<QString> udsChecked;
     if (s.repairUcp) {
+        if (const ScannedFile* npbind = p.scan.findFile(QStringLiteral("sce_sys/uds/npbind.dat"))) {
+            const Result<QStringList> ids = [&]() -> Result<QStringList> {
+                QFile nf(toLongPath(npbind->absPath));
+                if (!nf.open(QIODevice::ReadOnly) || nf.size() > 64 * 1024)
+                    return Error(ErrorCode::IoError, QStringLiteral("it could not be read"));
+                return readNpbindIds(nf.readAll());
+            }();
+            if (!ids.ok()) {
+                p.log << QStringLiteral("ucp: sce_sys/uds/npbind.dat was not used (%1); the UDS archives are packed as they are")
+                             .arg(ids.error().message);
+            } else {
+                for (int i = 0; i < ids->size(); ++i) {
+                    const QString id = ids->at(i);
+                    const QString rel = QStringLiteral("sce_sys/uds/uds%1.ucp").arg(i, 2, 10, QLatin1Char('0'));
+                    const ScannedFile* src = p.scan.findFile(rel);
+                    QString reason = QStringLiteral("missing");
+                    if (src) {
+                        if (src->size > kUcpMaxBytes) {
+                            p.log << QStringLiteral("ucp: %1 not checked (larger than 128 MiB)").arg(src->rel);
+                            udsChecked.insert(src->rel.toLower());
+                            continue;
+                        }
+                        QFile in(toLongPath(src->absPath));
+                        if (!in.open(QIODevice::ReadOnly))
+                            return Error(ErrorCode::IoError, QStringLiteral("%1 could not be read.").arg(src->rel), in.errorString());
+                        const UdsUcpVerdict v = checkUdsUcp(in.readAll(), id);
+                        udsChecked.insert(src->rel.toLower());
+                        if (v.problems.isEmpty())
+                            continue;
+                        if (v.digestOnly) {
+                            ucpRepair.insert(src->rel.toLower());
+                            p.log << QStringLiteral("ucp: %1 (stale SHA-1 digest corrected in a copy)").arg(src->rel);
+                            continue;
+                        }
+                        reason = QStringLiteral("not usable: ") + v.problems.join(QStringLiteral("; "));
+                    }
+                    const QByteArray stub = emptyUdsUcp(id);
+                    p.log << QStringLiteral("ucp: %1 is %2; the package gets an empty archive for %3 (%4 bytes)")
+                                 .arg(src ? src->rel : rel, reason, id)
+                                 .arg(stub.size());
+                    p.warnings << QStringLiteral("%1 is %2. The package gets an empty activity archive for %3 instead, so "
+                                                 "it builds and the game finds the file; activity data of the original "
+                                                 "is not in the package. The dump is not changed.")
+                                      .arg(src ? src->rel : rel, src ? QStringLiteral("not usable") : QStringLiteral("missing"), id);
+                    if (src)
+                        udsReplace.insert(src->rel.toLower(), stub);
+                    else
+                        udsAdd.emplace_back(rel, stub);
+                }
+            }
+        }
         for (const ScannedFile& f : p.scan.files) {
-            if (!isUcpPath(f.rel))
+            if (!isUcpPath(f.rel) || udsChecked.contains(f.rel.toLower()))
                 continue;
             if (f.size > kUcpMaxBytes) {
                 p.log << QStringLiteral("ucp: %1 not checked (larger than 128 MiB)").arg(f.rel);
@@ -693,11 +776,14 @@ Result<BuildPlan> planBuild(const PlanOptions& o, const FpkgSettings& s, const C
             if (!in.open(QIODevice::ReadOnly))
                 return Error(ErrorCode::IoError, QStringLiteral("%1 could not be read.").arg(f.rel), in.errorString());
             const UcpCheck c = checkUcp(in.readAll());
-            if (!c.structureOk)
-                return Error(ErrorCode::CorruptData,
-                             QStringLiteral("%1 is damaged (%2). The Publishing Tools reject it. Replace it from the "
-                                            "original dump, or turn off \"Fix trophy and UDS archive digests\" to let the "
-                                            "tool decide.").arg(f.rel, c.problem));
+            if (!c.structureOk) {
+                // Kept as it is (a sealed copy from the original package, a cut-short file): the tool decides.
+                p.log << QStringLiteral("ucp: %1 cannot be read (%2); packed as it is").arg(f.rel, c.problem);
+                p.warnings << QStringLiteral("%1 cannot be read (%2) and is packed as it is. Sony's publisher may refuse "
+                                             "it; replace it from the original dump if the build stops there.")
+                                  .arg(f.rel, c.problem);
+                continue;
+            }
             if (!c.digestOk) {
                 ucpRepair.insert(f.rel.toLower());
                 p.log << QStringLiteral("ucp: %1 (stale SHA-1 digest corrected in a copy)").arg(f.rel);
@@ -742,6 +828,8 @@ Result<BuildPlan> planBuild(const PlanOptions& o, const FpkgSettings& s, const C
         ddsSize.insert(c.dst.toLower(), sz);
         in.files.emplace_back(c.dst, sz);
     }
+    for (const auto& u : udsAdd)
+        in.files.emplace_back(u.first, u.second.size());
     for (const ScannedFile& f : p.scan.files)
         if (!replaced.contains(f.rel.toLower()))
             in.files.emplace_back(f.rel, f.size);
@@ -775,6 +863,16 @@ Result<BuildPlan> planBuild(const PlanOptions& o, const FpkgSettings& s, const C
         e.kind = EntryKind::RecoveredImage;
         p.entries.push_back(e);
     }
+    for (const auto& u : udsAdd) {
+        PlannedEntry e;
+        e.dst = u.first;
+        e.src = relUnder(p.assetsDir, u.first);
+        e.size = u.second.size();
+        e.chunk = p.playgo.fileChunk(e.dst);
+        e.kind = EntryKind::GeneratedFile;
+        e.data = u.second;
+        p.entries.push_back(e);
+    }
     for (const PlannedPayload& pl : p.playgo.payloads) {
         PlannedEntry e;
         e.dst = pl.dst;
@@ -797,10 +895,17 @@ Result<BuildPlan> planBuild(const PlanOptions& o, const FpkgSettings& s, const C
             e.kind = EntryKind::ParamJson;
             e.src = relUnder(p.assetsDir, QStringLiteral("sce_sys/param.json"));
             e.origin = f.absPath;
-        } else if (selfRepair.contains(low)) {
+        } else if (const auto fix = selfRepair.constFind(low); fix != selfRepair.cend()) {
             e.kind = EntryKind::RepairedSelf;
             e.src = relUnder(p.assetsDir, QStringLiteral("normalized-self/") + f.rel);
             e.origin = f.absPath;
+            e.selfPlan = *fix;
+            e.size = f.size + fix->padding;
+        } else if (const auto stub = udsReplace.constFind(low); stub != udsReplace.cend()) {
+            e.kind = EntryKind::GeneratedFile;
+            e.src = relUnder(p.assetsDir, f.rel);
+            e.data = *stub;
+            e.size = stub->size();
         } else if (ucpRepair.contains(low)) {
             e.kind = EntryKind::RepairedUcp;
             e.src = relUnder(p.assetsDir, QStringLiteral("repaired-ucp/") + f.rel);
@@ -1398,7 +1503,16 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         vo.workingDirectory = ro.workingDirectory;
         vo.environment = ro.environment;
         vo.withBar = false;
-        vo.onLine = ro.onLine;
+        // "param.json: SDK Version = 6.00.00.00-00.00.00.0.0." as the package carries it.
+        QString packagedSdk;
+        vo.onLine = [&](const ToolLine& l) {
+            static const QLatin1String marker("param.json: SDK Version = ");
+            const qsizetype at = l.text.indexOf(marker);
+            if (at >= 0)
+                packagedSdk = l.text.mid(at + marker.size()).trimmed();
+            if (ro.onLine)
+                ro.onLine(l);
+        };
         applyJobLimits(vo, s, ctx);
         (void)ctx.token.checkpoint(); // a paused job waits here; a cancelled one is reported by the run below
         auto vr = runPubTool(vo, ctx.token);
@@ -1406,6 +1520,15 @@ Result<JobOutcome> packAndFinish(PackJob& j)
             settleReplaced(false);
             log.warn(QStringLiteral("img_verify was cancelled; the package was kept: %1").arg(native(placed.value(0))));
             return Error::cancelled();
+        }
+        if (packagedSdk.startsWith(QLatin1String("0.00."))) {
+            // Toolkits before sdk-fpkg279-fix15 write 0 whatever param.json says.
+            const QString w = QStringLiteral("The package carries SDK version 0 in its param.json. Publishing Tools toolkits "
+                                             "older than sdk-fpkg279-fix15 write 0 whatever the game needs, and a game can "
+                                             "crash or misbehave when the console starts it that way. Build with the fix15 "
+                                             "toolkit (Settings > Tools).");
+            j.outcome.warnings << w;
+            log.warn(w);
         }
         if (vr.ok() && vr->ok()) {
             j.outcome.verificationDetail = s.postVerify == PostVerify::ToolFull
@@ -1973,7 +2096,11 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             pr->advance(e.size);
             break;
         case EntryKind::RepairedSelf:
-            FW_TRY(writeSelfRepairCopy(e.origin, e.src, ctx.token));
+            FW_TRY(writeSelfRepairCopy(e.origin, e.src, e.selfPlan.value_or(SelfRepairPlan{}), ctx.token));
+            pr->advance(e.size);
+            break;
+        case EntryKind::GeneratedFile:
+            FW_TRY(writeFileAtomic(e.src, e.data));
             pr->advance(e.size);
             break;
         case EntryKind::RepairedUcp: {

@@ -85,7 +85,7 @@ FpkgSettings FpkgSettings::from(const SettingsValues& v)
     s.recoverPngFromDds = v.boolean(keys::kRecoverPngFromDds);
 
     s.playGoFallback = v.boolean(keys::kPlayGoFallback);
-    s.playGoChunkCount = int(std::clamp<qint64>(v.integer(keys::kPlayGoChunkCount), 1, 255));
+    s.playGoChunkCount = int(std::clamp<qint64>(v.integer(keys::kPlayGoChunkCount), 1, 800));
     s.fillEmptyChunks = v.boolean(keys::kFillEmptyChunks);
     s.useSourcePlayGoTable = v.boolean(keys::kUseSourcePlayGoTable);
     s.playGoAllLanguages = v.boolean(keys::kPlayGoAllLanguages);
@@ -299,14 +299,16 @@ void registerFpkgSettings(SettingsSchema& s)
                                      "<project>\\Saved next to Content\\Paks) out of the package."),
                       true, order++));
     s.add(boolSetting(keys::kRepairSelf, fpkg, filesGroup, QStringLiteral("Fix PS4-format executables"),
-                      QStringLiteral("Executables that start with the PS4 SELF signature get the PS5 signature in a copy "
-                                     "used for the package. The dump itself is not changed."),
+                      QStringLiteral("Executables that start with the PS4 SELF signature get the PS5 signature, and a "
+                                     "version trailer that sits a few bytes too early is moved to where Sony's publisher "
+                                     "looks for it, in a copy used for the package. The dump itself is not changed."),
                       true, order++));
     s.add(boolSetting(keys::kRepairUcp, fpkg, filesGroup, QStringLiteral("Fix trophy and UDS archive digests"),
                       QStringLiteral("Checks sce_sys\\trophy2 and sce_sys\\uds .ucp archives and packages a corrected "
-                                     "copy when their stored SHA-1 digest is stale. A damaged archive stops the build "
-                                     "with its name. Off by default: the format is not confirmed on real dumps."),
-                      false, order++));
+                                     "copy when their stored SHA-1 digest is stale. An activity archive that "
+                                     "sce_sys\\uds\\npbind.dat names but the dump lacks, or that cannot be used, is "
+                                     "replaced by an empty one so the package builds. The dump itself is not changed."),
+                      true, order++));
     {
         SettingDef d = boolSetting(keys::kRecoverPngFromDds, fpkg, filesGroup,
                                    QStringLiteral("Rebuild sce_sys images from .dds"),
@@ -337,7 +339,7 @@ void registerFpkgSettings(SettingsSchema& s)
         d.type = SettingType::Int;
         d.defaultValue = 100;
         d.minimum = 1;
-        d.maximum = 255;
+        d.maximum = 800;
         d.enabledWhenKey = keys::kPlayGoFallback;
         d.perJob = true;
         d.order = order++;
@@ -358,11 +360,11 @@ void registerFpkgSettings(SettingsSchema& s)
     {
         SettingDef d = boolSetting(keys::kUseSourcePlayGoTable, playgo, QStringLiteral("FPKG packages"),
                                    QStringLiteral("Reuse the dump's PlayGo chunk table"),
-                                   QStringLiteral("Keeps the chunks, languages and scenarios of the dump's "
-                                                  "playgo-chunk.dat, and each file's chunk from playgo-ficm.dat and "
-                                                  "playgo-hash-table.dat. Off by default: the table format and the "
-                                                  "path hash are not confirmed on real dumps."),
-                                   false, order++);
+                                   QStringLiteral("Keeps the number of chunks of the dump's playgo-chunk.dat and, "
+                                                  "with playgo-ficm.dat and playgo-hash-table.dat, the name and "
+                                                  "languages of each chunk and the chunk of every file, as the game "
+                                                  "expects them. Off: the package always gets generated chunks."),
+                                   true, order++);
         d.advanced = true;
         s.add(d);
     }

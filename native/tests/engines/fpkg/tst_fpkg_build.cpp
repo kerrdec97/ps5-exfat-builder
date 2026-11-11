@@ -349,7 +349,7 @@ private slots:
             }
             QVERIFY(f.dst != u"sce_sys/param.sfo");
         }
-        QCOMPARE(payloads, 4); // en-US payload in chunk 0, fillers for chunks 1-3
+        QCOMPARE(payloads, 3); // the game data in chunk 0, the en-US payload in chunk 1, fillers for chunks 2-3
         QVERIFY(paramSrc.contains(QStringLiteral(".gp5-assets")));
         QVERIFY(readAll(paramSrc).contains("\"applicationDrmType\": \"standard\""));
         QCOMPARE(project->emptyDirs, QStringList{QStringLiteral("addcont0")});

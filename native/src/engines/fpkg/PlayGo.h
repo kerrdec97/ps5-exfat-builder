@@ -1,18 +1,24 @@
 #pragma once
 
-// PlayGo layout of a package built from a dump.
+// PlayGo layout of a package built from a dump, laid out as the reference
+// toolkit does (sdk-fpkg279-fix15, create-gp5-from-folder.py, with the
+// PSVIETHOA FPKG Builder's defaults).
 //
-// Three layouts, chosen in this order:
-//  C  source table: the dump's sce_sys/playgo-chunk.dat parses, is not
-//     trivial (more than one chunk or scenario) and "Reuse the dump's PlayGo
-//     chunk table" is on. Chunks, languages and scenarios come from the table;
-//     each file's chunk from playgo-ficm.dat + playgo-hash-table.dat.
-//  B  generated ("script") layout: no usable table and the fallback is on.
-//     N chunks, one 1 MiB payload per language, scenarios from the dump's
-//     playgo-scenario.json when it passes the rules, else a default scenario.
-//  A  minimal: one chunk, one scenario (fallback off, or a trivial table).
-// In B and C every scenario lists every chunk and every chunk is initial;
-// chunks without data get a 1 MiB placeholder when "Fill empty chunks" is on.
+//  C  the dump's own layout: "Keep the dump's PlayGo chunks" is on and
+//     sce_sys/playgo-chunk.dat is readable, which gives the chunk count; with
+//     a valid playgo-ficm.dat + playgo-hash-table.dat the chunk names, the
+//     languages of each chunk and each file's chunk are kept too.
+//  B  generated layout: no usable file map, or the languages are forced. N
+//     chunks (the dump's count when its table is readable, else the setting),
+//     every game file in chunk 0 and one 1 MiB payload per language: language
+//     i (counted from 1) goes to chunk min(i, N - 1).
+//  A  minimal: one chunk, one scenario ("Generate PlayGo chunks" is off and
+//     the dump has no readable chunk table).
+// In B and C the scenarios come from the dump's playgo-scenario.json when it
+// passes the rules (else one default scenario); every scenario lists every
+// chunk and every chunk is initial, because a package is installed in full;
+// declared chunks without data get a 1 MiB placeholder when "Fill empty
+// chunks" is on.
 
 #include "core/OrderedJson.h"
 #include "core/Result.h"
@@ -30,12 +36,12 @@
 namespace fw::fpkg {
 
 inline constexpr qint64 kPayloadBytes = 1024 * 1024;
-inline constexpr int kMaxChunks = 255;
+inline constexpr int kMaxChunks = 800;        // the reference toolkit's limit
+inline constexpr int kMaxScriptScenarios = 5; // SCE_PLAYGO_MAX_SCENARIO
 
 // ---- languages ----------------------------------------------------------------
 // The 31 PlayGo language codes in id order (id = index; a mask has bit 63 - id).
-// The id order follows the system-parameter language numbering and is
-// UNVERIFIED against Sony documentation; it only matters for layout C.
+// The order is the reference toolkit's PLAYGO_LANGUAGES.
 const QStringList& playGoLanguages();
 int playGoLanguageId(const QString& code);           // -1 if unknown (case-insensitive)
 QString canonicalPlayGoLanguage(const QString& code); // "" if unknown
@@ -97,6 +103,45 @@ ChunkMap parseChunkMap(const QByteArray& ficm, const QByteArray& hashTable, int 
 
 // PS5 flat-path-table hash of a package path (uppercased, leading '/' stripped).
 quint64 ps5FlatPathHash(const QString& path);
+// The hash playgo-hash-table.dat stores for a package path without a leading
+// slash; seed and key come from that file's header.
+quint64 playGoPathHash(const QString& rel, quint64 seed, quint64 key);
+
+// ---- the dump's own layout (layout C) ---------------------------------------------
+struct SourcePlayGoLayout {
+    struct Chunk {
+        QString label;         // "" only for a chunk without languages
+        QStringList languages; // id order
+        bool declared() const { return !label.isEmpty() || !languages.isEmpty(); }
+    };
+    struct Scenario {
+        QString label;
+        int initialChunkCount = 0;
+        std::vector<int> chunks; // retail order
+    };
+    std::vector<Chunk> chunks;
+    QHash<quint64, int> fileChunks; // path hash -> chunk
+    quint64 seed = 0;
+    quint64 key = 0;
+    std::optional<std::vector<Scenario>> scenarios; // nullopt: the scenario part could not be read
+
+    QStringList languages() const; // every language a chunk names, id order
+    quint64 hashOf(const QString& rel) const;
+    // The chunk the dump's map gives a package path; a sce_sys/*.png is also
+    // looked up as .dds. nullopt when the map does not name it.
+    std::optional<int> chunkOf(const QString& rel, quint64* hash = nullptr) const;
+};
+
+// The chunk count of a PS5 playgo-chunk.dat ("plgx", version 0x1000, 1-800
+// chunks, 1-5 scenarios). The error message says why the file was not used.
+Result<int> sourcePlayGoChunkCount(const QByteArray& chunkDat);
+
+// The layout of the three tables. An empty optional: several chunks, but
+// every file is in chunk 0 (nothing to keep). An error: a table is damaged
+// or the files are misnamed. `warnings` receives notes about ignored parts.
+Result<std::optional<SourcePlayGoLayout>> readSourcePlayGoLayout(const QByteArray& chunkDat, const QByteArray& ficm,
+                                                                  const QByteArray& hashTable, int chunkCount,
+                                                                  QStringList* warnings);
 
 // ---- planning ---------------------------------------------------------------------
 enum class PlayGoLayout { Minimal, Script, SourceTable };
@@ -119,9 +164,10 @@ struct PlayGoInputs {
     bool fallback = true;
     bool fillEmptyChunks = true;
     int chunkCount = 100;
-    // The ppr-pkg Companion's "All 31 PlayGo languages" (layout B): the
-    // scenario's chunkSupportedLanguages become all 31 codes and the chunk
-    // count is raised to at least 32 so every language gets its own chunk.
+    // The ppr-pkg Companion's "All 31 PlayGo languages": the dump's layout is
+    // replaced by generated chunks (layout B), the scenario's
+    // chunkSupportedLanguages become all 31 codes and the chunk count is
+    // raised to at least 32 so every language gets its own chunk.
     bool allLanguages = false;
     // Backport updates: the base package's own language list (its chunk
     // count comes in chunkCount); wins over allLanguages.
@@ -137,8 +183,8 @@ struct PlayGoPlan {
     QByteArray scenarioBytes;          // the sidecar mapped to sce_sys/playgo-scenario.json
     bool scenarioIsSourceVerbatim = false;
     std::vector<PlannedPayload> payloads; // language payloads, then fillers
-    bool chunkOnEveryFile = false;     // layout B: chunk="0" on game files
-    ChunkMap chunkMap;                 // layout C
+    bool chunkOnEveryFile = false;     // layouts B and C: every file names its chunk
+    std::optional<SourcePlayGoLayout> source; // layout C
     QStringList notes;
     QStringList warnings;
 

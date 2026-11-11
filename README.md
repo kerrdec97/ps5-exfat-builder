@@ -14,7 +14,7 @@ verify and send them to your console — from one app, in one download.**
 > writes exFAT, UFS2 and PFS images itself, so it needs **no administrator
 > rights, no OSFMount, no .NET and no Python**, and it ships as **one .exe**.
 >
-> ⬇️ **Download 5.0.2** from the
+> ⬇️ **Download 5.0.3** from the
 > [Releases page](https://github.com/kerrdec97/ps5-exfat-builder/releases):
 > one exe, nothing to install.
 

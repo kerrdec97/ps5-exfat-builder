@@ -92,6 +92,49 @@ public:
 
 } // namespace
 
+namespace {
+
+QByteArray sceVersionRecord(const QByteArray& name, quint64 version)
+{
+    QByteArray r(4, '\0');
+    qToLittleEndian<quint16>(quint16(name.size() + 17), r.data() + 2);
+    r += char(8);
+    r += name;
+    QByteArray v(8, '\0');
+    qToBigEndian<quint64>(version, v.data());
+    return r + v + v;
+}
+
+// A SELF whose header names 0x40 as its size; the trailer starts `early` bytes before that.
+QByteArray makeSelf(const QByteArray& magic, int early, const QByteArray& trailer)
+{
+    QByteArray d(0x20, '\0');
+    d.replace(0, 4, magic);
+    qToLittleEndian<quint64>(0x40, d.data() + 0x10);
+    d += QByteArray(0x20 - early, 'E');
+    return d + trailer;
+}
+
+QByteArray makeNpbind(const QList<QByteArray>& ids)
+{
+    QByteArray d(0x214, '\0');
+    qToBigEndian<quint32>(0xD294A018u, d.data());
+    qToBigEndian<quint32>(1, d.data() + 4);
+    qToBigEndian<quint32>(0x214, d.data() + 0x0C);
+    qToBigEndian<quint32>(0x40, d.data() + 0x14);
+    qToBigEndian<quint32>(quint32(ids.size()), d.data() + 0x1C);
+    for (int i = 0; i < ids.size(); ++i) {
+        const int at = 0x80 + i * 0x40;
+        qToBigEndian<quint16>(0x10, d.data() + at);
+        qToBigEndian<quint16>(quint16(ids[i].size()), d.data() + at + 2);
+        d.replace(at + 4, ids[i].size(), ids[i]);
+    }
+    d.replace(0x200, 20, QCryptographicHash::hash(d.left(0x200), QCryptographicHash::Sha1));
+    return d;
+}
+
+} // namespace
+
 class TstFpkgRules : public QObject {
     Q_OBJECT
     QTemporaryDir m_root;
@@ -649,11 +692,13 @@ private slots:
                     ++fillers;
                 else {
                     ++languages;
-                    QCOMPARE(pl.chunk, std::min(languages - 1, n - 1));
+                    // Chunk 0 keeps the game data; language i (from 1) goes to chunk min(i, n - 1).
+                    QCOMPARE(pl.chunk, std::min(languages, n - 1));
                 }
             }
             QCOMPARE(languages, 2);
-            QCOMPARE(fillers, std::max(0, n - 2));
+            QCOMPARE(fillers, std::max(0, n - 3));
+            QCOMPARE(p->chunkInfo.chunks.front().attrs.back().second, QStringLiteral("en-US fr-FR")); // chunk 0: every language
             QCOMPARE(p->chunkInfo.scenarios.front().text, n == 1 ? QStringLiteral("0") : QStringLiteral("0-%1").arg(n - 1));
             QCOMPARE(p->fileChunk(QStringLiteral("eboot.bin")), std::optional<int>(0));
         }
@@ -664,14 +709,16 @@ private slots:
         in.chunkCount = 2;
         auto p = planPlayGo(in);
         QVERIFY(p.ok());
-        QCOMPARE(p->chunkInfo.chunks[1].attrs.back().second, QStringLiteral("fr-FR de-DE"));
+        QCOMPARE(p->chunkInfo.chunks[0].attrs.back().second, QStringLiteral("en-US fr-FR de-DE"));
+        QCOMPARE(p->chunkInfo.chunks[1].attrs.back().second, QStringLiteral("en-US fr-FR de-DE"));
         QCOMPARE(p->payloads[2].dst, QStringLiteral("playgo-languages/03-de-DE.bin"));
+        QCOMPARE(p->payloads[2].chunk, 1);
         // Name collisions with game files; fillers off.
-        in.chunkCount = 4;
-        in.files.push_back({QStringLiteral("PLAYGO-CHUNKS/003.bin"), 5});
+        in.chunkCount = 5;
+        in.files.push_back({QStringLiteral("PLAYGO-CHUNKS/004.bin"), 5});
         p = planPlayGo(in);
         QVERIFY(p.ok());
-        QCOMPARE(p->payloads.back().dst, QStringLiteral("playgo-chunks/003-2.bin"));
+        QCOMPARE(p->payloads.back().dst, QStringLiteral("playgo-chunks/004-2.bin"));
         in.fillEmptyChunks = false;
         p = planPlayGo(in);
         QVERIFY(p.ok());
@@ -823,20 +870,20 @@ private slots:
         put(dump, QStringLiteral("sce_sys/playgo-chunk.dat"),
             buildPlgx({{header, "Base"}, {langBit(QStringLiteral("fr-FR")), "French voice"}, {header, "Extra"}},
                       {{1, "Main", {0}}, {1, "Second", {2, 0}}}, 0, QStringLiteral("en-US"), header));
-        put(dump, QStringLiteral("sce_sys/playgo-ficm.dat"), buildFicm({1, 2, 0}));
-        put(dump, QStringLiteral("sce_sys/playgo-hash-table.dat"),
-            buildFlt({ps5FlatPathHash(QStringLiteral("/Data/A.pak")), ps5FlatPathHash(QStringLiteral("/Data/_x.bin")),
-                      ps5FlatPathHash(QStringLiteral("/eboot.bin"))}));
+        const PlayGoFileMap map = buildFileMap({{QStringLiteral("Data/A.pak"), 1}, {QStringLiteral("Data/_x.bin"), 2},
+                                                {QStringLiteral("eboot.bin"), 0}});
+        put(dump, QStringLiteral("sce_sys/playgo-ficm.dat"), map.ficm);
+        put(dump, QStringLiteral("sce_sys/playgo-hash-table.dat"), map.hashTable);
         BuildPlan plan;
-        const QByteArray gp5 = goldenProject(dump, out, {{keys::kUseSourcePlayGoTable, true}}, &plan);
+        const QByteArray gp5 = goldenProject(dump, out, {}, &plan); // the dump's layout is kept by default
         QVERIFY(!gp5.isEmpty());
         QCOMPARE(gp5, golden(QStringLiteral("gp5_layout_c.gp5")));
         QCOMPARE(plan.playgo.layout, PlayGoLayout::SourceTable);
         QCOMPARE(plan.playgo.scenarioBytes, golden(QStringLiteral("scenario_layout_c.json")));
 
-        // The same table is ignored while the setting is off (layout B).
+        // The same tables are not read while the setting is off (layout B).
         BuildPlan off;
-        QVERIFY(!goldenProject(dump, out, {{keys::kPlayGoChunkCount, 3}}, &off).isEmpty());
+        QVERIFY(!goldenProject(dump, out, {{keys::kUseSourcePlayGoTable, false}, {keys::kPlayGoChunkCount, 3}}, &off).isEmpty());
         QCOMPARE(off.playgo.layout, PlayGoLayout::Script);
     }
 
@@ -934,23 +981,33 @@ private slots:
             QVERIFY(std::any_of(off->warnings.begin(), off->warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("PS4 SELF")); }));
         }
         {
-            // UCP: checked only when the setting is on.
+            // UCP: checked unless the setting is off.
             const QString d = dir(QStringLiteral("plan/ucp"));
             QVERIFY(makeSimpleDump(d));
             QByteArray stale = makeUcp({{"a.png", "hello"}});
             stale[stale.size() - 1] = 'Z';
             put(d, QStringLiteral("sce_sys/trophy2/trophy00.ucp"), stale);
-            auto off = plan(d);
+            auto off = plan(d, {{keys::kRepairUcp, false}});
             QVERIFY(off.ok());
-            auto on = plan(d, {{keys::kRepairUcp, true}});
+            for (const auto& e : off->entries)
+                if (e.dst == u"sce_sys/trophy2/trophy00.ucp")
+                    QCOMPARE(e.kind, EntryKind::GameFile);
+            auto on = plan(d);
             QVERIFY(on.ok());
             bool repaired = false;
             for (const auto& e : on->entries)
                 if (e.dst == u"sce_sys/trophy2/trophy00.ucp")
                     repaired = e.kind == EntryKind::RepairedUcp;
             QVERIFY(repaired);
+            // An archive that cannot be read goes in as it is; the build is not stopped.
             put(d, QStringLiteral("sce_sys/trophy2/trophy00.ucp"), "garbage");
-            QCOMPARE(errorOf(plan(d, {{keys::kRepairUcp, true}})).code, ErrorCode::CorruptData);
+            auto unreadable = plan(d);
+            QVERIFY(unreadable.ok());
+            QVERIFY(std::any_of(unreadable->warnings.begin(), unreadable->warnings.end(),
+                                [](const QString& w) { return w.contains(QStringLiteral("trophy00.ucp")); }));
+            for (const auto& e : unreadable->entries)
+                if (e.dst == u"sce_sys/trophy2/trophy00.ucp")
+                    QCOMPARE(e.kind, EntryKind::GameFile);
         }
     }
 
@@ -1001,7 +1058,9 @@ private slots:
         put(d, QStringLiteral("old.sprx"), QByteArray("\x4F\x15\x3D\x1D", 4) + QByteArray(60, 'x'));
         QVERIFY(startsWithPs4SelfMagic(self));
         const QString copy = QDir(d).filePath(QStringLiteral("fixed/old.sprx"));
-        QVERIFY(writeSelfRepairCopy(self, copy, CancellationToken()).ok());
+        const auto signatureOnly = selfRepairPlan(self);
+        QVERIFY(signatureOnly && signatureOnly->rewriteMagic && signatureOnly->padding == 0);
+        QVERIFY(writeSelfRepairCopy(self, copy, *signatureOnly, CancellationToken()).ok());
         QCOMPARE(readAll(copy).left(4), kPs5SelfMagic);
         QCOMPARE(readAll(copy).mid(4), QByteArray(60, 'x'));
         QCOMPARE(readAll(self).left(4), kPs4SelfMagic);
@@ -1027,6 +1086,381 @@ private slots:
         QVERIFY(!checkUcp(wrapping).structureOk);
         // Not an archive: returned as it is, nothing is written past its end.
         QCOMPARE(withRepairedUcpDigest("short"), QByteArray("short"));
+    }
+
+    // ---- the reference toolkit's rules (sdk-fpkg279-fix15) ----------------------------------------------
+    void selfTrailerAndSdkVersion()
+    {
+        const QString d = dir(QStringLiteral("selftrailer"));
+        const QByteArray trailer = sceVersionRecord("libc:", 0x0500003300000001ull) + sceVersionRecord("libSceFace:", 0x0600003800000001ull);
+        QVERIFY(isCompleteSceVersion(trailer));
+        QVERIFY(!isCompleteSceVersion(QByteArray()));
+        QVERIFY(!isCompleteSceVersion(trailer.left(trailer.size() - 1)));
+        QVERIFY(!isCompleteSceVersion(QByteArray(1, 'x') + trailer));
+        QByteArray differing = trailer;
+        differing[differing.size() - 1] = 'Z'; // the two copies of the version no longer match
+        QVERIFY(!isCompleteSceVersion(differing));
+        QByteArray noColon = sceVersionRecord("libc_", 1);
+        QVERIFY(!isCompleteSceVersion(noColon));
+
+        const auto file = [&](const QString& name, const QByteArray& bytes) {
+            put(d, name, bytes);
+            return QDir(d).filePath(name);
+        };
+        // Aligned PS5 SELF: nothing to correct, the SDK version is the highest record (major and minor).
+        const QString aligned = file(QStringLiteral("aligned.prx"), makeSelf(kPs5SelfMagic, 0, trailer));
+        QVERIFY(!selfRepairPlan(aligned));
+        QCOMPARE(executableSdkVersion(aligned), std::optional<quint64>(0x0600000000000000ull));
+
+        // The trailer starts 5 bytes early: 5 zero bytes are inserted in the copy.
+        const QByteArray earlyBytes = makeSelf(kPs5SelfMagic, 5, trailer);
+        const QString early = file(QStringLiteral("early.prx"), earlyBytes);
+        const auto plan = selfRepairPlan(early);
+        QVERIFY(plan.has_value());
+        QVERIFY(*plan == (SelfRepairPlan{false, 0x3B, 5}));
+        QVERIFY(plan->describe().contains(QStringLiteral(".sceversion")));
+        QCOMPARE(executableSdkVersion(early), std::optional<quint64>(0x0600000000000000ull));
+        const QString fixed = QDir(d).filePath(QStringLiteral("out/early.prx"));
+        QVERIFY(writeSelfRepairCopy(early, fixed, *plan, CancellationToken()).ok());
+        const QByteArray fixedBytes = readAll(fixed);
+        QCOMPARE(fixedBytes.size(), earlyBytes.size() + 5);
+        QCOMPARE(fixedBytes.left(0x3B), earlyBytes.left(0x3B));
+        QCOMPARE(fixedBytes.mid(0x3B, 5), QByteArray(5, '\0'));
+        QCOMPARE(fixedBytes.mid(0x40), trailer);
+        QVERIFY(!selfRepairPlan(fixed));
+        QCOMPARE(readAll(early), earlyBytes); // the source is untouched
+
+        // PS4 signature and an early trailer: both in one copy.
+        const QString both = file(QStringLiteral("both.sprx"), makeSelf(kPs4SelfMagic, 3, trailer));
+        QVERIFY(selfRepairPlan(both) == std::optional<SelfRepairPlan>(SelfRepairPlan{true, 0x3D, 3}));
+        const QString bothFixed = QDir(d).filePath(QStringLiteral("out/both.sprx"));
+        QVERIFY(writeSelfRepairCopy(both, bothFixed, *selfRepairPlan(both), CancellationToken()).ok());
+        QCOMPARE(readAll(bothFixed).left(4), kPs5SelfMagic);
+        QVERIFY(!selfRepairPlan(bothFixed));
+        // A plan that no longer matches the file is refused.
+        QVERIFY(!writeSelfRepairCopy(aligned, QDir(d).filePath(QStringLiteral("out/x.prx")), *plan, CancellationToken()).ok());
+
+        // No trailer, not a SELF, too short.
+        const QString bare = file(QStringLiteral("bare.prx"), makeSelf(kPs5SelfMagic, 0, QByteArray()));
+        QVERIFY(!selfRepairPlan(bare));
+        QVERIFY(!executableSdkVersion(bare));
+        const QString elf = file(QStringLiteral("eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(100, '\0'));
+        QVERIFY(!selfRepairPlan(elf));
+        QVERIFY(!executableSdkVersion(elf));
+        QVERIFY(!selfRepairPlan(file(QStringLiteral("tiny.prx"), kPs4SelfMagic)));
+    }
+
+    void sdkVersionRule()
+    {
+        const auto parsed = [](const char* text) {
+            auto r = parseParamJson(text);
+            return r.ok() ? r.value() : json::Value::object();
+        };
+        const quint64 sdk = 0x0600000000000000ull;
+        // 0 in the dump: the version of eboot.bin is written, the required version follows.
+        json::Value p = parsed("{\"sdkVersion\":\"0x0000000000000000\",\"requiredSystemSoftwareVersion\":\"0x0000000000000000\"}");
+        QCOMPARE(applySdkVersionRule(p, sdk).size(), 2);
+        QCOMPARE(p.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0600000000000000"));
+        QCOMPARE(p.value(QStringLiteral("requiredSystemSoftwareVersion")).toString(), QStringLiteral("0x0600000000000000"));
+        // Missing keys count as 0.
+        p = parsed("{}");
+        QCOMPARE(applySdkVersionRule(p, 0x0A50000000000000ull).size(), 2);
+        QCOMPARE(p.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0A50000000000000"));
+        // The dump's own SDK version stays; a lower required version is raised to it.
+        p = parsed("{\"sdkVersion\":\"0x0500000000000000\",\"requiredSystemSoftwareVersion\":\"0x0400000000000000\"}");
+        QCOMPARE(applySdkVersionRule(p, sdk).size(), 1);
+        QCOMPARE(p.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0500000000000000"));
+        QCOMPARE(p.value(QStringLiteral("requiredSystemSoftwareVersion")).toString(), QStringLiteral("0x0500000000000000"));
+        // A higher required version stays.
+        p = parsed("{\"sdkVersion\":\"0x0500000000000000\",\"requiredSystemSoftwareVersion\":\"0x0900000000000000\"}");
+        QVERIFY(applySdkVersionRule(p, sdk).isEmpty());
+        QCOMPARE(p.value(QStringLiteral("requiredSystemSoftwareVersion")).toString(), QStringLiteral("0x0900000000000000"));
+        // Nothing known about the executable: nothing changes.
+        p = parsed("{\"sdkVersion\":\"0x0000000000000000\"}");
+        QVERIFY(applySdkVersionRule(p, std::nullopt).isEmpty());
+        QVERIFY(applySdkVersionRule(p, quint64(0)).isEmpty());
+        QCOMPARE(p.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0000000000000000"));
+        // Not a number: left alone, with a note.
+        p = parsed("{\"sdkVersion\":true}");
+        QCOMPARE(applySdkVersionRule(p, sdk).size(), 1);
+        QVERIFY(!p.value(QStringLiteral("sdkVersion")).isString());
+    }
+
+    void referenceExclusions()
+    {
+        const QStringList root;
+        QVERIFY(baseExclusionReason(root, QStringLiteral("Entitlements.txt"), false).size());
+        QVERIFY(baseExclusionReason(root, QStringLiteral("entitlement_key.dat"), false).size());
+        QVERIFY(!baseExclusionReason({QStringLiteral("Data")}, QStringLiteral("entitlements.txt"), false).size());
+        QVERIFY(baseExclusionReason(root, QStringLiteral("playgo-languages"), true).size());
+        QVERIFY(!baseExclusionReason({QStringLiteral("Data")}, QStringLiteral("playgo-languages"), true).size());
+        QVERIFY(baseExclusionReason(root, QStringLiteral("decrypted"), true).size());
+        // <folder>/Saved/Config/<platform>/*.ini
+        const QStringList cfg{QStringLiteral("Game"), QStringLiteral("Saved"), QStringLiteral("Config"), QStringLiteral("PS5")};
+        QVERIFY(baseExclusionReason(cfg, QStringLiteral("GameUserSettings.INI"), false).size());
+        QVERIFY(!baseExclusionReason(cfg, QStringLiteral("GameUserSettings.txt"), false).size());
+        QVERIFY(baseExclusionReason(cfg + QStringList{QStringLiteral("Deep")}, QStringLiteral("x.ini"), false).size());
+        QVERIFY(!baseExclusionReason({QStringLiteral("Game"), QStringLiteral("Saved"), QStringLiteral("Config")}, QStringLiteral("x.ini"), false).size());
+        QVERIFY(!baseExclusionReason({QStringLiteral("Saved"), QStringLiteral("Config"), QStringLiteral("PS5")}, QStringLiteral("x.ini"), false).size());
+        QVERIFY(!baseExclusionReason({QStringLiteral("Game"), QStringLiteral("Config"), QStringLiteral("PS5")}, QStringLiteral("x.ini"), false).size());
+    }
+
+    void udsArchives()
+    {
+        const QString id0 = QStringLiteral("NPWR12345_00");
+        const QString id1 = QStringLiteral("NPWR54321_00");
+        // The empty archive: four members, a valid digest, the id of npbind.dat.
+        const QByteArray stub = emptyUdsUcp(id0);
+        QVERIFY(checkUcp(stub).structureOk && checkUcp(stub).digestOk);
+        auto members = unpackUcp(stub);
+        QVERIFY(members.ok());
+        QCOMPARE(int(members->size()), 4);
+        QCOMPARE(members->at(0).name, QStringLiteral("enum_definition.json"));
+        QCOMPARE(members->at(0).data, QByteArray("{\"schemaVersion\": \"1.1\", \"npCommunicationId\": \"NPWR12345_00\", "
+                                                 "\"enumDefinitionRevision\": 1, \"enumArray\": []}"));
+        QCOMPARE(members->at(1).data, QByteArray("{\"configurationId\": 54474, \"events\": [], \"nextOffset\": 0, "
+                                                 "\"previousOffset\": 0, \"totalItemCount\": 0}"));
+        QCOMPARE(stub.size() % 16, 0);
+        QVERIFY(checkUdsUcp(stub, id0).problems.isEmpty());
+        // Another game's id, a missing member, a stale digest.
+        const UdsUcpVerdict other = checkUdsUcp(stub, id1);
+        QVERIFY(!other.problems.isEmpty() && !other.digestOnly);
+        std::vector<UcpMember> three = *members;
+        three.pop_back();
+        QVERIFY(!checkUdsUcp(packUcp(three), id0).problems.isEmpty());
+        QByteArray stale = stub;
+        stale[0x1C] = char(stale[0x1C] ^ 0x55);
+        QVERIFY(checkUdsUcp(stale, id0).digestOnly);
+        QVERIFY(!checkUdsUcp("garbage", id0).problems.isEmpty());
+        QVERIFY(!unpackUcp(stub.left(stub.size() - 8)).ok());
+
+        // npbind.dat
+        const QByteArray npbind = makeNpbind({"NPWR12345_00", "NPWR54321_00"});
+        auto ids = readNpbindIds(npbind);
+        QVERIFY(ids.ok());
+        QCOMPARE(ids.value(), (QStringList{id0, id1}));
+        QByteArray tampered = npbind;
+        tampered[0x90] = 'x';
+        QVERIFY(!readNpbindIds(tampered).ok());
+        QVERIFY(!readNpbindIds(makeNpbind({"NOTANID"})).ok());
+        QVERIFY(!readNpbindIds(npbind.left(0x200)).ok());
+
+        // In a build plan: a stale digest is corrected, a missing or foreign archive is replaced.
+        Env env;
+        const QString out = dir(QStringLiteral("uds/out"));
+        const QString d = dir(QStringLiteral("uds/dump"));
+        QVERIFY(makeSimpleDump(d));
+        put(d, QStringLiteral("sce_sys/uds/npbind.dat"), npbind);
+        put(d, QStringLiteral("sce_sys/uds/uds00.ucp"), stale);
+        const auto plan = [&](const QVariantMap& s = {}) {
+            PlanOptions po;
+            po.roots = {d};
+            po.outputDir = out;
+            return planBuild(po, FpkgSettings::from(env.values(s)), CancellationToken());
+        };
+        auto p = plan();
+        QVERIFY(p.ok());
+        const auto entry = [&](const QString& dst) -> const PlannedEntry* {
+            for (const auto& e : p->entries)
+                if (e.dst == dst)
+                    return &e;
+            return nullptr;
+        };
+        QVERIFY(entry(QStringLiteral("sce_sys/uds/uds00.ucp")));
+        QCOMPARE(entry(QStringLiteral("sce_sys/uds/uds00.ucp"))->kind, EntryKind::RepairedUcp);
+        const PlannedEntry* added = entry(QStringLiteral("sce_sys/uds/uds01.ucp"));
+        QVERIFY(added);
+        QCOMPARE(added->kind, EntryKind::GeneratedFile);
+        QCOMPARE(added->data, emptyUdsUcp(id1));
+        QVERIFY(std::any_of(p->warnings.begin(), p->warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("uds01.ucp")); }));
+        // The other game's archive in slot 0 is replaced; with the setting off nothing is touched.
+        put(d, QStringLiteral("sce_sys/uds/uds00.ucp"), emptyUdsUcp(id1));
+        p = plan();
+        QVERIFY(p.ok());
+        QCOMPARE(entry(QStringLiteral("sce_sys/uds/uds00.ucp"))->kind, EntryKind::GeneratedFile);
+        QCOMPARE(entry(QStringLiteral("sce_sys/uds/uds00.ucp"))->data, emptyUdsUcp(id0));
+        p = plan({{keys::kRepairUcp, false}});
+        QVERIFY(p.ok());
+        QCOMPARE(entry(QStringLiteral("sce_sys/uds/uds00.ucp"))->kind, EntryKind::GameFile);
+        QVERIFY(!entry(QStringLiteral("sce_sys/uds/uds01.ucp")));
+    }
+
+    void sourcePlayGoLayout()
+    {
+        const quint64 en = langBit(QStringLiteral("en-US")), fr = langBit(QStringLiteral("fr-FR"));
+        const QByteArray table = buildPlgx({{en | fr, "Base"}, {fr, "French voice"}, {0, ""}}, {{1, "Main", {0, 1}}}, 0,
+                                           QStringLiteral("en-US"), en | fr);
+        QCOMPARE(sourcePlayGoChunkCount(table).value(), 3);
+        QVERIFY(!sourcePlayGoChunkCount("plgx").ok());
+        const std::vector<PlgxScenario> six(6, PlgxScenario{1, "S", {0}});
+        QVERIFY(!sourcePlayGoChunkCount(buildPlgx({{en, "A"}}, six, 0, QStringLiteral("en-US"), en)).ok());
+
+        const quint64 seed = 0x1122334455667788ull, key = 0x99AABBCCDDEEFF00ull; // a table's own seed and key
+        const PlayGoFileMap map = buildFileMap({{QStringLiteral("eboot.bin"), 0},
+                                                {QStringLiteral("Data/fr.pak"), 1},
+                                                {QStringLiteral("sce_sys/icon0.dds"), 0},
+                                                {QStringLiteral("sce_sys/keystone"), 0},
+                                                {QStringLiteral("Data/missing.pak"), 1}},
+                                               seed, key);
+        QStringList warnings;
+        auto layout = readSourcePlayGoLayout(table, map.ficm, map.hashTable, 3, &warnings);
+        QVERIFY(layout.ok() && layout.value().has_value());
+        const SourcePlayGoLayout& l = *layout.value();
+        QCOMPARE(l.languages(), (QStringList{QStringLiteral("en-US"), QStringLiteral("fr-FR")}));
+        QCOMPARE(l.chunks[0].label, QStringLiteral("Base"));
+        QCOMPARE(l.chunks[1].languages, QStringList{QStringLiteral("fr-FR")});
+        QVERIFY(!l.chunks[2].declared());
+        QCOMPARE(l.chunkOf(QStringLiteral("data/FR.PAK")), std::optional<int>(1)); // a-z are upper-cased
+        QCOMPARE(l.chunkOf(QStringLiteral("sce_sys/icon0.png")), std::optional<int>(0)); // found as .dds
+        QVERIFY(!l.chunkOf(QStringLiteral("Data/new.pak")));
+        QVERIFY(l.scenarios.has_value());
+        QCOMPARE(l.scenarios->at(0).label, QStringLiteral("Main"));
+        QCOMPARE(l.scenarios->at(0).chunks, (std::vector<int>{0, 1}));
+        QVERIFY(playGoPathHash(QStringLiteral("eboot.bin"), seed, key) != playGoPathHash(QStringLiteral("eboot.bin"), seed + 1, key));
+        QCOMPARE(playGoPathHash(QStringLiteral("eboot.bin"), kTestPlayGoSeed, kTestPlayGoKey), ps5FlatPathHash(QStringLiteral("eboot.bin")));
+
+        // Swapped files, a chunk that does not exist, unsorted hashes, every file in chunk 0.
+        QVERIFY(errorOf(readSourcePlayGoLayout(table, map.hashTable, map.ficm, 3, nullptr)).message.contains(QStringLiteral("misnamed")));
+        QVERIFY(!readSourcePlayGoLayout(table, map.ficm, map.hashTable, 1, nullptr).ok());
+        QVERIFY(!readSourcePlayGoLayout(table, buildFicm({0, 1}), buildFlt({9, 3}), 3, nullptr).ok());
+        const PlayGoFileMap flat = buildFileMap({{QStringLiteral("eboot.bin"), 0}, {QStringLiteral("a.pak"), 0}});
+        auto none = readSourcePlayGoLayout(table, flat.ficm, flat.hashTable, 3, nullptr);
+        QVERIFY(none.ok() && !none.value().has_value());
+
+        // The plan: the dump's chunks, every file with its chunk, no payload for the undeclared chunk.
+        PlayGoInputs in;
+        in.useSourceTable = true;
+        in.chunkDat = table;
+        in.ficm = map.ficm;
+        in.hashTable = map.hashTable;
+        in.sourceScenario = QByteArray(
+            "{\"chunkSupportedLanguages\":[\"en-US\"],\"scenarioCount\":1,\"scenarioDefaultId\":0,"
+            "\"scenarioDefaultLanguage\":\"en-US\",\"scenarios\":[{\"id\":0,\"type\":\"playmode\",\"en-US\":{\"title\":\"x\"}}]}");
+        in.files = {{QStringLiteral("sce_sys/playgo-scenario.json"), 1}, {QStringLiteral("eboot.bin"), 10},
+                    {QStringLiteral("Data/fr.pak"), 0}, {QStringLiteral("Data/new.pak"), 5}};
+        auto p = planPlayGo(in);
+        QVERIFY(p.ok());
+        QCOMPARE(p->layout, PlayGoLayout::SourceTable);
+        QCOMPARE(int(p->chunkInfo.chunks.size()), 2); // chunk 2 has neither a name nor a language
+        QCOMPARE(p->chunkInfo.attrs.front().second, QStringLiteral("3"));
+        QCOMPARE(p->chunkInfo.chunksAttrs.front().second, QStringLiteral("en-US fr-FR"));
+        QCOMPARE(p->chunkInfo.chunks[1].attrs.back().second, QStringLiteral("fr-FR"));
+        QCOMPARE(p->chunkInfo.scenarios.front().text, QStringLiteral("0-2"));
+        QCOMPARE(p->chunkInfo.scenarios.front().attrs.back().second, QStringLiteral("Main")); // the table's name
+        QCOMPARE(p->fileChunk(QStringLiteral("Data/fr.pak")), std::optional<int>(1));
+        QCOMPARE(p->fileChunk(QStringLiteral("Data/new.pak")), std::optional<int>(0));
+        // The French chunk holds only an empty file: it gets the placeholder; chunk 2 gets none.
+        QCOMPARE(int(p->payloads.size()), 1);
+        QVERIFY(p->payloads[0].filler);
+        QCOMPARE(p->payloads[0].chunk, 1);
+        // The scenario file names the languages of the chunks.
+        QVERIFY(p->scenarioBytes.contains("\"fr-FR\""));
+        // A file the dump lacks, and one it has but the map does not name.
+        QVERIFY(std::any_of(p->warnings.begin(), p->warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("lacks")); }));
+        QVERIFY(std::any_of(p->warnings.begin(), p->warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("Data/new.pak")); }));
+
+        // No file map: the dump's chunk count, generated chunks.
+        in.ficm.reset();
+        p = planPlayGo(in);
+        QVERIFY(p.ok());
+        QCOMPARE(p->layout, PlayGoLayout::Script);
+        QCOMPARE(p->chunkInfo.attrs.front().second, QStringLiteral("3"));
+        QCOMPARE(p->payloads[0].chunk, 1); // the one language goes to chunk 1, chunk 0 keeps the game data
+        // A damaged table: a warning and the setting's count.
+        in.chunkDat = QByteArray("plgx-broken");
+        in.chunkCount = 7;
+        p = planPlayGo(in);
+        QVERIFY(p.ok());
+        QCOMPARE(p->chunkInfo.attrs.front().second, QStringLiteral("7"));
+        QVERIFY(!p->warnings.isEmpty());
+        // A one-chunk dump keeps its one chunk.
+        const QByteArray one = buildPlgx({{en, "Only"}}, {{1, "Main", {0}}}, 0, QStringLiteral("en-US"), en);
+        const PlayGoFileMap oneMap = buildFileMap({{QStringLiteral("eboot.bin"), 0}});
+        in.chunkDat = one;
+        in.ficm = oneMap.ficm;
+        in.hashTable = oneMap.hashTable;
+        p = planPlayGo(in);
+        QVERIFY(p.ok());
+        QCOMPARE(p->layout, PlayGoLayout::SourceTable);
+        QCOMPARE(int(p->chunkInfo.chunks.size()), 1);
+        QVERIFY(p->payloads.empty());
+        QCOMPARE(p->chunkInfo.scenarios.front().text, QStringLiteral("0"));
+    }
+
+    void selfAndSdkInPlan()
+    {
+        Env env;
+        const QString out = dir(QStringLiteral("selfplan/out"));
+        const QString d = dir(QStringLiteral("selfplan/dump"));
+        QVERIFY(makeSimpleDump(d));
+        const QByteArray trailer = sceVersionRecord("libc:", 0x0600003800000001ull);
+        put(d, QStringLiteral("eboot.bin"), makeSelf(kPs5SelfMagic, 7, trailer));
+        const auto plan = [&](const QVariantMap& s = {}) {
+            PlanOptions po;
+            po.roots = {d};
+            po.outputDir = out;
+            return planBuild(po, FpkgSettings::from(env.values(s)), CancellationToken());
+        };
+        auto p = plan();
+        QVERIFY(p.ok());
+        QCOMPARE(p->executableSdk, std::optional<quint64>(0x0600000000000000ull));
+        // The dump's param.json has no SDK version: the one of eboot.bin is written.
+        QCOMPARE(p->param.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0600000000000000"));
+        QCOMPARE(p->param.value(QStringLiteral("requiredSystemSoftwareVersion")).toString(), QStringLiteral("0x0600000000000000"));
+        bool repaired = false;
+        for (const auto& e : p->entries)
+            if (e.dst == u"eboot.bin")
+                repaired = e.kind == EntryKind::RepairedSelf && e.selfPlan && e.selfPlan->padding == 7 && !e.selfPlan->rewriteMagic;
+        QVERIFY(repaired);
+        // Off: the file goes in as it is, with a warning; the SDK version is still read.
+        p = plan({{keys::kRepairSelf, false}});
+        QVERIFY(p.ok());
+        for (const auto& e : p->entries)
+            if (e.dst == u"eboot.bin")
+                QCOMPARE(e.kind, EntryKind::GameFile);
+        QVERIFY(std::any_of(p->warnings.begin(), p->warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("version trailer")); }));
+        QCOMPARE(p->param.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0600000000000000"));
+    }
+
+    // Writes what this build would hand to Sony's publisher for the folder named by FW_FPKG_COMPARE_DUMP
+    // into FW_FPKG_COMPARE_OUT: project.gp5, param.json, playgo-scenario.json and plan.log. It is the
+    // counterpart of the reference toolkit's create-gp5-from-folder.py for a side-by-side comparison
+    // (tests/data/fpkg/compare_with_reference.py). FW_FPKG_COMPARE_MODE=script turns off everything the
+    // reference script does not do itself (junk and leftover rules, empty folders, placeholders, the
+    // param.json extras), so the two outputs can be compared entry by entry.
+    void projectForComparison()
+    {
+        const QString dump = qEnvironmentVariable("FW_FPKG_COMPARE_DUMP");
+        const QString out = qEnvironmentVariable("FW_FPKG_COMPARE_OUT");
+        if (dump.isEmpty() || out.isEmpty())
+            QSKIP("Set FW_FPKG_COMPARE_DUMP and FW_FPKG_COMPARE_OUT to write a project for comparison.");
+        QVariantMap settings;
+        if (qEnvironmentVariable("FW_FPKG_COMPARE_MODE") == u"script")
+            settings = {{keys::kClearVersionFileUri, false}, {keys::kLowerRequiredFirmware, false},
+                        {keys::kRemoveDumpLeftovers, false}, {keys::kRemoveAmprLeftovers, false},
+                        {keys::kKeepEmptyFolders, false},    {keys::kKeepDlcEmulator, true},
+                        {keys::kFillEmptyChunks, false}};
+        Env env;
+        const FpkgSettings s = FpkgSettings::from(env.values(settings));
+        PlanOptions po;
+        po.roots = {dump};
+        po.outputDir = out;
+        po.haveDds2png = true;
+        auto plan = planBuild(po, s, CancellationToken());
+        QVERIFY2(plan.ok(), qPrintable(plan.ok() ? QString() : plan.error().toLogString()));
+        QVERIFY(QDir().mkpath(out));
+        QVERIFY(put(out, QStringLiteral("project.gp5"), writeGp5(projectFromPlan(plan.value(), s, nullptr))));
+        QVERIFY(put(out, QStringLiteral("param.json"), plan->paramBytes));
+        QVERIFY(put(out, QStringLiteral("playgo-scenario.json"), plan->playgo.scenarioBytes));
+        QStringList lines = plan->log;
+        for (const QString& n : std::as_const(plan->paramNotes))
+            lines << QStringLiteral("param: ") + n;
+        for (const QString& w : std::as_const(plan->warnings))
+            lines << QStringLiteral("warning: ") + w;
+        for (const PlannedEntry& e : plan->entries)
+            if (e.kind == EntryKind::GeneratedFile)
+                QVERIFY(put(out, QStringLiteral("generated/") + e.dst, e.data));
+        QVERIFY(put(out, QStringLiteral("plan.log"), lines.join(u'\n').toUtf8()));
     }
 
     // ---- tool output ----------------------------------------------------------------------------------
@@ -1331,7 +1765,8 @@ private slots:
             QVERIFY2(checked.contains(key), qPrintable(key));
         QVERIFY(!env.schema->normalize(keys::kPasscode, QStringLiteral("short")).ok());
         QVERIFY(!env.schema->normalize(keys::kPasscode, QString(31, u'0') + QChar(0xE9)).ok());
-        QVERIFY(!env.schema->normalize(keys::kPlayGoChunkCount, 256).ok());
+        QVERIFY(env.schema->normalize(keys::kPlayGoChunkCount, 800).ok());
+        QVERIFY(!env.schema->normalize(keys::kPlayGoChunkCount, 801).ok());
         QVERIFY(!env.schema->normalize(keys::kCompressionLevel, QStringLiteral("10")).ok());
 
         const auto& legacy = env.schema->legacyKeys();
@@ -1356,7 +1791,7 @@ private slots:
         QCOMPARE(def.outputConflict, OutputConflict::KeepBoth);
         QCOMPARE(def.postVerify, PostVerify::ToolFull);
         QCOMPARE(def.playGoChunkCount, 100);
-        QVERIFY(!def.repairUcp && !def.useSourcePlayGoTable && def.repairSelf && def.fillEmptyChunks);
+        QVERIFY(def.repairUcp && def.useSourcePlayGoTable && def.repairSelf && def.fillEmptyChunks);
         QCOMPARE(def.cpuCoreLimit, 0);
         const FpkgSettings custom = FpkgSettings::from(env.values({{keys::kCompressionLevel, QStringLiteral("-4")},
                                                                    {general::keys::kVerifyAfterBuild, false},

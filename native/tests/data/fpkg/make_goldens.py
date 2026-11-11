@@ -105,17 +105,17 @@ def layout_b():
     info = {
         'attrs': {'chunk_count': '3', 'scenario_count': '2'},
         'chunks_attrs': {'supported_languages': 'en-US fr-FR', 'default_language': 'en-US'},
-        'chunks': [{'id': '0', 'label': 'Chunk #0', 'layer_no': '0', 'languages': 'en-US'},
-                   {'id': '1', 'label': 'Chunk #1', 'layer_no': '0', 'languages': 'fr-FR'},
-                   {'id': '2', 'label': 'Chunk #2', 'layer_no': '0', 'languages': 'en-US fr-FR'}],
+        # Chunk 0 keeps the game data for every language; language i (from 1) goes to chunk min(i, N - 1).
+        'chunks': [{'id': '0', 'label': 'Chunk #0', 'layer_no': '0', 'languages': 'en-US fr-FR'},
+                   {'id': '1', 'label': 'Chunk #1', 'layer_no': '0', 'languages': 'en-US'},
+                   {'id': '2', 'label': 'Chunk #2', 'layer_no': '0', 'languages': 'fr-FR'}],
         'scenarios_attrs': {'default_id': '0'},
         'scenarios': [({'id': '0', 'type': 'playmode', 'initial_chunk_count': '3', 'label': 'Main game'}, '0-2'),
                       ({'id': '1', 'type': 'mp', 'initial_chunk_count': '3', 'label': 'Multiplayer'}, '0-2')],
     }
     files = [file_attrs('sce_sys/playgo-scenario.json', OUT + '\\' + STEM + '.playgo-scenario.json', 0),
-             file_attrs('playgo-languages/01-en-US.bin', ASSETS + '\\playgo-languages\\01-en-US.bin', 0, True),
-             file_attrs('playgo-languages/02-fr-FR.bin', ASSETS + '\\playgo-languages\\02-fr-FR.bin', 1, True),
-             file_attrs('playgo-chunks/002.bin', ASSETS + '\\playgo-chunks\\002.bin', 2, True)]
+             file_attrs('playgo-languages/01-en-US.bin', ASSETS + '\\playgo-languages\\01-en-US.bin', 1, True),
+             file_attrs('playgo-languages/02-fr-FR.bin', ASSETS + '\\playgo-languages\\02-fr-FR.bin', 2, True)]
     files += [file_attrs(r, src_of(r), 0) for r in GAME_FILES]
     return gp5_bytes(info, files)
 
@@ -137,25 +137,29 @@ def layout_c():
     info = {
         'attrs': {'chunk_count': '3', 'scenario_count': '2'},
         'chunks_attrs': {'supported_languages': 'en-US fr-FR de-DE', 'default_language': 'en-US'},
-        'chunks': [{'id': '0', 'label': 'Base'},
-                   {'id': '1', 'languages': 'fr-FR', 'label': 'French voice'},
-                   {'id': '2', 'label': 'Extra'}],
+        # The dump's chunk names and languages; the scenario types of playgo-scenario.json with the
+        # names of the dump's table; every scenario lists every chunk and every chunk is initial.
+        'chunks': [{'id': '0', 'label': 'Base', 'layer_no': '0', 'languages': 'en-US fr-FR de-DE'},
+                   {'id': '1', 'label': 'French voice', 'layer_no': '0', 'languages': 'fr-FR'},
+                   {'id': '2', 'label': 'Extra', 'layer_no': '0', 'languages': 'en-US fr-FR de-DE'}],
         'scenarios_attrs': {'default_id': '0'},
-        'scenarios': [({'id': '0', 'type': 'playmode', 'initial_chunk_count': '3', 'label': 'Main'}, '0 1 2'),
-                      ({'id': '1', 'type': 'playmode', 'initial_chunk_count': '3', 'label': 'Second'}, '2 0 1')],
+        'scenarios': [({'id': '0', 'type': 'playmode', 'initial_chunk_count': '3', 'label': 'Main'}, '0-2'),
+                      ({'id': '1', 'type': 'mp', 'initial_chunk_count': '3', 'label': 'Second'}, '0-2')],
     }
+    # Every file names its chunk; a file the dump's map does not name goes to chunk 0. Chunk 2 only
+    # holds an empty file, so it gets a placeholder.
     chunk_of = {'Data/A.pak': 1, 'Data/_x.bin': 2}
-    files = [file_attrs('sce_sys/playgo-scenario.json', OUT + '\\' + STEM + '.playgo-scenario.json'),
+    files = [file_attrs('sce_sys/playgo-scenario.json', OUT + '\\' + STEM + '.playgo-scenario.json', 0),
              file_attrs('playgo-chunks/002.bin', ASSETS + '\\playgo-chunks\\002.bin', 2, True)]
-    files += [file_attrs(r, src_of(r), chunk_of.get(r)) for r in GAME_FILES]
+    files += [file_attrs(r, src_of(r), chunk_of.get(r, 0)) for r in GAME_FILES]
     return gp5_bytes(info, files)
 
 
 def scenario_c():
-    return {'chunkDefaultLanguage': 'en-US', 'chunkSupportedLanguages': ['en-US', 'fr-FR', 'de-DE'],
-            'scenarioCount': 2, 'scenarioDefaultId': 0, 'scenarioDefaultLanguage': 'en-US',
-            'scenarios': [{'id': 0, 'type': 'playmode', 'en-US': {'title': 'Main', 'description': DESCRIPTION}},
-                          {'id': 1, 'type': 'playmode', 'en-US': {'title': 'Second', 'description': DESCRIPTION}}]}
+    # The dump's own scenario file with the languages of the dump's chunks.
+    s = json.loads(SOURCE_SCENARIO)
+    s['chunkSupportedLanguages'] = ['en-US', 'fr-FR', 'de-DE']
+    return s
 
 
 def normalised_param():

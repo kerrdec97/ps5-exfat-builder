@@ -89,14 +89,14 @@ struct FpkgSettings {
     bool removeAmprLeftovers = true;
     bool removeDumpLeftovers = true;
     bool repairSelf = true;
-    bool repairUcp = false;
+    bool repairUcp = true;
     bool recoverPngFromDds = true;
 
     // PlayGo
     bool playGoFallback = true;
     int playGoChunkCount = 100;
     bool fillEmptyChunks = true;
-    bool useSourcePlayGoTable = false;
+    bool useSourcePlayGoTable = true;
     bool playGoAllLanguages = false;
     QStringList playGoForcedLanguages; // not a setting: backport updates keep the base's languages
 

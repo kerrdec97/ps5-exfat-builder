@@ -40,6 +40,15 @@ struct ParamPatchOptions {
 // lock and the game refuses to start). Returns one note per change.
 QStringList applyParamPatch(json::Value& param, const ParamPatchOptions& options);
 
+// The reference toolkit's SDK version rule for app packages. `executableSdk`
+// is the SDK version read from eboot.bin (major and minor, or nullopt / 0 when
+// unknown; then nothing changes). When sdkVersion is 0 or missing it becomes
+// that version, and requiredSystemSoftwareVersion is raised to sdkVersion
+// when it is lower. The console uses both: a package that claims SDK 0 runs
+// the game in the wrong compatibility mode. One note per change; a value that
+// is not a number is left alone (with a note).
+QStringList applySdkVersionRule(json::Value& param, std::optional<quint64> executableSdk);
+
 // ---- package size class -------------------------------------------------------
 inline constexpr qint64 kSizeClass0Max = 162514599936LL;
 inline constexpr qint64 kSizeClass1Max = 195878191104LL;

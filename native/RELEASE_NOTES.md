@@ -1,4 +1,4 @@
-# exFAT Image Builder 5.0.2 · release notes
+# exFAT Image Builder 5.0.3 · release notes
 
 **Download `exFAT Image Builder.exe`** (GitHub lists it as
 `exFAT.Image.Builder.exe`) and run it: one file, nothing to unzip or install,
@@ -8,8 +8,63 @@ Redistributable. The first start unpacks the program once to
 next to the exe: beside the exe instead). Check it against `SHA256SUMS.txt`.
 
 Antivirus removes the exe? Download the **folder edition**
-(`exFAT-Image-Builder-5.0.2-win64-folder.zip`) instead: the same program,
+(`exFAT-Image-Builder-5.0.3-win64-folder.zip`) instead: the same program,
 already unpacked. Extract it anywhere and run the exe inside.
+
+## What's new in 5.0.3
+
+**FPKG packages built with 5.0.2 could crash on the console** ("Game or App
+Error", SIGSEGV in `eboot.bin`) although the same dump runs from an image and
+packs fine with the PSVIETHOA FPKG Builder. This version builds packages the
+way that tool's current release (3.1, Sony toolkit `sdk-fpkg279-fix15`) does.
+Rebuild packages made with 5.0.0 – 5.0.2. Images (`.exfat`, `.ffpkg`, PFS) are
+not affected.
+
+What was different, and is now the same:
+
+* **The package keeps the game's SDK version.** A dump often has
+  `sdkVersion` 0 in `param.json`. The version is now read from `eboot.bin`
+  and written into the package, and the required system software version is
+  raised to it when it is lower. The log shows both changes.
+* **The game's own PlayGo layout is kept by default.** The chunk count comes
+  from the dump's `playgo-chunk.dat`; with `playgo-ficm.dat` and
+  `playgo-hash-table.dat` each chunk keeps its name and languages and every
+  file goes back into its chunk. Before, every package got 100 generated
+  chunks unless "Reuse the dump's PlayGo chunk table" was switched on. Every
+  scenario still lists every chunk and every chunk is installed before the
+  game starts. Tables that are damaged or misnamed give a warning and
+  generated chunks, as before.
+* **Generated chunks: the game data is no longer tied to one language.**
+  Without usable tables, chunk 0 now carries every language and each language
+  gets its own chunk after it. Before, chunk 0 (all the game files) was marked
+  as the first language only.
+* **Executables are corrected the same way.** A `.sceversion` trailer that
+  sits a few bytes too early is moved to where Sony's publisher looks for it
+  (in a copy, the dump is not changed). This is what the checker's
+  "Format of the SELF file is not valid (…, sceversion format)" was about.
+* **Activity archives.** A `sce_sys/uds/udsNN.ucp` that `npbind.dat` names but
+  the dump lacks, or that belongs to another game or cannot be read, is
+  replaced by an empty archive so the package builds; a stale digest is
+  corrected. "Fix trophy and UDS archive digests" is now on by default, and an
+  archive it cannot read is packed as it is (with a warning) instead of
+  stopping the build.
+* **More dump leftovers are left out**: `entitlements.txt` and
+  `entitlement_key.dat` (written by pfsdump), Unreal Engine settings written
+  while a dump ran (`…/Saved/Config/<platform>/*.ini`), and a
+  `playgo-languages` folder from an extracted package.
+* **Up to 800 PlayGo chunks** (255 before).
+
+**The Sony toolkit matters too.** Toolkits older than `sdk-fpkg279-fix15`
+write SDK version 0 into the package whatever `param.json` says. The app now
+warns after the build when the finished package carries SDK version 0. Use the
+fix15 toolkit (Settings › Tools).
+
+Not tested: a PS5 console and real Sony tools. The project the app writes was
+compared entry by entry with the reference toolkit's own script on a test
+folder (`native/tests/data/fpkg/compare_with_reference.py`).
+
+Three setting descriptions changed and show in English in the other 41
+languages until they are translated again.
 
 ## What's new in 5.0.2
 

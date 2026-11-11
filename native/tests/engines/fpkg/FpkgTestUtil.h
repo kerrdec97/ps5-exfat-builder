@@ -236,32 +236,66 @@ inline QByteArray buildPlgx(const std::vector<PlgxChunk>& chunks, const std::vec
     return d;
 }
 
+// playgo-ficm.dat: header (1, 0, 16, byte size of the entries), then one
+// 16-bit chunk id per file.
 inline QByteArray buildFicm(const std::vector<int>& chunks)
 {
     QByteArray d(16, '\0');
     putLe32(d, 0, 1);
     putLe32(d, 8, 16);
-    putLe32(d, 12, quint32(chunks.size()));
+    putLe32(d, 12, quint32(chunks.size() * 2));
     for (int c : chunks) {
-        d += char(c);
-        d += '\0';
+        QByteArray two(2, '\0');
+        qToLittleEndian(quint16(c), two.data());
+        d += two;
     }
     return d;
 }
 
-inline QByteArray buildFlt(const std::vector<quint64>& hashes)
+inline constexpr quint64 kTestPlayGoSeed = 0x92ca8aab26a24f51ULL;
+inline constexpr quint64 kTestPlayGoKey = 0x09bbb761a41bc44dULL;
+
+// playgo-hash-table.dat: header (1, 0, 56, byte size of the entries, "\x7FFLT"
+// at 24, the entry count at 36, seed and key at 40 and 48), then one 64-bit
+// path hash per file.
+inline QByteArray buildFlt(const std::vector<quint64>& hashes, quint64 seed = kTestPlayGoSeed, quint64 key = kTestPlayGoKey)
 {
     QByteArray d(56, '\0');
     putLe32(d, 0, 1);
     putLe32(d, 8, 56);
+    putLe32(d, 12, quint32(hashes.size() * 8));
     d.replace(24, 4, QByteArray("\x7F" "FLT", 4));
     putLe32(d, 36, quint32(hashes.size()));
+    putLe64(d, 40, seed);
+    putLe64(d, 48, key);
     for (quint64 h : hashes) {
         QByteArray e(8, '\0');
         qToLittleEndian(h, e.data());
         d += e;
     }
     return d;
+}
+
+// The two tables for (package path, chunk) pairs as a package stores them:
+// rows sorted by path hash.
+struct PlayGoFileMap {
+    QByteArray ficm;
+    QByteArray hashTable;
+};
+inline PlayGoFileMap buildFileMap(const std::vector<std::pair<QString, int>>& files, quint64 seed = kTestPlayGoSeed,
+                                  quint64 key = kTestPlayGoKey)
+{
+    std::vector<std::pair<quint64, int>> rows;
+    for (const auto& f : files)
+        rows.emplace_back(fw::fpkg::playGoPathHash(f.first, seed, key), f.second);
+    std::sort(rows.begin(), rows.end());
+    std::vector<int> chunks;
+    std::vector<quint64> hashes;
+    for (const auto& r : rows) {
+        hashes.push_back(r.first);
+        chunks.push_back(r.second);
+    }
+    return {buildFicm(chunks), buildFlt(hashes, seed, key)};
 }
 
 // ---- settings ---------------------------------------------------------------------------

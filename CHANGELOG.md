@@ -2,6 +2,18 @@
 
 All notable changes to exFAT Image Builder. Newest first.
 
+## [5.0.3] - 2026-11-12
+
+FPKG packages built with 5.0.2 could crash on the console. The package builder now
+follows the current PSVIETHOA FPKG Builder (3.1, Sony toolkit `sdk-fpkg279-fix15`):
+the SDK version of `eboot.bin` goes into `param.json` when the dump has 0, the
+dump's own PlayGo chunk layout is kept by default, generated chunks no longer tie
+the game data to one language, a misplaced `.sceversion` trailer of an executable
+is corrected, missing or unusable `sce_sys/uds` archives are replaced by empty
+ones, and more dump leftovers are left out. A warning names packages that carry
+SDK version 0 because of an older Sony toolkit. Rebuild packages made with
+5.0.0 - 5.0.2; images are not affected.
+
 ## [5.0.2] - 2026-11-11
 
 A line-by-line audit of the whole app: path traversal on unpack closed,

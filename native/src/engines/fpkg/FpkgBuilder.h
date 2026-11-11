@@ -85,7 +85,7 @@ struct ExtractRequest {
 };
 
 // ---- the plan (pure: reads the dump, runs no tool, writes nothing) ---------------------
-enum class EntryKind { Sidecar, RecoveredImage, Payload, Filler, GameFile, ParamJson, RepairedSelf, RepairedUcp };
+enum class EntryKind { Sidecar, RecoveredImage, Payload, Filler, GameFile, ParamJson, RepairedSelf, RepairedUcp, GeneratedFile };
 
 struct PlannedEntry {
     QString dst;
@@ -95,6 +95,8 @@ struct PlannedEntry {
     bool noCompression = false;
     qint64 size = 0;
     EntryKind kind = EntryKind::GameFile;
+    std::optional<SelfRepairPlan> selfPlan; // RepairedSelf
+    QByteArray data;                         // GeneratedFile: the bytes written to `src`
 };
 
 struct BuildPlan {
@@ -114,6 +116,7 @@ struct BuildPlan {
     json::Value param;          // normalised
     QByteArray paramBytes;
     QStringList paramNotes;
+    std::optional<quint64> executableSdk; // SDK version of eboot.bin's .sceversion trailer
     SizeClassDecision size;
 
     ScanResult scan;

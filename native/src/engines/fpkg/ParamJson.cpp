@@ -153,6 +153,41 @@ QStringList applyParamPatch(json::Value& p, const ParamPatchOptions& o)
     return notes;
 }
 
+QStringList applySdkVersionRule(json::Value& p, std::optional<quint64> executableSdk)
+{
+    QStringList notes;
+    if (!executableSdk || *executableSdk == 0)
+        return notes;
+    const QString sdkKey = QStringLiteral("sdkVersion");
+    const QString reqKey = QStringLiteral("requiredSystemSoftwareVersion");
+    const auto hex = [](quint64 v) { return QStringLiteral("0x") + QStringLiteral("%1").arg(v, 16, 16, QLatin1Char('0')).toUpper(); };
+    const auto read = [&](const QString& key) -> std::optional<quint64> {
+        if (!p.contains(key))
+            return quint64(0);
+        return parseHexOrNumber(p.value(key));
+    };
+    const auto sdk = read(sdkKey);
+    if (!sdk) {
+        notes << QStringLiteral("sdkVersion %1 is not a version number; left unchanged").arg(describe(p, sdkKey));
+        return notes;
+    }
+    quint64 current = *sdk;
+    if (current == 0) {
+        current = *executableSdk;
+        notes << QStringLiteral("sdkVersion %1 -> %2 (read from eboot.bin)").arg(describe(p, sdkKey), hex(current));
+        p.insert(sdkKey, json::Value(hex(current)));
+    }
+    const auto req = read(reqKey);
+    if (!req) {
+        notes << QStringLiteral("requiredSystemSoftwareVersion %1 is not a version number; left unchanged").arg(describe(p, reqKey));
+    } else if (*req < current) {
+        notes << QStringLiteral("requiredSystemSoftwareVersion %1 -> %2 (not below the SDK version)")
+                     .arg(describe(p, reqKey), hex(current));
+        p.insert(reqKey, json::Value(hex(current)));
+    }
+    return notes;
+}
+
 qint64 estimatePackageBytes(qint64 u, qint64 f)
 {
     const qint64 onePercent = (u + 99) / 100;

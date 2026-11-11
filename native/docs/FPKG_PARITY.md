@@ -878,3 +878,28 @@ languages, DLC mount, update install, and the logs.
 | Language payloads with 1 chunk | Python: none | all in chunk 0 |
 | `RemovePlayGoFiles` default | — | false (settings default; migration to rev 3) |
 | Update output default | — | UI "update only"; request/CLI "both" |
+
+## 9. Parity with the reference at 3.1.0 (toolkit sdk-fpkg279-fix15), app version 5.0.3
+
+Sections 3 and 4 describe the reference at 2.2.7 / 3.0.0 (toolkit profile `sdk279-plaintext-direct-v3`, fix12).
+Its 3.1.0 release moved Sony SDK mode to Drakmor's `sdk-fpkg279-fix15` (profile `sdk279-plaintext-direct-v6`).
+What changed there and is ported here (`libs/sony-sdk/scripts/create-gp5-from-folder.py` and
+`src/PsViethoa.FpkgBuilder.Core/Services/SonySdkPlayGo.cs`, `SonySdkPlayGoSource.cs`, `SonySdkUds.cs` at 3.1.0):
+
+| Rule | Reference | Here |
+|---|---|---|
+| SDK version | `sdkVersion` 0 or missing: the highest version of the `.sceversion` trailer of `eboot.bin` (major and minor) is written; `requiredSystemSoftwareVersion` is raised to `sdkVersion` when lower. App packages only. The fix15 publisher keeps both values; older toolkits write 0. | `applySdkVersionRule` (ParamJson), `executableSdkVersion` (InputRepair); a warning after `img_verify` when the package carries SDK version 0 |
+| SELF repair | PS4 signature replaced; a `.sceversion` trailer that starts up to 15 bytes before the size the SELF header names gets zero padding in front | `selfRepairPlan`, `writeSelfRepairCopy` |
+| PlayGo chunk count | from the header of the source `playgo-chunk.dat` (1-800 chunks, 1-5 scenarios), else the setting (default 100) | `sourcePlayGoChunkCount` |
+| PlayGo source layout | valid `playgo-ficm.dat` + `playgo-hash-table.dat`: chunk labels and languages from the chunk table, each file's chunk by path hash (seed and key from the hash table header, path as UTF-8 with a-z upper-cased, no leading slash; `sce_sys/*.png` also looked up as `.dds`); files the map does not name go to chunk 0; a chunk without label and languages is not declared; the scenario file gets the languages of the chunks. Not used when every file of a multi-chunk table is in chunk 0. | `readSourcePlayGoLayout`, `planToolkit` (PlayGo) |
+| Scenarios | app default: every scenario lists every chunk (`0-(N-1)`), every chunk initial; labels from the chunk table when its scenario count matches `playgo-scenario.json`. The retail order and initial counts (`--sdk-retail-scenarios`) are off by default there and not offered here. | same |
+| Generated layout | language i (counted from 1) in chunk min(i, N-1); chunk 0 lists every language | same (5.0.0 - 5.0.2 counted from 0) |
+| UDS archives | `sce_sys/uds/npbind.dat` names the NPWR id of every `udsNN.ucp`: stale digest recomputed; missing, unreadable, incomplete or foreign archive replaced by an empty one (four definition files) | `readNpbindIds`, `checkUdsUcp`, `emptyUdsUcp` |
+| Exclusions | root `decrypted/`, `playgo-languages/`, `entitlements.txt`, `entitlement_key.dat`, `sce_sys/lem_notification.dat`, `*/saved/config/*/*.ini` | `baseExclusionReason` |
+
+Defaults that differed from the reference before 5.0.3 and no longer do: the source PlayGo layout (was off) and
+the UCP digest repair (was off). Not ported: `--sdk-version` override, `--playgo-languages` selection (the
+Companion's "All 31 PlayGo languages" stays), retail scenarios, AC volumes through the fix15 script.
+
+`native/tests/data/fpkg/compare_with_reference.py` runs the reference script and this app on the same synthetic
+folder and compares the projects entry by entry.

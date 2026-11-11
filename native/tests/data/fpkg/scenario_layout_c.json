@@ -13,16 +13,20 @@
       "id": 0,
       "type": "playmode",
       "en-US": {
-        "title": "Main",
-        "description": "All game data is installed before the game starts."
+        "title": "Main game",
+        "description": "Everything"
       }
     },
     {
       "id": 1,
-      "type": "playmode",
+      "type": "mp",
       "en-US": {
-        "title": "Second",
-        "description": "All game data is installed before the game starts."
+        "title": "Multiplayer",
+        "description": "Online"
+      },
+      "fr-FR": {
+        "title": "Multi",
+        "description": "En ligne"
       }
     }
   ]

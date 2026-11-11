@@ -98,7 +98,8 @@ QString baseExclusionReason(const QStringList& parts, const QString& name, bool 
     if (isDir) {
         if (isJunkDirName(name))
             return QStringLiteral("OS metadata folder");
-        if (depth == 0 && (low == u".gp5-assets" || low == u"sce_suppl" || low == u"sce_sc"))
+        // playgo-languages: the language payloads of an extracted package.
+        if (depth == 0 && (low == u".gp5-assets" || low == u"sce_suppl" || low == u"sce_sc" || low == u"playgo-languages"))
             return QStringLiteral("not part of an app package");
         if (depth == 0 && low == u"decrypted")
             return QStringLiteral("dumper working folder");
@@ -114,6 +115,16 @@ QString baseExclusionReason(const QStringList& parts, const QString& name, bool 
         return QStringLiteral("AMPR emulator index");
     if (depth == 0 && endsWithAny(low, {".exfat", ".ffpkg", ".ffpfs", ".ffpfsc", ".pkg"}))
         return QStringLiteral("image or package file, not game data");
+    // pfsdump writes these next to the dumped content.
+    if (depth == 0 && (low == u"entitlements.txt" || low == u"entitlement_key.dat"))
+        return QStringLiteral("dumper entitlement record");
+    // <folder>/.../Saved/Config/<platform>/*.ini: Unreal Engine writes these
+    // while a dump runs from a writable folder (the reference toolkit's
+    // "*/saved/config/*/*.ini").
+    if (low.endsWith(QLatin1String(".ini")))
+        for (qsizetype i = 1; i + 2 < depth; ++i)
+            if (eqi(parts[i], QStringLiteral("saved")) && eqi(parts[i + 1], QStringLiteral("config")))
+                return QStringLiteral("Unreal Engine settings written while the dump ran");
     if (depth == 1 && eqi(parts[0], QStringLiteral("fakelib"))
         && (low == u"libsceampr.sprx" || low == u"libsceplaygo.sprx"))
         return QStringLiteral("dump emulation library (AMPR/PlayGo)");
