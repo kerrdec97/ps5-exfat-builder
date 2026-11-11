@@ -1,6 +1,7 @@
 #include "core/FileUtil.h"
 
 #include "core/Paths.h"
+#include "core/Tr.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -76,14 +77,14 @@ QString formatTimeLeft(qint64 ms)
         return QString();
     const qint64 s = ms / 1000;
     if (s < 60)
-        return QStringLiteral("Less than a minute left");
+        return FW_TR("Less than a minute left");
     const qint64 m = (s + 30) / 60;
     if (m < 60)
-        return m == 1 ? QStringLiteral("About 1 min left") : QStringLiteral("About %1 min left").arg(m);
+        return m == 1 ? FW_TR("About 1 min left") : FW_TR("About %1 min left").arg(m);
     const qint64 h = m / 60, rm = m % 60;
     if (rm == 0)
-        return QStringLiteral("About %1 h left").arg(h);
-    return QStringLiteral("About %1 h %2 min left").arg(h).arg(rm);
+        return FW_TR("About %1 h left").arg(h);
+    return FW_TR("About %1 h %2 min left").arg(h).arg(rm);
 }
 
 QString formatCount(qint64 n)

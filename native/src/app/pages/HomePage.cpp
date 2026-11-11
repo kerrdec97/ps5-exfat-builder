@@ -464,7 +464,7 @@ void HomePage::refreshQueueTile()
                 stage = rec->state == JobState::Paused ? FW_TR("Paused")
                         : rec->state == JobState::Cancelling ? FW_TR("Cancelling") : i18n::translate(rec->progress.phase);
                 if (rec->state == JobState::Running && rec->progress.etaMs >= 0)
-                    stage += QStringLiteral(" · ") + formatTimeLeft(rec->progress.etaMs).toLower();
+                    stage += QStringLiteral(" · ") + (i18n::currentCode() == u"en" ? formatTimeLeft(rec->progress.etaMs).toLower() : formatTimeLeft(rec->progress.etaMs));
             }
             break;
         case JobState::Queued: ++queued; break;

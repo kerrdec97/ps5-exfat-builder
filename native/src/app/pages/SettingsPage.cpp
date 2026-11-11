@@ -549,7 +549,7 @@ void SettingsPage::rebuild()
             m_cardsLayout->addWidget(none);
         }
         m_secCaption->setText(n == 0   ? FW_TR("Nothing matches “%1”.").arg(query)
-                              : n == 1 ? FW_TR("%1 setting match “%2”.").arg(n).arg(query)
+                              : n == 1 ? FW_TR("%1 setting matches “%2”.").arg(n).arg(query)
                                        : FW_TR("%1 settings match “%2”.").arg(n).arg(query));
         refreshDependencyStates();
         fitLabels();

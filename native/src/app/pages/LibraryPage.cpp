@@ -1792,7 +1792,7 @@ void LibraryPage::stripLanguages()
         lines << QStringLiteral("%1: %2").arg(QFileInfo(it.key()).fileName(), elideMiddle(it.value().join(QStringLiteral(", ")), 160));
     QString list = Sheet::monoLines(lines);
     if (byRoot.size() > kShown)
-        list += plural(byRoot.size() - kShown, FW_TR("<br>… and %1 game more"), FW_TR("<br>… and %1 games more"));
+        list += plural(byRoot.size() - kShown, FW_TR("<br>… and %1 more game"), FW_TR("<br>… and %1 more games"));
     const QString text = FW_TR("These files and folders are removed from the game:<br>%1<br><br>A backup ZIP is written first to %2. Restore from backup puts everything back.")
                              .arg(list, Sheet::monoSpan(backup.isEmpty() ? FW_TR("the default backup folder") : nativePath(backup)));
     if (!Sheet::confirm(window(), FW_TR("Remove the selected languages?"), text, FW_TR("Keep everything"), FW_TR("Remove languages"), true, Sheet::Icon::Warning))

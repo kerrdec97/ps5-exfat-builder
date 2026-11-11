@@ -1,4 +1,5 @@
 #include "core/Settings.h"
+#include "core/Tr.h"
 
 #include "core/FileUtil.h"
 #include "core/Log.h"
@@ -112,11 +113,11 @@ Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& v
             const QString s = value.toString().trimmed().toLower();
             if (s == u"true" || s == u"1" || s == u"yes" || s == u"on") out = true;
             else if (s == u"false" || s == u"0" || s == u"no" || s == u"off") out = false;
-            else return bad(QStringLiteral("expected on or off."));
+            else return bad(FW_TR_NOOP("expected on or off."));
         } else if (value.canConvert<int>()) {
             out = value.toInt() != 0;
         } else {
-            return bad(QStringLiteral("expected on or off."));
+            return bad(FW_TR_NOOP("expected on or off."));
         }
         break;
     }
@@ -125,7 +126,7 @@ Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& v
         double d = value.toDouble(&ok);
         // "inf" and 1e300 are numbers too, but none a qint64 can hold.
         if (!ok || !std::isfinite(d) || std::floor(d) != d || std::fabs(d) > 9.0e18)
-            return bad(QStringLiteral("expected a whole number."));
+            return bad(FW_TR_NOOP("expected a whole number."));
         if (def->maximum > def->minimum && (d < def->minimum || d > def->maximum))
             return bad(QStringLiteral("must be between %1 and %2.")
                            .arg(QString::number(qint64(def->minimum)), QString::number(qint64(def->maximum))));
@@ -136,7 +137,7 @@ Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& v
         bool ok = false;
         double d = value.toDouble(&ok);
         if (!ok || !std::isfinite(d))
-            return bad(QStringLiteral("expected a number."));
+            return bad(FW_TR_NOOP("expected a number."));
         if (def->maximum > def->minimum && (d < def->minimum || d > def->maximum))
             return bad(QStringLiteral("must be between %1 and %2.")
                            .arg(QString::number(def->minimum, 'g', 15), QString::number(def->maximum, 'g', 15)));
@@ -156,7 +157,7 @@ Result<QVariant> SettingsSchema::normalize(const QString& key, const QVariant& v
     case SettingType::DirPath:
     case SettingType::FilePath:
         if (!value.canConvert<QString>())
-            return bad(QStringLiteral("expected text."));
+            return bad(FW_TR_NOOP("expected text."));
         out = value.toString();
         break;
     case SettingType::StringList:

@@ -281,7 +281,7 @@ void QueuePage::updateEta()
         m_eta->setText(running == 0 && queued > 0 ? FW_TR("Waiting · press Start queue")
                                                   : FW_TR("Queue paused · running jobs continue"));
     else if (eta >= 0)
-        m_eta->setText((running > 1 ? FW_TR("Running jobs: %1") : FW_TR("Running job: %1")).arg(formatTimeLeft(eta).toLower()));
+        m_eta->setText((running > 1 ? FW_TR("Running jobs: %1") : FW_TR("Running job: %1")).arg(i18n::currentCode() == u"en" ? formatTimeLeft(eta).toLower() : formatTimeLeft(eta)));
     else if (queued > 0 && running == 0)
         m_eta->setText(FW_TR("Waiting to start"));
     else
