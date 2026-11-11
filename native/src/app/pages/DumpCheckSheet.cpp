@@ -3,6 +3,7 @@
 #include "app/pages/Page.h"
 #include "app/ui/Icons.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -34,9 +35,9 @@ struct Group {
 const std::vector<Group>& groups()
 {
     static const std::vector<Group> g = {
-        {QStringLiteral("error"), QStringLiteral("errors"), QStringLiteral("Problems"), Tone::Err},
-        {QStringLiteral("warning"), QStringLiteral("warnings"), QStringLiteral("Warnings"), Tone::Warn},
-        {QStringLiteral("info"), QStringLiteral("infos"), QStringLiteral("Notes"), Tone::Info},
+        {QStringLiteral("error"), QStringLiteral("errors"), FW_TR_NOOP("Problems"), Tone::Err},
+        {QStringLiteral("warning"), QStringLiteral("warnings"), FW_TR_NOOP("Warnings"), Tone::Warn},
+        {QStringLiteral("info"), QStringLiteral("infos"), FW_TR_NOOP("Notes"), Tone::Info},
     };
     return g;
 }
@@ -44,10 +45,18 @@ const std::vector<Group>& groups()
 QJsonObject countsOf(const QJsonObject& d) { return d.value(QStringLiteral("counts")).toObject(); }
 QJsonObject factsOf(const QJsonObject& d) { return d.value(QStringLiteral("facts")).toObject(); }
 
-QString plural(qint64 n, const QString& one, const QString& many) { return QStringLiteral("%1 %2").arg(formatCount(n), n == 1 ? one : many); }
+// The sheet shows its texts translated; the copied report is English, as
+// problem reports are. `shown` says which one a text is for.
+QString shownOr(const QString& english, bool shown) { return shown ? i18n::translate(english) : english; }
+
+// "3 files": `one` and `many` are whole phrases with %1 for the number.
+QString plural(qint64 n, const QString& one, const QString& many, bool shown)
+{
+    return shownOr(n == 1 ? one : many, shown).arg(formatCount(n));
+}
 
 // "PPSA01325 · v01.002.000 · PS5"
-QString gameLine(const QJsonObject& facts)
+QString gameLine(const QJsonObject& facts, bool shown)
 {
     QStringList parts;
     const QString id = facts.value(QStringLiteral("titleId")).toString();
@@ -59,45 +68,45 @@ QString gameLine(const QJsonObject& facts)
         parts << QStringLiteral("v%1").arg(version);
     if (!platform.isEmpty() && platform != QLatin1String("Unknown"))
         parts << platform;
-    return parts.isEmpty() ? QStringLiteral("Not known (no readable param.json)") : parts.join(QStringLiteral(" · "));
+    return parts.isEmpty() ? shownOr(FW_TR_NOOP("Not known (no readable param.json)"), shown) : parts.join(QStringLiteral(" · "));
 }
 
 // "37 fake-signed · 1 plain ELF"
-QString executablesLine(const QJsonObject& counts)
+QString executablesLine(const QJsonObject& counts, bool shown)
 {
     static const std::vector<std::pair<QString, QString>> classes = {
-        {QStringLiteral("fake-signed"), QStringLiteral("fake-signed")}, {QStringLiteral("plain-elf"), QStringLiteral("plain ELF")},
-        {QStringLiteral("encrypted"), QStringLiteral("encrypted")},     {QStringLiteral("compressed"), QStringLiteral("compressed")},
-        {QStringLiteral("truncated"), QStringLiteral("cut short")},     {QStringLiteral("malformed"), QStringLiteral("not valid")},
-        {QStringLiteral("empty"), QStringLiteral("empty")},             {QStringLiteral("unknown"), QStringLiteral("unknown format")},
-        {QStringLiteral("unreadable"), QStringLiteral("unreadable")},
+        {QStringLiteral("fake-signed"), FW_TR_NOOP("%1 fake-signed")}, {QStringLiteral("plain-elf"), FW_TR_NOOP("%1 plain ELF")},
+        {QStringLiteral("encrypted"), FW_TR_NOOP("%1 encrypted")},     {QStringLiteral("compressed"), FW_TR_NOOP("%1 compressed")},
+        {QStringLiteral("truncated"), FW_TR_NOOP("%1 cut short")},     {QStringLiteral("malformed"), FW_TR_NOOP("%1 not valid")},
+        {QStringLiteral("empty"), FW_TR_NOOP("%1 empty")},             {QStringLiteral("unknown"), FW_TR_NOOP("%1 unknown format")},
+        {QStringLiteral("unreadable"), FW_TR_NOOP("%1 unreadable")},
     };
     const QJsonObject exec = counts.value(QStringLiteral("executables")).toObject();
     QStringList parts;
-    for (const auto& [key, name] : classes)
+    for (const auto& [key, text] : classes)
         if (const qint64 n = exec.value(key).toInteger(); n > 0)
-            parts << QStringLiteral("%1 %2").arg(formatCount(n), name);
-    return parts.isEmpty() ? QStringLiteral("None found") : parts.join(QStringLiteral(" · "));
+            parts << shownOr(text, shown).arg(formatCount(n));
+    return parts.isEmpty() ? shownOr(FW_TR_NOOP("None found"), shown) : parts.join(QStringLiteral(" · "));
 }
 
 // "eboot.bin SDK 4.50 · param.json SDK 9.00 · needs firmware 9.00"
-QString sdkLine(const QJsonObject& facts)
+QString sdkLine(const QJsonObject& facts, bool shown)
 {
     QStringList parts;
     if (const QString v = facts.value(QStringLiteral("ebootSdk")).toString(); !v.isEmpty())
-        parts << QStringLiteral("eboot.bin SDK %1").arg(v);
+        parts << shownOr(FW_TR_NOOP("eboot.bin SDK %1"), shown).arg(v);
     if (const QString v = facts.value(QStringLiteral("paramSdk")).toString(); !v.isEmpty())
-        parts << QStringLiteral("param.json SDK %1").arg(v);
+        parts << shownOr(FW_TR_NOOP("param.json SDK %1"), shown).arg(v);
     if (const QString v = facts.value(QStringLiteral("requiredFirmware")).toString(); !v.isEmpty())
-        parts << QStringLiteral("needs firmware %1").arg(v);
+        parts << shownOr(FW_TR_NOOP("needs firmware %1"), shown).arg(v);
     return parts.join(QStringLiteral(" · "));
 }
 
-QString totalsLine(const QJsonObject& counts)
+QString totalsLine(const QJsonObject& counts, bool shown)
 {
     return QStringLiteral("%1 · %2 · %3")
-        .arg(plural(counts.value(QStringLiteral("files")).toInteger(), QStringLiteral("file"), QStringLiteral("files")),
-             plural(counts.value(QStringLiteral("folders")).toInteger(), QStringLiteral("folder"), QStringLiteral("folders")),
+        .arg(plural(counts.value(QStringLiteral("files")).toInteger(), FW_TR_NOOP("%1 file"), FW_TR_NOOP("%1 files"), shown),
+             plural(counts.value(QStringLiteral("folders")).toInteger(), FW_TR_NOOP("%1 folder"), FW_TR_NOOP("%1 folders"), shown),
              formatBytes(counts.value(QStringLiteral("bytes")).toInteger()));
 }
 
@@ -116,7 +125,7 @@ QString dumpFolder(const QJsonObject& d, const QString& folder)
     return folder.isEmpty() ? d.value(QStringLiteral("folder")).toString() : folder;
 }
 
-const QString kReadOnlyLine = QStringLiteral("The check reads the dump and changes nothing.");
+const QString kReadOnlyLine = FW_TR_NOOP("The check reads the dump and changes nothing.");
 
 constexpr int kGroupRow = size::badge + 12; // a heading with its badge
 constexpr int kFindingRow = size::rowCompact;
@@ -142,17 +151,17 @@ QString DumpCheckSheet::reportText(const QJsonObject& d, const QString& summary,
     const QJsonObject counts = countsOf(d), facts = factsOf(d);
     QStringList lines;
     lines << QStringLiteral("DUMP CHECK");
-    lines << QStringLiteral("Game:    %1").arg(title.isEmpty() ? gameLine(facts) : QStringLiteral("%1 (%2)").arg(title, gameLine(facts)));
+    lines << QStringLiteral("Game:    %1").arg(title.isEmpty() ? gameLine(facts, false) : QStringLiteral("%1 (%2)").arg(title, gameLine(facts, false)));
     lines << QStringLiteral("Folder:  %1").arg(nativePath(dumpFolder(d, folder)));
     if (checkedAt.isValid())
         lines << QStringLiteral("Checked: %1").arg(humanTime(checkedAt));
     lines << QStringLiteral("Result:  %1").arg(summary);
-    lines << QStringLiteral("         %1").arg(totalsLine(counts));
+    lines << QStringLiteral("         %1").arg(totalsLine(counts, false));
     lines << QString() << QStringLiteral("FACTS");
-    lines << QStringLiteral("  Executables: %1").arg(executablesLine(counts));
+    lines << QStringLiteral("  Executables: %1").arg(executablesLine(counts, false));
     if (const QString state = facts.value(QStringLiteral("backportSummary")).toString(); !state.isEmpty())
         lines << QStringLiteral("  Backport state: %1").arg(state);
-    if (const QString sdk = sdkLine(facts); !sdk.isEmpty())
+    if (const QString sdk = sdkLine(facts, false); !sdk.isEmpty())
         lines << QStringLiteral("  SDK: %1").arg(sdk);
     for (const Group& g : groups()) {
         const QList<QJsonObject> list = findingsOf(d, g.severity);
@@ -179,7 +188,7 @@ QString DumpCheckSheet::reportText(const QJsonObject& d, const QString& summary,
 
 DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QString& summary, const QString& title, const QString& folder,
                                const QDateTime& checkedAt)
-    : Sheet(host, title.isEmpty() ? QStringLiteral("Dump check") : QStringLiteral("Dump check: %1").arg(title), Icon::None, 860),
+    : Sheet(host, title.isEmpty() ? FW_TR("Dump check") : FW_TR("Dump check: %1").arg(title), Icon::None, 860),
       m_folder(dumpFolder(d, folder))
 {
     m_report = reportText(d, summary, title, folder, checkedAt);
@@ -198,12 +207,12 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
     auto* badges = new QWidget(this);
     auto* flow = new FlowLayout(badges, space::sm, space::sm);
     if (errors == 0 && warnings == 0)
-        flow->addWidget(new Badge(QStringLiteral("No problems found"), Tone::Ok, badges));
+        flow->addWidget(new Badge(FW_TR("No problems found"), Tone::Ok, badges));
     if (errors > 0)
-        flow->addWidget(new Badge(plural(errors, QStringLiteral("problem"), QStringLiteral("problems")), Tone::Err, badges));
+        flow->addWidget(new Badge(plural(errors, FW_TR_NOOP("%1 problem"), FW_TR_NOOP("%1 problems"), true), Tone::Err, badges));
     if (warnings > 0)
-        flow->addWidget(new Badge(plural(warnings, QStringLiteral("warning"), QStringLiteral("warnings")), Tone::Warn, badges));
-    auto* totals = caption(checkedAt.isValid() ? QStringLiteral("%1 · checked %2").arg(totalsLine(counts), humanTime(checkedAt)) : totalsLine(counts), badges);
+        flow->addWidget(new Badge(plural(warnings, FW_TR_NOOP("%1 warning"), FW_TR_NOOP("%1 warnings"), true), Tone::Warn, badges));
+    auto* totals = caption(checkedAt.isValid() ? FW_TR("%1 · checked %2").arg(totalsLine(counts, true), humanTime(checkedAt)) : totalsLine(counts, true), badges);
     totals->setWordWrap(false);
     totals->setFixedHeight(size::badge);
     flow->addWidget(totals);
@@ -227,16 +236,16 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
         v->setWordWrap(true);
         grid->addWidget(v, row, 1);
     };
-    fact(QStringLiteral("Game"), gameLine(facts));
-    fact(QStringLiteral("Executables"), executablesLine(counts));
-    fact(QStringLiteral("Backport state"), facts.value(QStringLiteral("backportSummary")).toString());
-    fact(QStringLiteral("SDK"), sdkLine(facts));
+    fact(FW_TR("Game"), gameLine(facts, true));
+    fact(FW_TR("Executables"), executablesLine(counts, true));
+    fact(FW_TR("Backport state"), facts.value(QStringLiteral("backportSummary")).toString());
+    fact(QStringLiteral("SDK"), sdkLine(facts, true));
     factsCard->body()->addLayout(grid);
     body()->addWidget(factsCard);
 
     // The findings, grouped by severity.
     m_list = new QTreeWidget(this);
-    m_list->setHeaderLabels({QStringLiteral("Where"), QStringLiteral("What")});
+    m_list->setHeaderLabels({FW_TR("Where"), FW_TR("What")});
     m_list->header()->setFixedHeight(size::tableHeader);
     m_list->header()->setStretchLastSection(true);
     m_list->header()->setSectionResizeMode(0, QHeaderView::Interactive);
@@ -246,7 +255,7 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
     m_list->setRootIsDecorated(true);
     m_list->setIndentation(16);
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_list->setAccessibleName(QStringLiteral("Findings"));
+    m_list->setAccessibleName(FW_TR("Findings"));
     m_list->setTextElideMode(Qt::ElideMiddle);
     int listHeight = 0;
     for (const Group& g : groups()) {
@@ -254,7 +263,7 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
         const qint64 n = std::max<qint64>(counts.value(g.countKey).toInteger(), list.size());
         if (n <= 0)
             continue;
-        const QString heading = QStringLiteral("%1 · %2").arg(g.title, formatCount(n));
+        const QString heading = QStringLiteral("%1 · %2").arg(i18n::translate(g.title), formatCount(n));
         auto* top = new QTreeWidgetItem(m_list);
         top->setFirstColumnSpanned(true);
         top->setFlags(Qt::ItemIsEnabled); // a heading, not a finding
@@ -271,7 +280,7 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
             const QString where = f.value(QStringLiteral("path")).toString();
             const QString message = f.value(QStringLiteral("message")).toString();
             auto* it = new QTreeWidgetItem(top);
-            it->setText(0, where.isEmpty() ? QStringLiteral("The dump") : where);
+            it->setText(0, where.isEmpty() ? FW_TR("The dump") : where);
             if (where.isEmpty())
                 it->setForeground(0, color::fg_3);
             else
@@ -299,7 +308,7 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
             }
             if (const qint64 more = f.value(QStringLiteral("count")).toInteger() - paths.size(); more > 0 && !paths.isEmpty()) {
                 auto* rest = new QTreeWidgetItem(it);
-                rest->setText(0, QStringLiteral("… and %1 more").arg(formatCount(more)));
+                rest->setText(0, FW_TR("… and %1 more").arg(formatCount(more)));
                 rest->setForeground(0, color::fg_3);
                 rest->setFirstColumnSpanned(true);
                 rest->setFlags(Qt::ItemIsEnabled);
@@ -307,7 +316,7 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
         }
         if (n > list.size()) {
             auto* more = new QTreeWidgetItem(top);
-            more->setText(0, QStringLiteral("… and %1 more that are counted but not listed").arg(formatCount(n - list.size())));
+            more->setText(0, FW_TR("… and %1 more that are counted but not listed").arg(formatCount(n - list.size())));
             more->setForeground(0, color::fg_3);
             more->setFirstColumnSpanned(true);
             more->setFlags(Qt::ItemIsEnabled);
@@ -331,7 +340,7 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
     m_detail->setMinimumHeight(2 * font::lineCaption);
     m_detail->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     dh->addWidget(m_detail, 1);
-    m_show = button(QStringLiteral("Show in folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), detailRow);
+    m_show = button(FW_TR("Show in folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), detailRow);
     setButtonSmall(m_show, true);
     dh->addWidget(m_show, 0, Qt::AlignTop);
     body()->addWidget(detailRow);
@@ -343,21 +352,21 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
     });
     updateSelection();
     detailRow->setVisible(m_list->topLevelItemCount() > 0);
-    body()->addWidget(caption(kReadOnlyLine, this));
+    body()->addWidget(caption(i18n::translate(kReadOnlyLine), this));
 
-    auto* copy = addButton(QStringLiteral("Copy report"), Role::Safe);
+    auto* copy = addButton(FW_TR("Copy report"), Role::Safe);
     QObject::disconnect(copy, &QPushButton::clicked, this, nullptr); // copying keeps the sheet open
     connect(copy, &QPushButton::clicked, this, [this, copy] {
         if (auto* cb = QApplication::clipboard())
             cb->setText(m_report);
-        copy->setText(QStringLiteral("Copied"));
-        QTimer::singleShot(1500, copy, [copy] { copy->setText(QStringLiteral("Copy report")); });
+        copy->setText(FW_TR("Copied"));
+        QTimer::singleShot(1500, copy, [copy] { copy->setText(FW_TR("Copy report")); });
     });
     // Repairing is the Backport tab's work: restore the originals, or backport again.
-    auto* backport = addButton(QStringLiteral("Backport…"), Role::Safe);
-    backport->setToolTip(QStringLiteral("Open this game in the Backport tab (restore originals, or backport again)"));
+    auto* backport = addButton(FW_TR("Backport…"), Role::Safe);
+    backport->setToolTip(FW_TR("Open this game in the Backport tab (restore originals, or backport again)"));
     connect(backport, &QPushButton::clicked, this, &DumpCheckSheet::backportRequested);
-    addButton(QStringLiteral("Close"), Role::Primary);
+    addButton(FW_TR("Close"), Role::Primary);
 }
 
 QString DumpCheckSheet::selectedPath() const
@@ -379,11 +388,11 @@ void DumpCheckSheet::updateSelection()
         m_detail->setText(where.isEmpty() ? message : QStringLiteral("%1\n%2").arg(nativePath(where), message));
         setTextColor(m_detail, color::fg_1);
     } else {
-        m_detail->setText(QStringLiteral("Select a finding to read it in full and to show its file."));
+        m_detail->setText(FW_TR("Select a finding to read it in full and to show its file."));
         setTextColor(m_detail, color::fg_3);
     }
     m_show->setEnabled(finding);
-    m_show->setToolTip(finding ? plainTip(nativePath(selectedPath())) : QStringLiteral("Select a finding first"));
+    m_show->setToolTip(finding ? plainTip(nativePath(selectedPath())) : FW_TR("Select a finding first"));
     if (isVisible())
         refit(); // a long message takes another line
 }
