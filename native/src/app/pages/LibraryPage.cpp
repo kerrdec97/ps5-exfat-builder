@@ -2,6 +2,7 @@
 
 #include "app/AppContext.h"
 #include "app/pages/BuildImagePage.h"
+#include "app/pages/DumpCheckSheet.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
 #include "app/ui/Icons.h"
@@ -354,6 +355,13 @@ QWidget* LibraryPage::buildGamesTab()
                 emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folders"), selected}}});
         });
         h->addWidget(bp);
+        m_gamesCheck = button(QStringLiteral("Check dump…"), ButtonVariant::Secondary, QStringLiteral("file_search"), m_gamesSelection);
+        m_gamesCheck->setToolTip(QStringLiteral("Look for missing or damaged files and leftover changes. Reads the dump, changes nothing."));
+        connect(m_gamesCheck, &QPushButton::clicked, this, [this] {
+            if (!m_demo)
+                checkDumps(m_gamesGrid->selectedKeys());
+        });
+        h->addWidget(m_gamesCheck);
         auto* remove = button(QStringLiteral("Remove from library"), ButtonVariant::Subtle, QStringLiteral("close"), m_gamesSelection);
         remove->setToolTip(QStringLiteral("Only the library entry goes; the folders stay on disk."));
         connect(remove, &QPushButton::clicked, this, [this] {
@@ -569,6 +577,8 @@ void LibraryPage::updateGameSelection()
     const int n = int(m_gamesGrid->selectedKeys().size());
     m_gamesSelection->setVisible(n > 0);
     m_gamesSelectionText->setText(QStringLiteral("%1 selected").arg(n));
+    m_gamesCheck->setText(n > 1 ? QStringLiteral("Check dumps…") : QStringLiteral("Check dump…"));
+    m_gamesCheck->setEnabled(jobs::isAvailable(m_ctx, tools::jobkinds::kDumpCheck));
 }
 
 void LibraryPage::addFolders()
@@ -634,6 +644,10 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
         menu.addAction(QStringLiteral("Backport %1 games…").arg(selected.size()), this, [this, selected] {
             emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folders"), selected}}});
         });
+        menu.addAction(QStringLiteral("Check %1 dumps…").arg(selected.size()), this, [this, selected] {
+            if (!m_demo)
+                checkDumps(selected);
+        })->setEnabled(jobs::isAvailable(m_ctx, tools::jobkinds::kDumpCheck));
         menu.addSeparator();
         menu.addAction(QStringLiteral("Remove %1 from the library").arg(selected.size()), this, [this, selected] {
             if (!m_demo)
@@ -648,6 +662,12 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
         emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatZstdFolder}, {QStringLiteral("source"), folder}}});
     });
     menu.addAction(QStringLiteral("Backport…"), this, [this, folder] { emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), folder}}}); });
+    menu.addAction(QStringLiteral("Check dump…"), this, [this, folder] {
+        if (!m_demo)
+            checkDumps({folder});
+    })->setEnabled(jobs::isAvailable(m_ctx, tools::jobkinds::kDumpCheck));
+    if (hasDumpCheck(folder))
+        menu.addAction(QStringLiteral("Show last check"), this, [this, folder] { showDumpCheck(folder); });
     if (const LibraryGame* g = game(folder); g && !g->info.titleId.isEmpty()) {
         QMenu* images = nullptr;
         for (const ImageSummary& s : m_images)
@@ -677,6 +697,56 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
             m_library.removeGame(folder);
     });
     menu.exec(pos);
+}
+
+QString LibraryPage::gameTitle(const QString& folder) const
+{
+    const LibraryGame* g = game(folder);
+    return g && !g->info.title.isEmpty() ? g->info.title : QFileInfo(folder).fileName();
+}
+
+// A toast with a link. The page's own toast signal carries none, so this one
+// goes to the window's toasts directly (as plain text when the page has no such window).
+void LibraryPage::toastWithAction(Tone tone, const QString& title, const QString& body, const QString& actionText, std::function<void()> action)
+{
+    if (auto* toasts = window()->findChild<ToastHost*>()) {
+        toasts->show(tone, title, body, {ToastHost::Action{actionText, std::move(action)}});
+        return;
+    }
+    emit toastRequested(tone, title, body);
+}
+
+int LibraryPage::checkDumps(const QStringList& folders)
+{
+    QStringList started, failed;
+    for (const QString& f : folders) {
+        if (auto r = jobs::submitDumpCheck(m_ctx, f, gameTitle(f)); r.ok())
+            started << r.value();
+        else
+            failed << QStringLiteral("%1: %2").arg(QFileInfo(f).fileName(), r.error().message);
+    }
+    for (auto it = started.crbegin(); it != started.crend(); ++it)
+        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
+    // One check says what it found soon enough; for several, say that they are on their way.
+    if (started.size() > 1)
+        emit toastRequested(Tone::Info, QStringLiteral("Checking %1").arg(plural(started.size(), QStringLiteral("dump"), QStringLiteral("dumps"))),
+                            QStringLiteral("Each result appears when its check is done. Nothing in the dumps is changed."));
+    if (!failed.isEmpty())
+        emit toastRequested(Tone::Err, started.isEmpty() ? QStringLiteral("The check was not started") : QStringLiteral("%1 not checked").arg(plural(failed.size(), QStringLiteral("dump"), QStringLiteral("dumps"))),
+                            failed.mid(0, 4).join(u'\n') + (failed.size() > 4 ? QStringLiteral("\n… and %1 more").arg(failed.size() - 4) : QString()));
+    return int(started.size());
+}
+
+DumpCheckSheet* LibraryPage::showDumpCheck(const QString& folder)
+{
+    const auto it = m_dumpChecks.constFind(folder);
+    if (it == m_dumpChecks.constEnd())
+        return nullptr;
+    auto* s = new DumpCheckSheet(window(), it->details, it->summary, it->title, folder, it->checkedAt);
+    // Repairing is the Backport tab's: restore the originals there, or backport again.
+    connect(s, &DumpCheckSheet::backportRequested, this, [this, folder] { emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), folder}}}); });
+    s->open();
+    return s;
 }
 
 void LibraryPage::buildSelected()
@@ -1501,6 +1571,27 @@ void LibraryPage::onJobFinished(const QString& id)
     auto rec = m_ctx.queue().record(id);
     if (!rec)
         return;
+    // A dump check, whoever started it (this page, a retry from the queue):
+    // its result is kept for "Show last check" and said in a toast that opens
+    // the details. A failed check has the window's own "failed" toast.
+    if (rec->kind == tools::jobkinds::kDumpCheck && rec->state == JobState::Succeeded && rec->outcome && !m_demo) {
+        const QString folder = rec->parameters.value(QStringLiteral("folder")).toString();
+        const QString given = rec->parameters.value(QStringLiteral("title")).toString();
+        const QString name = given.isEmpty() ? gameTitle(folder) : given;
+        m_dumpChecks.insert(folder, DumpCheck{rec->outcome->details, rec->outcome->summary, name, QDateTime::currentDateTime()});
+        const QJsonObject counts = rec->outcome->details.value(QStringLiteral("counts")).toObject();
+        const qint64 errors = counts.value(QStringLiteral("errors")).toInteger();
+        const qint64 warnings = counts.value(QStringLiteral("warnings")).toInteger();
+        QStringList found;
+        if (errors > 0)
+            found << plural(errors, QStringLiteral("problem"), QStringLiteral("problems"));
+        if (warnings > 0)
+            found << plural(warnings, QStringLiteral("warning"), QStringLiteral("warnings"));
+        toastWithAction(errors > 0 ? Tone::Err : warnings > 0 ? Tone::Warn : Tone::Ok,
+                        QStringLiteral("Checked %1: %2").arg(name, found.isEmpty() ? QStringLiteral("no problems found") : found.join(QStringLiteral(", "))),
+                        rec->outcome->details.value(QStringLiteral("facts")).toObject().value(QStringLiteral("backportSummary")).toString(),
+                        QStringLiteral("Show details"), [this, folder] { showDumpCheck(folder); });
+    }
     if (id == m_scanJobId && !rec->outcome) {
         m_scanJobId.clear(); // a failed or cancelled scan is over too
         if (rec->state == JobState::Failed)
@@ -1798,6 +1889,11 @@ void LibraryPage::navigateWith(const QVariantMap& args)
         setTab(LanguagesTab);
         m_langFolder->setPath(args.value(QStringLiteral("languagesFolder")).toString());
     }
+    // The details of a game's last dump check (a link from another page).
+    if (args.contains(QStringLiteral("dumpCheck"))) {
+        setTab(GamesTab);
+        showDumpCheck(args.value(QStringLiteral("dumpCheck")).toString());
+    }
 }
 
 QString LibraryPage::unsavedChanges() const
@@ -1815,7 +1911,7 @@ QString LibraryPage::statusContext() const
 
 QStringList LibraryPage::demoStates() const
 {
-    return {QStringLiteral("games"), QStringLiteral("games-list"), QStringLiteral("images"), QStringLiteral("images-rename"),
+    return {QStringLiteral("games"), QStringLiteral("games-list"), QStringLiteral("games-check"), QStringLiteral("images"), QStringLiteral("images-rename"),
             QStringLiteral("languages"), QStringLiteral("dlc")};
 }
 
@@ -1842,6 +1938,13 @@ void LibraryPage::applyDemoState(const QString& name)
         const auto& items = m_gamesGrid->items();
         if (items.size() > 3)
             m_gamesGrid->setSelectedKeys({items[1].key, items[3].key});
+    } else if (name == QLatin1String("games-check")) {
+        // The details of a dump check that found something.
+        setTab(GamesTab);
+        auto* s = new DumpCheckSheet(window(), DumpCheckSheet::demoDetails(), QStringLiteral("2 problems and 3 warnings in 18,442 files"),
+                                     QStringLiteral("Astro Bot"), QString(), QDateTime(QDate(2026, 11, 4), QTime(14, 36)));
+        s->open();
+        m_demoSheet = s;
     } else if (name == QLatin1String("images")) {
         setTab(ImagesTab);
     } else if (name == QLatin1String("images-rename")) {

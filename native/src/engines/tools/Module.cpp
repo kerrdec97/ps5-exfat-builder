@@ -1,6 +1,7 @@
 #include "engines/tools/Module.h"
 
 #include "core/FileUtil.h"
+#include "engines/tools/DumpCheck.h"
 #include "engines/tools/LanguageStripper.h"
 #include "engines/tools/ReportBundle.h"
 
@@ -176,6 +177,62 @@ private:
     QJsonObject m_p;
 };
 
+// Reads a dump and reports what it finds; it changes nothing, so it succeeds
+// whenever the walk completed, whatever the dump is like.
+class DumpCheckJob : public Job {
+public:
+    explicit DumpCheckJob(QJsonObject p) : m_p(std::move(p)) {}
+    QString kind() const override { return jobkinds::kDumpCheck; }
+    QString title() const override { return QStringLiteral("Check %1").arg(name()); }
+    QString subtitle() const override { return QDir::toNativeSeparators(folder()); }
+    QStringList phases() const override { return {QStringLiteral("Checking")}; }
+    QJsonObject parameters() const override { return m_p; }
+    Status validate(const SettingsValues&) const override
+    {
+        if (!QFileInfo(folder()).isDir())
+            return Error(ErrorCode::NotFound, QStringLiteral("Choose the game folder to check."));
+        return success();
+    }
+    Result<JobOutcome> run(JobContext& ctx) override
+    {
+        auto r = checkDump(folder(), ctx.token, ctx.progress);
+        if (!r.ok())
+            return r.takeError();
+        JobOutcome o;
+        o.summary = r->summary();
+        o.details = r->toJson();
+        o.verification = r->errors == 0 && r->warnings == 0 ? Verification::Passed : Verification::Inconclusive;
+        o.verificationDetail = QStringLiteral("Read-only check of the folder structure, the executables' headers, the backport "
+                                              "state and the file names. Nothing in the dump was changed.");
+        // The first problems and warnings in the job's own words too (the queue and the log show them); the details hold all.
+        constexpr int kMaxListed = 20;
+        int listed = 0;
+        for (const DumpFinding& f : r->findings) {
+            if (f.severity == FindingSeverity::Info)
+                continue;
+            if (listed == kMaxListed)
+                break;
+            ++listed;
+            const QString line = QStringLiteral("%1%2").arg(f.path.isEmpty() ? QString() : f.path + QStringLiteral(": "), f.message);
+            o.warnings << line;
+            ctx.log.warn(line, QJsonObject{{QStringLiteral("code"), f.code}, {QStringLiteral("severity"), findingSeverityName(f.severity)}});
+        }
+        if (const qint64 more = r->errors + r->warnings - listed; more > 0)
+            o.warnings << QStringLiteral("…and %1 more in the check's details.").arg(formatCount(more));
+        ctx.log.info(QStringLiteral("Dump check of %1: %2").arg(QDir::toNativeSeparators(folder()), o.summary));
+        return o;
+    }
+
+private:
+    QString folder() const { return m_p.value(QStringLiteral("folder")).toString(); }
+    QString name() const
+    {
+        const QString given = m_p.value(QStringLiteral("title")).toString().trimmed();
+        return given.isEmpty() ? QFileInfo(folder()).fileName() : given;
+    }
+    QJsonObject m_p;
+};
+
 class ReportJob : public Job {
 public:
     explicit ReportJob(QJsonObject p) : m_p(std::move(p)) {}
@@ -247,6 +304,7 @@ void registerModule(ModuleContext& ctx)
     ctx.jobs.add(QStringLiteral("tools.languages.scan"), QStringLiteral("Find languages"), creator<ScanJob>());
     ctx.jobs.add(QStringLiteral("tools.languages.strip"), QStringLiteral("Remove languages"), creator<StripJob>());
     ctx.jobs.add(QStringLiteral("tools.languages.restore"), QStringLiteral("Restore languages"), creator<RestoreJob>());
+    ctx.jobs.add(jobkinds::kDumpCheck, QStringLiteral("Dump check"), creator<DumpCheckJob>());
     ctx.jobs.add(QStringLiteral("tools.report"), QStringLiteral("Problem report"), creator<ReportJob>());
 }
 

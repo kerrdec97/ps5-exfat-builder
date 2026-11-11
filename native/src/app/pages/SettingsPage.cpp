@@ -891,7 +891,8 @@ Sheet* SettingsPage::buildPortableSheet(const portable::Plan& plan, QCheckBox*& 
     copy = s->addCheckbox(QStringLiteral("Copy my settings and queue"));
     copy->setChecked(true);
     copy->setToolTip(QStringLiteral("Settings, queue, history and the library list are copied; a file that is already in the new folder is kept."));
-    s->addText(QStringLiteral("The old folders are left in place and can be deleted later. The app must be restarted to switch."));
+    s->addText(QStringLiteral("With the box ticked, your current settings, queue and history are copied there. The old folders are left "
+                              "in place and can be deleted later. The app must be restarted to switch."));
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
     s->addButton(QStringLiteral("Make portable"), Sheet::Role::Primary);
     return s;

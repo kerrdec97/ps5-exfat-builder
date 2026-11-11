@@ -7,7 +7,10 @@
 //             game exists in (its folder plus any image of it found in the
 //             library and output folders); search, filter, sort; bulk build /
 //             backport / remove; per game build, FPKG, pack with zstd,
-//             backport, languages, DLC list, rename, show in folder.
+//             backport, languages, DLC list, rename, show in folder; "Check
+//             dump…" (tools.dump.check, read-only) for one game or the
+//             selection, with the result in a toast and a details sheet
+//             (DumpCheckSheet) that stays available as "Show last check".
 //  * Images — .exfat / .ffpkg / .ffpfs / .ffpfsc files in the library folders,
 //             their sub-folders and the default output folder, with the title
 //             and ID read from inside each image (services/ImageInfo); open in
@@ -24,7 +27,9 @@
 
 #include <QCheckBox>
 #include <QDateTime>
+#include <QHash>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QPointer>
 #include <QStackedWidget>
 #include <QTabBar>
@@ -40,6 +45,8 @@ class Sheet;
 } // namespace fw::ui
 
 namespace fw::pages {
+
+class DumpCheckSheet;
 
 // The library after a scan of `scanFolders` listed `scanned`. Games that were
 // already known keep what is not read from disk (when they were first seen,
@@ -92,6 +99,15 @@ public:
     // Renames image files (never over an existing file). Returns how many were renamed.
     int renameImages(const QList<QPair<QString, QString>>& renames, QStringList* skipped = nullptr);
 
+    // Dump check: one read-only tools.dump.check job per game folder, started
+    // now. Returns how many were started. When one finishes, a toast says what
+    // it found and offers the details.
+    int checkDumps(const QStringList& folders);
+    // The last check of `folder` in this session.
+    bool hasDumpCheck(const QString& folder) const { return m_dumpChecks.contains(folder); }
+    // Opens its details sheet (nullptr when the folder was not checked).
+    DumpCheckSheet* showDumpCheck(const QString& folder);
+
 private:
     // Games
     QWidget* buildGamesTab();
@@ -113,6 +129,8 @@ private:
     void removeGames(const QStringList& folders);
     const ui::LibraryGame* game(const QString& folder) const;
     QStringList formatsOf(const ui::GameSummary& g) const;
+    QString gameTitle(const QString& folder) const; // the game's title, else the folder's name
+    void toastWithAction(ui::Tone tone, const QString& title, const QString& body, const QString& actionText, std::function<void()> action);
     // Images
     void rebuildImages();
     void updateImageSelection();
@@ -147,6 +165,14 @@ private:
     QWidget* m_folders;
     ui::Card* m_gamesSelection;
     QLabel* m_gamesSelectionText;
+    QPushButton* m_gamesCheck;
+    struct DumpCheck {
+        QJsonObject details; // JobOutcome::details of the job
+        QString summary;
+        QString title;
+        QDateTime checkedAt;
+    };
+    QHash<QString, DumpCheck> m_dumpChecks; // game folder -> its last check (this session)
     ui::LibraryGrid* m_gamesGrid;
     ui::DropZone* m_gamesDrop;
     ui::EmptyState* m_gamesNoMatch;
