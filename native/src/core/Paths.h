@@ -25,6 +25,20 @@ void resetForTests();
 // the executable's own folder.
 QString appDir();
 
+// The single-file exe the app was started through (FW_LAUNCHER_EXE, which the
+// launcher sets); "" when the program was started directly (a developer
+// build, a test).
+QString launcherExe();
+// Where the program's own files are: the unpacked copy when it was started
+// through the launcher, otherwise the executable's folder.
+QString programDir();
+// `portable.txt` in appDir(): the file that turns portable mode on. It is
+// looked at once, when the locations are resolved (isPortable()).
+QString portableMarkerFile();
+// True when FW_DATA_DIR or a test chose the locations; portable.txt is not
+// looked at then.
+bool isOverridden();
+
 bool isPortable();
 QString dataDir();     // settings, history, queue
 QString localDir();    // logs, temp, caches

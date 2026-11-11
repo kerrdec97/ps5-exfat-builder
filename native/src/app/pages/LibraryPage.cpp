@@ -2,6 +2,7 @@
 
 #include "app/AppContext.h"
 #include "app/pages/BuildImagePage.h"
+#include "app/pages/DumpCheckSheet.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
 #include "app/ui/Icons.h"
@@ -354,6 +355,13 @@ QWidget* LibraryPage::buildGamesTab()
                 emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folders"), selected}}});
         });
         h->addWidget(bp);
+        m_gamesCheck = button(QStringLiteral("Check dump…"), ButtonVariant::Secondary, QStringLiteral("file_search"), m_gamesSelection);
+        m_gamesCheck->setToolTip(QStringLiteral("Look for missing or damaged files and leftover changes. Reads the dump, changes nothing."));
+        connect(m_gamesCheck, &QPushButton::clicked, this, [this] {
+            if (!m_demo)
+                checkDumps(m_gamesGrid->selectedKeys());
+        });
+        h->addWidget(m_gamesCheck);
         auto* remove = button(QStringLiteral("Remove from library"), ButtonVariant::Subtle, QStringLiteral("close"), m_gamesSelection);
         remove->setToolTip(QStringLiteral("Only the library entry goes; the folders stay on disk."));
         connect(remove, &QPushButton::clicked, this, [this] {
@@ -569,6 +577,8 @@ void LibraryPage::updateGameSelection()
     const int n = int(m_gamesGrid->selectedKeys().size());
     m_gamesSelection->setVisible(n > 0);
     m_gamesSelectionText->setText(QStringLiteral("%1 selected").arg(n));
+    m_gamesCheck->setText(n > 1 ? QStringLiteral("Check dumps…") : QStringLiteral("Check dump…"));
+    m_gamesCheck->setEnabled(jobs::isAvailable(m_ctx, tools::jobkinds::kDumpCheck));
 }
 
 void LibraryPage::addFolders()
@@ -634,6 +644,10 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
         menu.addAction(QStringLiteral("Backport %1 games…").arg(selected.size()), this, [this, selected] {
             emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folders"), selected}}});
         });
+        menu.addAction(QStringLiteral("Check %1 dumps…").arg(selected.size()), this, [this, selected] {
+            if (!m_demo)
+                checkDumps(selected);
+        })->setEnabled(jobs::isAvailable(m_ctx, tools::jobkinds::kDumpCheck));
         menu.addSeparator();
         menu.addAction(QStringLiteral("Remove %1 from the library").arg(selected.size()), this, [this, selected] {
             if (!m_demo)
@@ -648,6 +662,12 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
         emit navigateRequested({QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatZstdFolder}, {QStringLiteral("source"), folder}}});
     });
     menu.addAction(QStringLiteral("Backport…"), this, [this, folder] { emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), folder}}}); });
+    menu.addAction(QStringLiteral("Check dump…"), this, [this, folder] {
+        if (!m_demo)
+            checkDumps({folder});
+    })->setEnabled(jobs::isAvailable(m_ctx, tools::jobkinds::kDumpCheck));
+    if (hasDumpCheck(folder))
+        menu.addAction(QStringLiteral("Show last check"), this, [this, folder] { showDumpCheck(folder); });
     if (const LibraryGame* g = game(folder); g && !g->info.titleId.isEmpty()) {
         QMenu* images = nullptr;
         for (const ImageSummary& s : m_images)
@@ -677,6 +697,56 @@ void LibraryPage::gameMenu(const QString& folder, const QPoint& pos)
             m_library.removeGame(folder);
     });
     menu.exec(pos);
+}
+
+QString LibraryPage::gameTitle(const QString& folder) const
+{
+    const LibraryGame* g = game(folder);
+    return g && !g->info.title.isEmpty() ? g->info.title : QFileInfo(folder).fileName();
+}
+
+// A toast with a link. The page's own toast signal carries none, so this one
+// goes to the window's toasts directly (as plain text when the page has no such window).
+void LibraryPage::toastWithAction(Tone tone, const QString& title, const QString& body, const QString& actionText, std::function<void()> action)
+{
+    if (auto* toasts = window()->findChild<ToastHost*>()) {
+        toasts->show(tone, title, body, {ToastHost::Action{actionText, std::move(action)}});
+        return;
+    }
+    emit toastRequested(tone, title, body);
+}
+
+int LibraryPage::checkDumps(const QStringList& folders)
+{
+    QStringList started, failed;
+    for (const QString& f : folders) {
+        if (auto r = jobs::submitDumpCheck(m_ctx, f, gameTitle(f)); r.ok())
+            started << r.value();
+        else
+            failed << QStringLiteral("%1: %2").arg(QFileInfo(f).fileName(), r.error().message);
+    }
+    for (auto it = started.crbegin(); it != started.crend(); ++it)
+        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
+    // One check says what it found soon enough; for several, say that they are on their way.
+    if (started.size() > 1)
+        emit toastRequested(Tone::Info, QStringLiteral("Checking %1").arg(plural(started.size(), QStringLiteral("dump"), QStringLiteral("dumps"))),
+                            QStringLiteral("Each result appears when its check is done. Nothing in the dumps is changed."));
+    if (!failed.isEmpty())
+        emit toastRequested(Tone::Err, started.isEmpty() ? QStringLiteral("The check was not started") : QStringLiteral("%1 not checked").arg(plural(failed.size(), QStringLiteral("dump"), QStringLiteral("dumps"))),
+                            failed.mid(0, 4).join(u'\n') + (failed.size() > 4 ? QStringLiteral("\n… and %1 more").arg(failed.size() - 4) : QString()));
+    return int(started.size());
+}
+
+DumpCheckSheet* LibraryPage::showDumpCheck(const QString& folder)
+{
+    const auto it = m_dumpChecks.constFind(folder);
+    if (it == m_dumpChecks.constEnd())
+        return nullptr;
+    auto* s = new DumpCheckSheet(window(), it->details, it->summary, it->title, folder, it->checkedAt);
+    // Repairing is the Backport tab's: restore the originals there, or backport again.
+    connect(s, &DumpCheckSheet::backportRequested, this, [this, folder] { emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), folder}}}); });
+    s->open();
+    return s;
 }
 
 void LibraryPage::buildSelected()
@@ -953,6 +1023,16 @@ QWidget* LibraryPage::buildImagesTab()
     th->addWidget(m_imageFormat);
     m_imageSort = combo({QStringLiteral("Title A–Z"), QStringLiteral("Title ID"), QStringLiteral("Largest first"), QStringLiteral("Newest first")}, QStringLiteral("Sort by"), tools);
     th->addWidget(m_imageSort);
+    // Renaming without selecting first: every image the list shows right now.
+    m_imagesRename = button(QStringLiteral("Rename images…"), ButtonVariant::Secondary, QStringLiteral("rename"), tools);
+    m_imagesRename->setToolTip(QStringLiteral("Name the listed image files after their title ID, title and version"));
+    connect(m_imagesRename, &QPushButton::clicked, this, [this] {
+        QStringList listed;
+        for (const GridItem& it : m_imagesGrid->items())
+            listed << it.key;
+        renameImagesSheet(listed);
+    });
+    th->addWidget(m_imagesRename);
     th->addStretch(1);
     m_imagesCount = caption({}, tools);
     m_imagesCount->setWordWrap(false);
@@ -965,6 +1045,14 @@ QWidget* LibraryPage::buildImagesTab()
     m_imagesSelection = selectionBar(&m_imagesSelectionText, page);
     {
         auto* h = barLayout(m_imagesSelection);
+        auto* rename = button(QStringLiteral("Rename…"), ButtonVariant::Secondary, QStringLiteral("rename"), m_imagesSelection);
+        rename->setToolTip(QStringLiteral("Name the selected image files after their title ID, title and version"));
+        connect(rename, &QPushButton::clicked, this, [this] { renameImagesSheet(m_imagesGrid->selectedKeys()); });
+        h->addWidget(rename);
+        auto* verify = button(QStringLiteral("Verify"), ButtonVariant::Secondary, QStringLiteral("shield_check"), m_imagesSelection);
+        verify->setToolTip(QStringLiteral("Queue a verify job for each selected image"));
+        connect(verify, &QPushButton::clicked, this, [this] { verifyImages(m_imagesGrid->selectedKeys()); });
+        h->addWidget(verify);
         m_imagesOpen = button(QStringLiteral("Open in Image tools"), ButtonVariant::Secondary, QStringLiteral("extract"), m_imagesSelection);
         connect(m_imagesOpen, &QPushButton::clicked, this, [this] {
             const QStringList sel = m_imagesGrid->selectedKeys();
@@ -972,13 +1060,6 @@ QWidget* LibraryPage::buildImagesTab()
                 openInImageTools(sel.first(), QString());
         });
         h->addWidget(m_imagesOpen);
-        auto* verify = button(QStringLiteral("Verify"), ButtonVariant::Secondary, QStringLiteral("shield_check"), m_imagesSelection);
-        verify->setToolTip(QStringLiteral("Queue a verify job for each selected image"));
-        connect(verify, &QPushButton::clicked, this, [this] { verifyImages(m_imagesGrid->selectedKeys()); });
-        h->addWidget(verify);
-        auto* rename = button(QStringLiteral("Rename…"), ButtonVariant::Secondary, QStringLiteral("rename"), m_imagesSelection);
-        connect(rename, &QPushButton::clicked, this, [this] { renameImagesSheet(m_imagesGrid->selectedKeys()); });
-        h->addWidget(rename);
         h->addStretch(1);
         auto* clear = new Link(QStringLiteral("Clear selection"), m_imagesSelection);
         connect(clear, &Link::activated, this, [this] { m_imagesGrid->clearSelection(); });
@@ -1137,6 +1218,8 @@ void LibraryPage::updateImageSelection()
     m_imagesSelection->setVisible(n > 0);
     m_imagesSelectionText->setText(QStringLiteral("%1 selected").arg(n));
     m_imagesOpen->setVisible(n == 1);
+    // With a selection the bar's "Rename…" is the one; without, the tool row offers it for the whole list.
+    m_imagesRename->setVisible(n == 0 && m_imagesGrid->count() > 0);
 }
 
 void LibraryPage::openInImageTools(const QString& image, const QString& action)
@@ -1194,12 +1277,24 @@ void LibraryPage::imageMenu(const QString& path, const QPoint& pos)
     menu.exec(pos);
 }
 
-QString LibraryPage::imageFileName(const ImageSummary& s, const QString& preset)
+QString LibraryPage::imageFileName(const ImageSummary& s, const QString& preset, const QString& customTemplate)
 {
     const QFileInfo fi(s.path);
+    if (preset == QLatin1String("custom") && !s.titleId.isEmpty()) {
+        // The Build page's template language (Settings › Build › Output name).
+        gameinfo::ImageNameFields f;
+        f.titleId = s.titleId;
+        f.title = s.title;
+        f.version = s.version;
+        f.type = s.format == QLatin1String("exfat") ? QStringLiteral("exFAT") : s.format == QLatin1String("ffpkg") ? QStringLiteral("ffpkg") : QStringLiteral("PFS");
+        f.folderName = fi.completeBaseName(); // also what is left when the template renders to nothing
+        if (s.modified.isValid())
+            f.date = s.modified.date().toString(Qt::ISODate); // the image's own date, not today's
+        return gameinfo::renderImageName(gameinfo::ImageNamePreset::Custom, customTemplate, f) + u'.' + fi.suffix();
+    }
     QString n = s.titleId.isEmpty() ? fi.completeBaseName() : s.titleId;
     if (preset != QLatin1String("id") && !s.title.isEmpty() && !s.titleId.isEmpty())
-        n += u' ' + s.title;
+        n += (preset == QLatin1String("id-dash-title") ? QStringLiteral(" - ") : QStringLiteral(" ")) + s.title;
     if (preset == QLatin1String("id-title-version") && !s.version.isEmpty() && !s.titleId.isEmpty())
         n += QStringLiteral(" (%1)").arg(s.version);
     return sanitizeFileName(n.simplified()) + u'.' + fi.suffix();
@@ -1228,21 +1323,32 @@ int LibraryPage::renameImages(const QList<QPair<QString, QString>>& renames, QSt
     return done;
 }
 
-void LibraryPage::renameImagesSheet(const QStringList& paths)
+// The rename sheet for `list`, not shown yet. `renames` gives the (file, new
+// name) pairs it holds; call it once the sheet was answered with "Rename".
+Sheet* LibraryPage::buildRenameImagesSheet(const QList<ImageSummary>& list, std::function<QList<QPair<QString, QString>>()>& renames)
 {
-    if (paths.isEmpty() || m_demo)
-        return;
-    QList<ImageSummary> list;
-    for (const QString& p : paths)
-        list << (image(p) ? *image(p) : readImageSummary(p, false));
-    auto* s = new Sheet(window(), paths.size() == 1 ? QStringLiteral("Rename the image") : QStringLiteral("Rename %1 images").arg(paths.size()),
-                        Sheet::Icon::None, paths.size() == 1 ? size::dialogWide : 900);
+    auto* s = new Sheet(window(), list.size() == 1 ? QStringLiteral("Rename the image") : QStringLiteral("Rename %1 images").arg(list.size()),
+                        Sheet::Icon::None, list.size() == 1 ? size::dialogWide : 900);
     auto* pattern = new Segmented(s);
+    pattern->setAccessibleName(QStringLiteral("Pattern"));
     pattern->addSegment(QStringLiteral("PPSA only"), {}, QStringLiteral("id"));
     pattern->addSegment(QStringLiteral("PPSA Title"), {}, QStringLiteral("id-title"));
     pattern->addSegment(QStringLiteral("PPSA Title (version)"), {}, QStringLiteral("id-title-version"));
-    pattern->setCurrentIndex(2);
+    pattern->addSegment(QStringLiteral("PPSA - Title"), {}, QStringLiteral("id-dash-title"));
+    pattern->addSegment(QStringLiteral("Custom"), {}, QStringLiteral("custom"));
+    pattern->setCurrentIndex(std::max(0, pattern->indexOfValue(m_imageRenamePattern)));
     s->body()->addWidget(field(QStringLiteral("Pattern"), pattern, {}, s));
+    // Any other order or punctuation: the template of the Build page's names.
+    auto* tpl = textInput({}, true, s);
+    tpl->setAccessibleName(QStringLiteral("Name template"));
+    QString startTemplate = m_imageRenameTemplate;
+    if (startTemplate.isEmpty() && m_ctx.settings().value(gameinfo::keys::kNamePreset).toString() == QLatin1String("custom"))
+        startTemplate = m_ctx.settings().value(gameinfo::keys::kNameTemplate).toString().trimmed();
+    tpl->setText(startTemplate.isEmpty() ? QStringLiteral("%PPSA% - %TITLE%") : startTemplate);
+    QWidget* tplField = field(QStringLiteral("Template"), tpl,
+                              QStringLiteral("Tokens: %PPSA% %TITLE% %VERSION% %TYPE% %DATE%. Empty brackets left by a missing value are removed."), s);
+    tplField->setHidden(pattern->currentValue().toString() != QLatin1String("custom"));
+    s->body()->addWidget(tplField);
     QLineEdit* name = nullptr;
     QTableWidget* table = nullptr;
     if (list.size() == 1) {
@@ -1280,30 +1386,63 @@ void LibraryPage::renameImagesSheet(const QStringList& paths)
         }
         s->body()->addWidget(table);
     }
-    const auto fill = [list, pattern, name, table] {
+    // The new names follow the pattern (and the template) as they change: the preview is live.
+    const auto fill = [list, pattern, tpl, name, table] {
         const QString preset = pattern->currentValue().toString();
         if (name)
-            name->setText(imageFileName(list.first(), preset));
+            name->setText(imageFileName(list.first(), preset, tpl->text()));
         if (table)
             for (int r = 0; r < list.size(); ++r)
-                table->item(r, 2)->setText(imageFileName(list[r], preset));
+                table->item(r, 2)->setText(imageFileName(list[r], preset, tpl->text()));
     };
     fill();
-    connect(pattern, &Segmented::currentChanged, s, [fill](int) { fill(); });
+    connect(pattern, &Segmented::currentChanged, s, [this, s, pattern, tplField, fill](int) {
+        const QString preset = pattern->currentValue().toString();
+        if (!m_demo)
+            m_imageRenamePattern = preset; // the sheet opens next time the way it was left
+        const bool custom = preset == QLatin1String("custom");
+        if (tplField->isHidden() == custom) {
+            tplField->setHidden(!custom);
+            if (s->isVisible())
+                s->refit();
+        }
+        fill();
+    });
+    connect(tpl, &QLineEdit::textChanged, s, [this, fill](const QString& text) {
+        if (!m_demo)
+            m_imageRenameTemplate = text;
+        fill();
+    });
     s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
     s->addButton(QStringLiteral("Rename"), Sheet::Role::Primary);
+    renames = [list, name, table] {
+        QList<QPair<QString, QString>> out;
+        if (name) {
+            out.append({list.first().path, imageRenameTarget(name->text(), list.first().path)});
+        } else {
+            for (int r = 0; r < table->rowCount(); ++r)
+                if (table->item(r, 0)->checkState() == Qt::Checked) {
+                    const QString source = table->item(r, 0)->data(Qt::UserRole).toString();
+                    out.append({source, imageRenameTarget(table->item(r, 2)->text(), source)});
+                }
+        }
+        return out;
+    };
+    return s;
+}
+
+void LibraryPage::renameImagesSheet(const QStringList& paths)
+{
+    if (paths.isEmpty() || m_demo)
+        return;
+    QList<ImageSummary> list;
+    for (const QString& p : paths)
+        list << (image(p) ? *image(p) : readImageSummary(p, false));
+    std::function<QList<QPair<QString, QString>>()> collect;
+    Sheet* s = buildRenameImagesSheet(list, collect);
     if (s->exec() != 1)
         return;
-    QList<QPair<QString, QString>> renames;
-    if (name) {
-        renames.append({list.first().path, imageRenameTarget(name->text(), list.first().path)});
-    } else {
-        for (int r = 0; r < table->rowCount(); ++r)
-            if (table->item(r, 0)->checkState() == Qt::Checked) {
-                const QString source = table->item(r, 0)->data(Qt::UserRole).toString();
-                renames.append({source, imageRenameTarget(table->item(r, 2)->text(), source)});
-            }
-    }
+    const QList<QPair<QString, QString>> renames = collect(); // the sheet's widgets live until the event loop runs again
     QStringList skipped;
     const int done = renameImages(renames, &skipped);
     if (done > 0)
@@ -1432,6 +1571,27 @@ void LibraryPage::onJobFinished(const QString& id)
     auto rec = m_ctx.queue().record(id);
     if (!rec)
         return;
+    // A dump check, whoever started it (this page, a retry from the queue):
+    // its result is kept for "Show last check" and said in a toast that opens
+    // the details. A failed check has the window's own "failed" toast.
+    if (rec->kind == tools::jobkinds::kDumpCheck && rec->state == JobState::Succeeded && rec->outcome && !m_demo) {
+        const QString folder = rec->parameters.value(QStringLiteral("folder")).toString();
+        const QString given = rec->parameters.value(QStringLiteral("title")).toString();
+        const QString name = given.isEmpty() ? gameTitle(folder) : given;
+        m_dumpChecks.insert(folder, DumpCheck{rec->outcome->details, rec->outcome->summary, name, QDateTime::currentDateTime()});
+        const QJsonObject counts = rec->outcome->details.value(QStringLiteral("counts")).toObject();
+        const qint64 errors = counts.value(QStringLiteral("errors")).toInteger();
+        const qint64 warnings = counts.value(QStringLiteral("warnings")).toInteger();
+        QStringList found;
+        if (errors > 0)
+            found << plural(errors, QStringLiteral("problem"), QStringLiteral("problems"));
+        if (warnings > 0)
+            found << plural(warnings, QStringLiteral("warning"), QStringLiteral("warnings"));
+        toastWithAction(errors > 0 ? Tone::Err : warnings > 0 ? Tone::Warn : Tone::Ok,
+                        QStringLiteral("Checked %1: %2").arg(name, found.isEmpty() ? QStringLiteral("no problems found") : found.join(QStringLiteral(", "))),
+                        rec->outcome->details.value(QStringLiteral("facts")).toObject().value(QStringLiteral("backportSummary")).toString(),
+                        QStringLiteral("Show details"), [this, folder] { showDumpCheck(folder); });
+    }
     if (id == m_scanJobId && !rec->outcome) {
         m_scanJobId.clear(); // a failed or cancelled scan is over too
         if (rec->state == JobState::Failed)
@@ -1729,6 +1889,11 @@ void LibraryPage::navigateWith(const QVariantMap& args)
         setTab(LanguagesTab);
         m_langFolder->setPath(args.value(QStringLiteral("languagesFolder")).toString());
     }
+    // The details of a game's last dump check (a link from another page).
+    if (args.contains(QStringLiteral("dumpCheck"))) {
+        setTab(GamesTab);
+        showDumpCheck(args.value(QStringLiteral("dumpCheck")).toString());
+    }
 }
 
 QString LibraryPage::unsavedChanges() const
@@ -1746,7 +1911,8 @@ QString LibraryPage::statusContext() const
 
 QStringList LibraryPage::demoStates() const
 {
-    return {QStringLiteral("games"), QStringLiteral("games-list"), QStringLiteral("images"), QStringLiteral("languages"), QStringLiteral("dlc")};
+    return {QStringLiteral("games"), QStringLiteral("games-list"), QStringLiteral("games-check"), QStringLiteral("images"), QStringLiteral("images-rename"),
+            QStringLiteral("languages"), QStringLiteral("dlc")};
 }
 
 void LibraryPage::applyDemoState(const QString& name)
@@ -1772,13 +1938,31 @@ void LibraryPage::applyDemoState(const QString& name)
         const auto& items = m_gamesGrid->items();
         if (items.size() > 3)
             m_gamesGrid->setSelectedKeys({items[1].key, items[3].key});
+    } else if (name == QLatin1String("games-check")) {
+        // The details of a dump check that found something.
+        setTab(GamesTab);
+        auto* s = new DumpCheckSheet(window(), DumpCheckSheet::demoDetails(), QStringLiteral("2 problems and 3 warnings in 18,442 files"),
+                                     QStringLiteral("Astro Bot"), QString(), QDateTime(QDate(2026, 11, 4), QTime(14, 36)));
+        s->open();
+        m_demoSheet = s;
     } else if (name == QLatin1String("images")) {
         setTab(ImagesTab);
+    } else if (name == QLatin1String("images-rename")) {
+        // The rename sheet for the whole list, with the template in use.
+        setTab(ImagesTab);
+        std::function<QList<QPair<QString, QString>>()> unused;
+        Sheet* s = buildRenameImagesSheet(m_images, unused);
+        if (auto* pattern = s->findChild<Segmented*>())
+            pattern->setCurrentValue(QStringLiteral("custom"));
+        s->open();
+        m_demoSheet = s;
     }
 }
 
 void LibraryPage::clearDemoState()
 {
+    if (auto* s = qobject_cast<Sheet*>(m_demoSheet.data()))
+        s->close(0);
     if (m_demo) {
         m_demo = false;
         m_demoGames.clear();

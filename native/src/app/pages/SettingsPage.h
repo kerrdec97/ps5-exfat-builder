@@ -5,7 +5,8 @@
 // under it · section header ("n changed" badge, Reset section) · cards per
 // group of SettingRows, with the section's advanced settings folded into an
 // "Advanced" Disclosure · dependency rows (Tools and "Tools this section
-// depends on") · temporary-files row (Storage) · legacy import (Advanced).
+// depends on") · "Where the app keeps its files" with the portable-mode row
+// and the temporary-files row (Storage) · legacy import (Advanced).
 
 #include "app/pages/Page.h"
 #include "app/ui/DependencyRow.h"
@@ -17,7 +18,14 @@
 
 namespace fw::ui {
 class Disclosure;
+class Sheet;
+} // namespace fw::ui
+
+namespace fw::portable {
+struct Plan;
 }
+
+class QCheckBox;
 
 namespace fw::pages {
 
@@ -63,6 +71,11 @@ private:
     void resetAll();
     void updateTempUsage();
     QString sectionCaption(const QString& section) const;
+    // Storage: where the program, settings, logs and temporary files are, and portable mode.
+    void addLocationsCard();
+    QString tempLocation() const; // the temporary folder in use (the chosen one, else the app's own)
+    void makePortable();
+    ui::Sheet* buildPortableSheet(const portable::Plan& plan, QCheckBox*& copy);
 
     QStringList m_sections;
     QString m_section;
@@ -84,6 +97,7 @@ private:
     QLabel* m_secTitle;
     ui::Badge* m_secChanged;
     QLabel* m_secCaption;
+    ui::Link* m_secLink; // Tools: where the bundled components are (opens Storage)
     QPushButton* m_resetSection;
     QWidget* m_cards;
     QVBoxLayout* m_cardsLayout;
@@ -95,6 +109,8 @@ private:
     ui::DependencyList* m_deps = nullptr;
     QLabel* m_tempUsage = nullptr;
     QPushButton* m_tempClear = nullptr;
+    QPointer<QWidget> m_locationsCard;
+    QPointer<ui::ElideLabel> m_tempLocation;
     bool m_restartNeeded = false;
     QPointer<QWidget> m_demoSheet;
 };

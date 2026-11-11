@@ -264,6 +264,14 @@ Result<QString> submitLanguageScan(AppContext& ctx, const QString& folder, bool 
                    QJsonObject{{QStringLiteral("folder"), folder}, {QStringLiteral("batch"), batch}}, {});
 }
 
+Result<QString> submitDumpCheck(AppContext& ctx, const QString& folder, const QString& title)
+{
+    QJsonObject p{{QStringLiteral("folder"), folder}};
+    if (!title.trimmed().isEmpty())
+        p.insert(QStringLiteral("title"), title.trimmed());
+    return enqueue(ctx, QStringLiteral("tools.dump.check"), p, {});
+}
+
 Result<QString> submitLanguageStrip(AppContext& ctx, const QString& gameRoot, const QStringList& remove,
                                     const QString& backupFolder)
 {

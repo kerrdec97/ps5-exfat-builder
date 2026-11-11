@@ -22,6 +22,7 @@ struct State {
     std::mutex mutex;
     bool initialized = false;
     bool portable = false;
+    bool overridden = false;
     QString data;
     QString local;
 };
@@ -41,6 +42,7 @@ void ensure()
     s.initialized = true;
 
     const QString env = qEnvironmentVariable("FW_DATA_DIR");
+    s.overridden = !env.isEmpty();
     if (!env.isEmpty()) {
         s.data = QDir(env).filePath(QStringLiteral("data"));
         s.local = QDir(env).filePath(QStringLiteral("local"));
@@ -88,12 +90,38 @@ QString appDir()
     return QCoreApplication::instance() ? QCoreApplication::applicationDirPath() : QString();
 }
 
+QString launcherExe()
+{
+    const QString exe = qEnvironmentVariable("FW_LAUNCHER_EXE");
+    if (exe.isEmpty() || !QFileInfo(exe).isFile())
+        return {};
+    return QDir::cleanPath(QDir::fromNativeSeparators(exe));
+}
+
+QString programDir()
+{
+    return QCoreApplication::instance() ? QCoreApplication::applicationDirPath() : QString();
+}
+
+QString portableMarkerFile()
+{
+    const QString dir = appDir();
+    return dir.isEmpty() ? QString() : QDir(dir).filePath(QStringLiteral("portable.txt"));
+}
+
+bool isOverridden()
+{
+    ensure();
+    return state().overridden;
+}
+
 void resetForTests()
 {
     State& s = state();
     std::lock_guard lock(s.mutex);
     s.initialized = false;
     s.portable = false;
+    s.overridden = false;
     s.data.clear();
     s.local.clear();
 }
@@ -104,6 +132,7 @@ void overrideRoot(const QString& root)
     std::lock_guard lock(s.mutex);
     s.initialized = true;
     s.portable = false;
+    s.overridden = true;
     s.data = QDir(root).filePath(QStringLiteral("data"));
     s.local = QDir(root).filePath(QStringLiteral("local"));
     QDir().mkpath(s.data);

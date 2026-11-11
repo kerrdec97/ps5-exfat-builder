@@ -46,6 +46,11 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
 | Logs (text + JSON lines), crash reports | `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder Farewell\logs` (or Settings › Logging › Log folder) | `<app>\data\logs` |
 | Temporary files | `%LOCALAPPDATA%\...\temp` (or Settings › Storage › Temporary folder); folders older than a day are removed at start | `<app>\data\temp` |
 
+Settings › Storage lists these folders as they are on your PC ("Where the app
+keeps its files"). **Make this copy portable…** there creates `portable.txt`
+next to the exe and copies your settings, queue and history; the switch
+happens at the next start and the old folders stay until you delete them.
+
 Settings from the legacy app (`~/.exfat_builder_settings.json`) can be
 imported from Settings › Advanced.
 
