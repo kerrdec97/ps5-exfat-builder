@@ -2,6 +2,7 @@
 
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "core/Tr.h"
 #include "engines/gameinfo/ParamJson.h"
 #include "engines/gameinfo/Sfo.h"
 #include "engines/integration/ImageFiles.h"
@@ -124,7 +125,7 @@ QString imageFormatName(const QString& format)
     if (format == u"pkg")
         return QStringLiteral("FPKG");
     if (format == u"folder")
-        return QStringLiteral("Folder");
+        return FW_TR("Folder");
     return format.toUpper();
 }
 
@@ -160,7 +161,7 @@ QString ImageSummary::metaLine() const
     if (!version.isEmpty())
         parts << QStringLiteral("v%1").arg(version);
     if (files >= 0)
-        parts << QStringLiteral("%1 file%2").arg(formatCount(files), files == 1 ? QString() : QStringLiteral("s"));
+        parts << (files == 1 ? FW_TR("%1 file") : FW_TR("%1 files")).arg(formatCount(files));
     return parts.join(QStringLiteral(" · "));
 }
 
@@ -205,7 +206,7 @@ ImageSummary readImageSummary(const QString& path, bool readInside, const Cancel
     const QFileInfo fi(path);
     s.exists = fi.isFile();
     if (!s.exists) {
-        s.error = QStringLiteral("This file does not exist.");
+        s.error = FW_TR("This file does not exist.");
         guessFromFileName(s);
         return s;
     }

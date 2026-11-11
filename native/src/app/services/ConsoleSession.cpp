@@ -4,6 +4,7 @@
 #include "connect/ps5/RemotePath.h"
 
 #include "core/Cancellation.h"
+#include "core/Tr.h"
 
 #include <atomic>
 #include <deque>
@@ -81,7 +82,7 @@ public slots:
         RemoteListing out;
         out.path = ps5::normalizeRemotePath(path);
         if (!m_client) {
-            out.error = QStringLiteral("Not connected.");
+            out.error = FW_TR("Not connected.");
             emit m_session->listed(out);
             return;
         }
@@ -100,32 +101,32 @@ public slots:
     void doRemove(const QString& path, bool isDir)
     {
         if (!m_client) {
-            emit m_session->operationDone(QStringLiteral("delete"), false, QStringLiteral("Not connected."));
+            emit m_session->operationDone(QStringLiteral("delete"), false, FW_TR("Not connected."));
             return;
         }
         Status st = isDir ? m_client->removeTree(path, token()) : m_client->dele(path);
         noteDroppedLink(st);
-        emit m_session->operationDone(QStringLiteral("delete"), st.ok(), st.ok() ? QStringLiteral("Deleted %1").arg(path) : st.error().message);
+        emit m_session->operationDone(QStringLiteral("delete"), st.ok(), st.ok() ? FW_TR("Deleted %1").arg(path) : st.error().message);
     }
     void doRename(const QString& from, const QString& to)
     {
         if (!m_client) {
-            emit m_session->operationDone(QStringLiteral("rename"), false, QStringLiteral("Not connected."));
+            emit m_session->operationDone(QStringLiteral("rename"), false, FW_TR("Not connected."));
             return;
         }
         auto st = m_client->rename(from, to);
         noteDroppedLink(st);
-        emit m_session->operationDone(QStringLiteral("rename"), st.ok(), st.ok() ? QStringLiteral("Renamed to %1").arg(ps5::remoteFileName(to)) : st.error().message);
+        emit m_session->operationDone(QStringLiteral("rename"), st.ok(), st.ok() ? FW_TR("Renamed to %1").arg(ps5::remoteFileName(to)) : st.error().message);
     }
     void doMkdir(const QString& path)
     {
         if (!m_client) {
-            emit m_session->operationDone(QStringLiteral("mkdir"), false, QStringLiteral("Not connected."));
+            emit m_session->operationDone(QStringLiteral("mkdir"), false, FW_TR("Not connected."));
             return;
         }
         auto st = m_client->mkd(path);
         noteDroppedLink(st);
-        emit m_session->operationDone(QStringLiteral("mkdir"), st.ok(), st.ok() ? QStringLiteral("Created %1").arg(path) : st.error().message);
+        emit m_session->operationDone(QStringLiteral("mkdir"), st.ok(), st.ok() ? FW_TR("Created %1").arg(path) : st.error().message);
     }
     void doSiteAvail()
     {

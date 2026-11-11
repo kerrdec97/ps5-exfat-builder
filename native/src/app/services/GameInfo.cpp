@@ -30,7 +30,7 @@ QString GameSummary::metaLine() const
     if (bytes > 0)
         parts << formatBytes(bytes);
     if (files > 0)
-        parts << (files == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(formatCount(files)));
+        parts << (files == 1 ? FW_TR("1 file") : FW_TR("%1 files").arg(formatCount(files)));
     if (!sdk.isEmpty())
         parts << QStringLiteral("SDK %1").arg(sdk);
     return parts.join(QStringLiteral(" · "));
@@ -101,7 +101,7 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
     s.folder = folder;
     const QFileInfo fi(folder);
     if (folder.isEmpty() || !fi.exists()) {
-        s.error = QStringLiteral("The folder does not exist.");
+        s.error = FW_TR("The folder does not exist.");
         return s;
     }
     s.exists = true;
@@ -129,7 +129,7 @@ GameSummary readGameSummary(const QString& folder, bool countFiles, const Cancel
         return s;
     }
     if (!fi.isDir()) {
-        s.error = QStringLiteral("This is a file, not a game folder.");
+        s.error = FW_TR("This is a file, not a game folder.");
         return s;
     }
     const QString param = QDir(folder).filePath(QStringLiteral("sce_sys/param.json"));

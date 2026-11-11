@@ -4,6 +4,7 @@
 #include "connect/ps5/Module.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "core/Tr.h"
 
 #include <QDir>
 #include <QFile>
@@ -29,18 +30,34 @@ QVariantMap settingsArgs(const QString& key)
     return {{QStringLiteral("section"), QStringLiteral("PS5 connection")}, {QStringLiteral("key"), key}};
 }
 
+// When, as a phrase of its own (in brackets after a sentence).
 QString ago(const QDateTime& t)
 {
     if (!t.isValid())
-        return QStringLiteral("at an unknown time");
+        return FW_TR("at an unknown time");
     const qint64 s = t.secsTo(QDateTime::currentDateTime());
     if (s < 60)
-        return QStringLiteral("just now");
+        return FW_TR("just now");
     if (s < 3600)
-        return QStringLiteral("%1 min ago").arg(s / 60);
+        return FW_TR("%1 min ago").arg(s / 60);
     if (s < 86400)
-        return QStringLiteral("%1 h ago").arg(s / 3600);
-    return QStringLiteral("on %1").arg(t.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+        return FW_TR("%1 h ago").arg(s / 3600);
+    return FW_TR("on %1").arg(t.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+}
+
+// "Diagnostics reached <where> <when>" as one sentence per kind of "when".
+QString reachedText(const QString& where, const QDateTime& t)
+{
+    if (!t.isValid())
+        return FW_TR("Diagnostics reached %1 at an unknown time").arg(where);
+    const qint64 s = t.secsTo(QDateTime::currentDateTime());
+    if (s < 60)
+        return FW_TR("Diagnostics reached %1 just now").arg(where);
+    if (s < 3600)
+        return FW_TR("Diagnostics reached %1 %2 min ago").arg(where).arg(s / 60);
+    if (s < 86400)
+        return FW_TR("Diagnostics reached %1 %2 h ago").arg(where).arg(s / 3600);
+    return FW_TR("Diagnostics reached %1 on %2").arg(where, t.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")));
 }
 
 } // namespace
@@ -122,9 +139,9 @@ QList<ChecklistItem> setupChecklist(const ChecklistInputs& in)
     ChecklistItem a; // the address fields and Find my PS5 are in the PS5 connect header
     a.id = QStringLiteral("ip");
     a.done = ip;
-    a.label = ip ? QStringLiteral("PS5 IP configured") : QStringLiteral("PS5 IP not configured");
-    a.detail = ip ? in.consoleIp : QStringLiteral("Type it on PS5 connect, or let Find my PS5 search the network.");
-    a.fixText = ip ? QString() : QStringLiteral("Find my PS5");
+    a.label = ip ? FW_TR("PS5 IP configured") : FW_TR("PS5 IP not configured");
+    a.detail = ip ? in.consoleIp : FW_TR("Type it on PS5 connect, or let Find my PS5 search the network.");
+    a.fixText = ip ? QString() : FW_TR("Find my PS5");
     a.fixPage = QStringLiteral("ps5");
     out << a;
 
@@ -134,23 +151,23 @@ QList<ChecklistItem> setupChecklist(const ChecklistInputs& in)
     f.fixArgs = {{QStringLiteral("tab"), QStringLiteral("diagnostics")}}; // Ps5ConnectPage tab key
     const QString where = QStringLiteral("%1:%2").arg(in.consoleIp).arg(in.ftpPort);
     if (!ip) {
-        f.label = QStringLiteral("FTP not checked");
-        f.detail = QStringLiteral("Set the console's address first.");
+        f.label = FW_TR("FTP not checked");
+        f.detail = FW_TR("Set the console's address first.");
     } else if (in.browserConnected) {
         f.done = true;
-        f.label = QStringLiteral("FTP reachable");
-        f.detail = QStringLiteral("FTP browser connected to %1").arg(where);
+        f.label = FW_TR("FTP reachable");
+        f.detail = FW_TR("FTP browser connected to %1").arg(where);
     } else if (in.lastCheck && in.lastCheck->isFor(in.consoleIp, in.ftpPort)) {
         f.done = in.lastCheck->passed();
-        f.label = f.done ? QStringLiteral("FTP reachable") : QStringLiteral("FTP not reachable");
-        f.detail = f.done ? QStringLiteral("Diagnostics reached %1 %2").arg(where, ago(in.lastCheck->when))
-                          : QStringLiteral("%1 (%2)").arg(in.lastCheck->detail.isEmpty() ? QStringLiteral("The last check failed") : in.lastCheck->detail,
+        f.label = f.done ? FW_TR("FTP reachable") : FW_TR("FTP not reachable");
+        f.detail = f.done ? reachedText(where, in.lastCheck->when)
+                          : QStringLiteral("%1 (%2)").arg(in.lastCheck->detail.isEmpty() ? FW_TR("The last check failed") : in.lastCheck->detail,
                                                          ago(in.lastCheck->when));
-        f.fixText = f.done ? QString() : QStringLiteral("Run diagnostics");
+        f.fixText = f.done ? QString() : FW_TR("Run diagnostics");
     } else {
-        f.label = QStringLiteral("FTP not checked");
-        f.detail = QStringLiteral("Run the diagnostics on PS5 connect to check %1.").arg(where);
-        f.fixText = QStringLiteral("Run diagnostics");
+        f.label = FW_TR("FTP not checked");
+        f.detail = FW_TR("Run the diagnostics on PS5 connect to check %1.").arg(where);
+        f.fixText = FW_TR("Run diagnostics");
     }
     out << f;
 
@@ -160,11 +177,11 @@ QList<ChecklistItem> setupChecklist(const ChecklistInputs& in)
     k.fixArgs = settingsArgs(ps5::keys::kKlogPort);
     const bool klogClash = in.klogPort == in.ftpPort;
     k.done = ip && !klogClash;
-    k.label = k.done ? QStringLiteral("Kernel log configured") : QStringLiteral("Kernel log not configured");
-    k.detail = !ip ? QStringLiteral("Set the console's address first.")
-             : klogClash ? QStringLiteral("The kernel log port (%1) is the FTP port.").arg(in.klogPort)
-                         : QStringLiteral("klogsrv at %1:%2").arg(in.consoleIp).arg(in.klogPort);
-    k.fixText = ip && klogClash ? QStringLiteral("Change port") : QString();
+    k.label = k.done ? FW_TR("Kernel log configured") : FW_TR("Kernel log not configured");
+    k.detail = !ip ? FW_TR("Set the console's address first.")
+             : klogClash ? FW_TR("The kernel log port (%1) is the FTP port.").arg(in.klogPort)
+                         : FW_TR("klogsrv at %1:%2").arg(in.consoleIp).arg(in.klogPort);
+    k.fixText = ip && klogClash ? FW_TR("Change port") : QString();
     out << k;
 
     ChecklistItem p;
@@ -173,20 +190,20 @@ QList<ChecklistItem> setupChecklist(const ChecklistInputs& in)
     p.fixArgs = settingsArgs(ps5::keys::kPayloadPort);
     const bool payloadClash = in.payloadPort == in.ftpPort || in.payloadPort == in.klogPort;
     p.done = ip && !payloadClash;
-    p.label = p.done ? QStringLiteral("Payload port configured") : QStringLiteral("Payload port not configured");
-    p.detail = !ip ? QStringLiteral("Set the console's address first.")
-             : payloadClash ? QStringLiteral("The payload port (%1) is also the FTP or kernel log port.").arg(in.payloadPort)
-                            : QStringLiteral("Payload loader at %1:%2").arg(in.consoleIp).arg(in.payloadPort);
-    p.fixText = ip && payloadClash ? QStringLiteral("Change port") : QString();
+    p.label = p.done ? FW_TR("Payload port configured") : FW_TR("Payload port not configured");
+    p.detail = !ip ? FW_TR("Set the console's address first.")
+             : payloadClash ? FW_TR("The payload port (%1) is also the FTP or kernel log port.").arg(in.payloadPort)
+                            : FW_TR("Payload loader at %1:%2").arg(in.consoleIp).arg(in.payloadPort);
+    p.fixText = ip && payloadClash ? FW_TR("Change port") : QString();
     out << p;
 
     ChecklistItem l;
     l.id = QStringLiteral("payloads");
     l.done = in.payloadsReady > 0;
-    l.label = l.done ? QStringLiteral("Payloads added") : QStringLiteral("No payloads added");
-    l.detail = l.done ? QStringLiteral("%1 payload file%2 ready to send").arg(in.payloadsReady).arg(in.payloadsReady == 1 ? QString() : QStringLiteral("s"))
-                      : QStringLiteral("Add your .elf / .bin payloads on PS5 connect › Payloads.");
-    l.fixText = l.done ? QString() : QStringLiteral("Add payloads");
+    l.label = l.done ? FW_TR("Payloads added") : FW_TR("No payloads added");
+    l.detail = l.done ? (in.payloadsReady == 1 ? FW_TR("%1 payload file ready to send") : FW_TR("%1 payload files ready to send")).arg(in.payloadsReady)
+                      : FW_TR("Add your .elf / .bin payloads on PS5 connect › Payloads.");
+    l.fixText = l.done ? QString() : FW_TR("Add payloads");
     l.fixPage = QStringLiteral("ps5");
     l.fixArgs = {{QStringLiteral("tab"), QStringLiteral("payloads")}};
     out << l;
