@@ -68,6 +68,8 @@
 //   Tools          tools.languages.scan    {folder, batch}
 //                  tools.languages.strip   {gameRoot, remove: [..], backupFolder?}
 //                  tools.languages.restore {backupZip, gameRoot}
+//                  tools.dump.check        {folder, title?} → details = {folder, findings, counts, facts}
+//                                          (engines/tools/DumpCheck.h; reads the dump, changes nothing)
 //                  tools.report            {destinationFolder, logsFolder, extraFiles: [..], diagnostics: {}}
 
 #include "core/Result.h"
@@ -131,6 +133,10 @@ Result<QString> submitLanguageScan(AppContext& ctx, const QString& folder, bool 
 Result<QString> submitLanguageStrip(AppContext& ctx, const QString& gameRoot, const QStringList& remove,
                                     const QString& backupFolder);
 Result<QString> submitLanguageRestore(AppContext& ctx, const QString& backupZip, const QString& gameRoot);
+// tools.dump.check: a read-only check of the game dump in `folder` (structure,
+// executables, backport state, file names). `title`: the game's name for the
+// job's row ("Check Astro Bot"); empty = the folder's name.
+Result<QString> submitDumpCheck(AppContext& ctx, const QString& folder, const QString& title = {});
 // The ZIP holds the logs with the newest crash reports beside them (text),
 // the settings, history and queue files, `diagnostics` and `extraFiles`. Of
 // the extra files a memory dump (.dmp) is never passed on (it cannot be

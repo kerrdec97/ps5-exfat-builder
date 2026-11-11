@@ -1,6 +1,7 @@
 #include "app/pages/SettingsPage.h"
 
 #include "app/AppContext.h"
+#include "app/services/PortableMode.h"
 #include "app/ui/Components.h"
 #include "app/ui/Icons.h"
 #include "app/ui/Motion.h"
@@ -11,6 +12,7 @@
 
 #include <QAction>
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QDir>
 #include <QFileDialog>
@@ -273,6 +275,15 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     m_secCaption = caption({}, secHeader);
     m_secCaption->setWordWrap(true);
     scol->addWidget(m_secCaption);
+    // Tools lists components by the path they run from: say what that folder is.
+    m_secLink = new Link(QStringLiteral("Bundled components live in the unpacked program folder (Settings › Storage shows where)."), secHeader);
+    m_secLink->setFont(font::caption());
+    m_secLink->setWordWrap(true);
+    m_secLink->hide();
+    // Queued: opening Storage rebuilds the cards under the pointer.
+    connect(m_secLink, &Link::activated, this, [this] { navigateWith({{QStringLiteral("section"), QStringLiteral("Storage")}, {QStringLiteral("show"), QStringLiteral("locations")}}); },
+            Qt::QueuedConnection);
+    scol->addWidget(m_secLink);
     sh->addLayout(scol, 1);
     m_resetSection = button(QStringLiteral("Reset section"), ButtonVariant::Subtle, QStringLiteral("undo"), secHeader);
     m_resetSection->setToolTip(QStringLiteral("Put this section's settings back to their defaults"));
@@ -312,8 +323,13 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         refreshRow(key);
         refreshDependencyStates();
         updateSectionHeader();
-        if (key == general::keys::kTempFolder)
+        if (key == general::keys::kTempFolder) {
             updateTempUsage(); // "Temporary files" names and measures that folder too
+            if (m_tempLocation) {
+                m_tempLocation->setFullText(nativePath(tempLocation()));
+                m_tempLocation->setToolTip(plainTip(nativePath(tempLocation())));
+            }
+        }
     });
     connect(&m_ctx.settings(), &SettingsStore::resetDone, this, &SettingsPage::rebuild);
     connect(&m_ctx, &AppContext::dependenciesChecked, this, [this] {
@@ -493,6 +509,7 @@ void SettingsPage::rebuild()
         m_secTitle->setText(QStringLiteral("Search results"));
         m_secChanged->hide();
         m_resetSection->hide();
+        m_secLink->hide();
         int n = 0;
         for (const QString& s : m_sections) {
             std::vector<const SettingDef*> hits;
@@ -568,6 +585,7 @@ void SettingsPage::buildSection(const QString& section)
         m_cardsLayout->addWidget(card);
     }
     if (section == QLatin1String("Storage")) {
+        addLocationsCard();
         // Temporary files: the app's own temp root and, when one is chosen,
         // the temporary folder of this section (jobs run there then).
         auto* card = new Card(m_cards);
@@ -711,6 +729,223 @@ void SettingsPage::buildSection(const QString& section)
                                                 QStringLiteral("The modules that use this section are not part of this build."), m_cards));
 }
 
+namespace {
+
+// What Settings › Storage lists. Screenshots show an ordinary installation,
+// not the folders of the machine that renders them.
+struct StorageLocations {
+    QString launcherExe; // "" when the program was started directly
+    QString folderExe;   // the folder edition's exe when started directly from a release layout (GitHub #78)
+    QString program, data, logs, temp, cache;
+    QString marker;      // portable.txt, whether it exists or not
+    bool portable = false;
+    bool markerExists = false;
+    bool overridden = false;
+};
+
+StorageLocations storageLocations(const AppContext& ctx, const QString& temp)
+{
+    StorageLocations l;
+    if (qApp->property("fwScreenshotMode").toBool()) {
+        const QString local = QStringLiteral("C:/Users/you/AppData/Local/kerrdec97/");
+        l.launcherExe = QStringLiteral("C:/Users/you/Downloads/exFAT Image Builder.exe");
+        l.program = local + QStringLiteral("exFAT Image Builder/runtime/5.0.2-0f3a9c21d4b7");
+        l.data = QStringLiteral("C:/Users/you/AppData/Roaming/kerrdec97/exFAT Image Builder Farewell");
+        l.logs = local + QStringLiteral("exFAT Image Builder Farewell/logs");
+        l.temp = local + QStringLiteral("exFAT Image Builder Farewell/temp");
+        l.cache = local + QStringLiteral("exFAT Image Builder Farewell/cache");
+        l.marker = QStringLiteral("C:/Users/you/Downloads/portable.txt");
+        return l;
+    }
+    l.launcherExe = Paths::launcherExe();
+    if (l.launcherExe.isEmpty() && portable::isFolderEdition(QCoreApplication::applicationDirPath()))
+        l.folderExe = QDir::cleanPath(QCoreApplication::applicationFilePath());
+    l.program = Paths::programDir();
+    l.data = Paths::dataDir();
+    const QString logFile = ctx.logFilePath(); // the log folder in use (Settings › Logging may name another)
+    l.logs = logFile.isEmpty() ? Paths::logsDir() : QFileInfo(logFile).absolutePath();
+    l.temp = temp;
+    l.cache = Paths::cacheDir();
+    l.marker = Paths::portableMarkerFile();
+    l.portable = Paths::isPortable();
+    l.markerExists = !l.marker.isEmpty() && QFileInfo::exists(l.marker);
+    l.overridden = Paths::isOverridden();
+    return l;
+}
+
+} // namespace
+
+QString SettingsPage::tempLocation() const
+{
+    const QString custom = m_ctx.settings().value(general::keys::kTempFolder).toString().trimmed();
+    return !custom.isEmpty() && QFileInfo(custom).isDir() ? custom : Paths::tempRoot();
+}
+
+void SettingsPage::addLocationsCard()
+{
+    const StorageLocations at = storageLocations(m_ctx, tempLocation());
+    auto* card = new Card(m_cards);
+    card->setObjectName(QStringLiteral("locations-card"));
+    card->body()->setSpacing(0);
+    card->setTitle(QStringLiteral("Where the app keeps its files"));
+    m_locationsCard = card;
+
+    // One location: its name, the path in mono (cut in the middle, whole in the tooltip) and "Show in folder".
+    const auto showButton = [this, card](const QString& what, ElideLabel* path) {
+        auto* show = button(QStringLiteral("Show in folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), card);
+        setButtonSmall(show, true);
+        show->setAccessibleName(QStringLiteral("Show %1 in folder").arg(what));
+        const QPointer<ElideLabel> label(path);
+        connect(show, &QPushButton::clicked, this, [this, label] {
+            if (label && !openInFileManager(label->fullText()))
+                emit toastRequested(Tone::Warn, QStringLiteral("The folder is not there"), label->fullText());
+        });
+        return show;
+    };
+    const auto pathLabel = [card](const QString& path) {
+        auto* p = new ElideLabel(nativePath(path), Qt::ElideMiddle, card);
+        p->setObjectName(QStringLiteral("locationPath"));
+        p->setFont(font::mono());
+        setTextColor(p, color::fg_3);
+        p->setToolTip(plainTip(nativePath(path)));
+        return p;
+    };
+    const auto addLocation = [&](const QString& key, const QString& name, const QString& path) {
+        auto* row = new QWidget(card);
+        row->setObjectName(QStringLiteral("location-") + key);
+        auto* h = hbox(row, space::lg, QMargins(0, 8, 0, 8));
+        auto* col = new QVBoxLayout;
+        col->setSpacing(2);
+        col->addWidget(label(name, TextStyle::Body, color::fg_1, row));
+        ElideLabel* p = pathLabel(path);
+        col->addWidget(p);
+        h->addLayout(col, 1);
+        h->addWidget(showButton(name.toLower(), p), 0, Qt::AlignVCenter);
+        card->body()->addWidget(row);
+        card->body()->addWidget(hairline(card));
+        return p;
+    };
+    const bool fromLauncher = !at.launcherExe.isEmpty();
+    if (fromLauncher)
+        addLocation(QStringLiteral("exe"), QStringLiteral("The exe you start"), at.launcherExe);
+    addLocation(QStringLiteral("program"), fromLauncher ? QStringLiteral("Unpacked program") : QStringLiteral("Program"), at.program);
+    addLocation(QStringLiteral("data"), QStringLiteral("Settings, queue and history"), at.data);
+    addLocation(QStringLiteral("logs"), QStringLiteral("Logs"), at.logs);
+    m_tempLocation = addLocation(QStringLiteral("temp"), QStringLiteral("Temporary files"), at.temp);
+    addLocation(QStringLiteral("cache"), QStringLiteral("Covers and downloaded updates"), at.cache);
+
+    // Portable mode: how to move all of the above next to the exe.
+    auto* prow = new QWidget(card);
+    prow->setObjectName(QStringLiteral("portable-row"));
+    auto* ph = hbox(prow, space::lg, QMargins(0, 10, 0, 2));
+    auto* col = new QVBoxLayout;
+    col->setSpacing(4);
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(space::sm);
+    titleRow->addWidget(label(QStringLiteral("Portable mode"), TextStyle::BodyStrong, color::fg_0, prow));
+    const bool pending = at.markerExists && !at.portable; // the file is there, this run started without it
+    auto* badge = new Badge(at.portable ? QStringLiteral("On") : pending ? QStringLiteral("After restart") : QStringLiteral("Off"),
+                            at.portable ? Tone::Ok : pending ? Tone::Info : Tone::Neutral, prow);
+    badge->setObjectName(QStringLiteral("portable-badge"));
+    titleRow->addWidget(badge, 0, Qt::AlignVCenter);
+    titleRow->addStretch(1);
+    col->addLayout(titleRow);
+    auto* what = caption(QStringLiteral("Keeps the unpacked program, settings, queue and logs in folders next to the exe, for example on an external drive."), prow);
+    what->setWordWrap(true);
+    col->addWidget(what);
+    ph->addLayout(col, 1);
+    const auto note = [prow, col](const QString& text) {
+        auto* l = caption(text, prow);
+        l->setObjectName(QStringLiteral("portable-note"));
+        l->setWordWrap(true);
+        col->addWidget(l);
+    };
+    if (at.portable || pending) {
+        ElideLabel* marker = pathLabel(at.marker);
+        col->addWidget(marker);
+        note(at.portable ? QStringLiteral("To turn it off, delete portable.txt and start the app again. The folders next to the exe stay.")
+                         : QStringLiteral("portable.txt is in place. Close the app and start it again to switch; delete the file to stay as you are."));
+        ph->addWidget(showButton(QStringLiteral("portable.txt"), marker), 0, Qt::AlignTop);
+    } else {
+        auto* make = button(QStringLiteral("Make this copy portable…"), ButtonVariant::Secondary, {}, prow);
+        make->setObjectName(QStringLiteral("make-portable"));
+        const bool canMake = fromLauncher || !at.folderExe.isEmpty();
+        make->setEnabled(canMake);
+        if (!canMake) {
+            const QString why = QStringLiteral("This copy was started without the single-file exe (a developer run), so there is no exe to make portable.");
+            make->setToolTip(why);
+            note(why);
+        }
+        connect(make, &QPushButton::clicked, this, &SettingsPage::makePortable);
+        ph->addWidget(make, 0, Qt::AlignTop);
+    }
+    if (at.overridden && !qEnvironmentVariable("FW_DATA_DIR").isEmpty())
+        note(QStringLiteral("FW_DATA_DIR names the data folder for this run and wins over portable mode while it is set."));
+    card->body()->addWidget(prow);
+    // Right under the section's first card (the folders one chooses), not below every other setting.
+    m_cardsLayout->insertWidget(std::min(1, int(m_cardsLayout->count())), card);
+}
+
+Sheet* SettingsPage::buildPortableSheet(const portable::Plan& plan, QCheckBox*& copy)
+{
+    auto* s = new Sheet(window(), QStringLiteral("Make this copy portable?"), Sheet::Icon::Info, size::dialogWide);
+    s->addText(QStringLiteral("This creates %1 next to %2.").arg(Sheet::monoSpan(QStringLiteral("portable.txt")), Sheet::monoSpan(nativePath(plan.exePath))));
+    if (plan.unpacks)
+        s->addText(QStringLiteral("From the next start the app unpacks itself to %1 and keeps settings, queue, history and logs in %2.")
+                       .arg(Sheet::monoSpan(nativePath(plan.programDir)), Sheet::monoSpan(nativePath(plan.dataDir))));
+    else
+        s->addText(QStringLiteral("From the next start the app keeps settings, queue, history and logs in %1.").arg(Sheet::monoSpan(nativePath(plan.dataDir))));
+    copy = s->addCheckbox(QStringLiteral("Copy my settings and queue"));
+    copy->setChecked(true);
+    copy->setToolTip(QStringLiteral("Settings, queue, history and the library list are copied; a file that is already in the new folder is kept."));
+    s->addText(QStringLiteral("With the box ticked, your current settings, queue and history are copied there. The old folders are left "
+                              "in place and can be deleted later. The app must be restarted to switch."));
+    s->addButton(QStringLiteral("Cancel"), Sheet::Role::Safe);
+    s->addButton(QStringLiteral("Make portable"), Sheet::Role::Primary);
+    return s;
+}
+
+void SettingsPage::makePortable()
+{
+    const QString exe = Paths::launcherExe();
+    portable::Plan plan;
+    if (!exe.isEmpty())
+        plan = portable::planFor(exe, Paths::dataDir());
+    else if (portable::isFolderEdition(QCoreApplication::applicationDirPath()))
+        plan = portable::planForFolderEdition(QCoreApplication::applicationFilePath(), Paths::dataDir());
+    else
+        return;
+    QCheckBox* copy = nullptr;
+    Sheet* s = buildPortableSheet(plan, copy);
+    if (s->exec() != 1)
+        return;
+    const bool copyData = copy->isChecked(); // the sheet's widgets live until the event loop runs again
+    (void)m_ctx.settings().save(); // what is copied is what is on disk
+    const auto done = portable::makePortable(plan, copyData);
+    if (!done.ok()) {
+        Log(QStringLiteral("app")).warn(QStringLiteral("Portable mode was not set up: %1").arg(done.error().toLogString()));
+        Sheet::message(window(), QStringLiteral("This copy was not made portable"), done.error().message, Sheet::Icon::Error);
+        return;
+    }
+    Log(QStringLiteral("app")).info(QStringLiteral("Portable mode set up: %1 (%2 file(s) copied, %3 kept)")
+                                        .arg(nativePath(plan.markerFile)).arg(done->copied.size()).arg(done->kept.size()));
+    rebuild(); // the row now says "After restart"
+    QString text = plan.unpacks ? QStringLiteral("Close the app and start %1 again. It unpacks itself next to the exe once (a few seconds) and uses the folders there from then on.")
+                                      .arg(Sheet::monoSpan(nativePath(plan.exePath)))
+                                : QStringLiteral("Close the app and start %1 again. It uses the folders there from then on.").arg(Sheet::monoSpan(nativePath(plan.exePath)));
+    if (!done->copied.isEmpty())
+        text += QStringLiteral("<br><br>Copied to %1: %2.").arg(Sheet::monoSpan(nativePath(plan.dataDir)), Sheet::monoSpan(done->copied.join(QStringLiteral(", "))));
+    if (!done->kept.isEmpty())
+        text += QStringLiteral("<br><br>Already there and kept as they were: %1.").arg(Sheet::monoSpan(done->kept.join(QStringLiteral(", "))));
+    if (plan.unpacks)
+        text += QStringLiteral("<br><br>The old folders are still in place: %1 and %2. Delete them once the portable copy works for you.")
+                    .arg(Sheet::monoSpan(nativePath(plan.currentDataDir)), Sheet::monoSpan(nativePath(Paths::programDir())));
+    else
+        text += QStringLiteral("<br><br>The old folder is still in place: %1. Delete it once the portable copy works for you.")
+                    .arg(Sheet::monoSpan(nativePath(plan.currentDataDir)));
+    Sheet::message(window(), QStringLiteral("Portable from the next start"), text, Sheet::Icon::Info);
+}
+
 void SettingsPage::updateTempUsage()
 {
     if (!m_tempUsage)
@@ -805,6 +1040,7 @@ void SettingsPage::updateSectionHeader()
         if (!m_ctx.settings().isDefault(d->key))
             ++differ;
     m_secCaption->setText(sectionCaption(m_section));
+    m_secLink->setVisible(m_section == QLatin1String("Tools"));
     m_secChanged->setText(QStringLiteral("%1 changed").arg(differ));
     m_secChanged->setToolTip(QStringLiteral("%1 setting%2 in this section differ%3 from the defaults")
                                  .arg(differ).arg(differ == 1 ? QString() : QStringLiteral("s")).arg(differ == 1 ? QStringLiteral("s") : QString()));
@@ -937,6 +1173,13 @@ void SettingsPage::navigateWith(const QVariantMap& args)
         m_fixBar->setMessage(how);
         m_fixBar->show();
     }
+    if (args.value(QStringLiteral("show")).toString() == QLatin1String("locations") && m_locationsCard) {
+        // Once the new cards have their places.
+        QTimer::singleShot(0, this, [this] {
+            if (m_locationsCard)
+                scrollArea()->ensureWidgetVisible(m_locationsCard, 0, 40);
+        });
+    }
     if (SettingRow* row = m_rows.value(key)) {
         scrollArea()->ensureWidgetVisible(row, 0, 80);
         window()->setAttribute(Qt::WA_KeyboardFocusChange, true);
@@ -960,12 +1203,22 @@ QStringList SettingsPage::demoStates() const
     QStringList out;
     for (const QString& s : m_sections)
         out << QStringLiteral("section-") + s.toLower().replace(u' ', u'-');
-    out << QStringLiteral("reset-dialog");
+    out << QStringLiteral("portable-sheet") << QStringLiteral("reset-dialog");
     return out;
 }
 
 void SettingsPage::applyDemoState(const QString& name)
 {
+    if (name == QLatin1String("portable-sheet")) {
+        showSection(QStringLiteral("Storage"));
+        QCheckBox* copy = nullptr;
+        Sheet* s = buildPortableSheet(portable::planFor(QStringLiteral("E:/Apps/exFAT Image Builder.exe"),
+                                                        QStringLiteral("C:/Users/you/AppData/Roaming/kerrdec97/exFAT Image Builder Farewell")),
+                                      copy);
+        s->open();
+        m_demoSheet = s;
+        return;
+    }
     if (name == QLatin1String("reset-dialog")) {
         auto* s = new Sheet(window(), QStringLiteral("Reset every setting?"), Sheet::Icon::Warning);
         s->addText(QStringLiteral("All sections go back to their defaults. Tool paths you entered are cleared too. Jobs already in the queue keep their settings."));

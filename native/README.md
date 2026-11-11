@@ -31,6 +31,11 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
   `portable.txt` next to the exe, the unpacked copy goes to
   `exFAT Image Builder.data\` and settings and logs to `data\` beside it.
   To remove the app, delete the exe and that `runtime` folder.
+* **Folder edition**: `exFAT-Image-Builder-<version>-win64-folder.zip` is the
+  same program already unpacked. Extract it anywhere (an external drive
+  works) and run the exe inside; nothing is unpacked to your profile. Use it
+  when an antivirus removes the single exe. `portable.txt` next to that exe
+  keeps settings and logs in `data\` beside it.
 * Verify the download with `SHA256SUMS.txt` from the same release.
 
 ## Where things are stored
@@ -40,6 +45,11 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
 | Settings, queue, history | `%APPDATA%\kerrdec97\exFAT Image Builder Farewell` | `<app>\data` |
 | Logs (text + JSON lines), crash reports | `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder Farewell\logs` (or Settings › Logging › Log folder) | `<app>\data\logs` |
 | Temporary files | `%LOCALAPPDATA%\...\temp` (or Settings › Storage › Temporary folder); folders older than a day are removed at start | `<app>\data\temp` |
+
+Settings › Storage lists these folders as they are on your PC ("Where the app
+keeps its files"). **Make this copy portable…** there creates `portable.txt`
+next to the exe and copies your settings, queue and history; the switch
+happens at the next start and the old folders stay until you delete them.
 
 Settings from the legacy app (`~/.exfat_builder_settings.json`) can be
 imported from Settings › Advanced.
