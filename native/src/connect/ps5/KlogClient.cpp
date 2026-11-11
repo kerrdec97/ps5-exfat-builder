@@ -1,6 +1,7 @@
 #include "connect/ps5/KlogClient.h"
 
 #include "connect/ps5/SocketWait.h"
+#include "core/Tr.h"
 
 #include <QElapsedTimer>
 #include <QTcpSocket>
@@ -44,11 +45,11 @@ QString klogTagName(KlogTag tag)
 QString klogStateName(KlogState s)
 {
     switch (s) {
-    case KlogState::Connecting: return QStringLiteral("Connecting");
-    case KlogState::Connected: return QStringLiteral("Connected");
-    case KlogState::Disconnected: return QStringLiteral("Disconnected");
-    case KlogState::Reconnecting: return QStringLiteral("Reconnecting");
-    case KlogState::Stopped: return QStringLiteral("Stopped");
+    case KlogState::Connecting: return FW_TR("Connecting");
+    case KlogState::Connected: return FW_TR("Connected");
+    case KlogState::Disconnected: return FW_TR("Disconnected");
+    case KlogState::Reconnecting: return FW_TR("Reconnecting");
+    case KlogState::Stopped: return FW_TR("Stopped");
     }
     return {};
 }
@@ -135,7 +136,7 @@ void KlogClient::run()
     bool first = true;
     while (!token.isCancelled()) {
         if (!first) {
-            state(KlogState::Reconnecting, QStringLiteral("retrying in %1 s").arg(m_opt.reconnectDelayMs / 1000.0));
+            state(KlogState::Reconnecting, FW_TR("retrying in %1 s").arg(m_opt.reconnectDelayMs / 1000.0));
             if (!token.sleepFor(m_opt.reconnectDelayMs))
                 break;
         }
@@ -153,7 +154,7 @@ void KlogClient::run()
             continue;
         }
         m_connections.fetch_add(1);
-        state(KlogState::Connected, QStringLiteral("Connected to %1:%2").arg(m_opt.host).arg(m_opt.port));
+        state(KlogState::Connected, FW_TR("Connected to %1:%2").arg(m_opt.host).arg(m_opt.port));
         KlogLineSplitter split;
         while (!token.isCancelled()) {
             if (s.bytesAvailable() > 0) {
@@ -177,7 +178,7 @@ void KlogClient::run()
         s.abort();
         if (token.isCancelled())
             break;
-        state(KlogState::Disconnected, QStringLiteral("The kernel log stream closed."));
+        state(KlogState::Disconnected, FW_TR("The kernel log stream closed."));
         if (!m_opt.reconnect)
             break;
     }

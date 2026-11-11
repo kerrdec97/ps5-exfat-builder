@@ -3,6 +3,7 @@
 #include "core/BuildInfo.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
+#include "core/Tr.h" // FW_TR_NOOP: the job's texts stay English (logged); the window translates them where it shows them
 
 #include <QDateTime>
 #include <QDir>
@@ -212,7 +213,7 @@ public:
             return answer.takeError();
         const int status = answer->status;
         if (status == 404)
-            return outcomeUpToDate(QStringLiteral("No release has been published yet."));
+            return outcomeUpToDate(FW_TR_NOOP("No release has been published yet."));
         if (status == 403 || status == 429)
             return Error(ErrorCode::ExternalToolFailed, rateLimitMessage(answer->rateLimitReset));
         if (status != 200)
@@ -227,14 +228,14 @@ public:
         o.details = rel->toJson();
         o.details.insert(QStringLiteral("upToDate"), !rel->newerThanRunning);
         if (!rel->newerThanRunning) {
-            o.summary = QStringLiteral("You have the latest version.");
+            o.summary = FW_TR_NOOP("You have the latest version.");
         } else if (rel->canDownload()) {
             o.summary = QStringLiteral("Version %1 is available.").arg(rel->version);
         } else {
             // Still an update: the user is sent to the release page instead.
             o.summary = QStringLiteral("Version %1 is available on the release page.").arg(rel->version);
             o.details.insert(QStringLiteral("note"),
-                             QStringLiteral("This release has no download the app can check itself. Get it from the release page."));
+                             FW_TR_NOOP("This release has no download the app can check itself. Get it from the release page."));
         }
         o.verification = Verification::Skipped;
         ctx.log.info(o.summary);
@@ -246,7 +247,7 @@ private:
     static JobOutcome outcomeUpToDate(const QString& why)
     {
         JobOutcome o;
-        o.summary = QStringLiteral("You have the latest version.");
+        o.summary = FW_TR_NOOP("You have the latest version.");
         o.details.insert(QStringLiteral("upToDate"), true);
         o.details.insert(QStringLiteral("note"), why);
         o.verification = Verification::Skipped;

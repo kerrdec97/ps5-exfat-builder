@@ -3,6 +3,7 @@
 #include "connect/ps5/ConsoleBackup.h"
 #include "connect/ps5/RemotePath.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/gameinfo/JsonText.h"
 
 #include <QDir>
@@ -388,6 +389,8 @@ using DbVerify = PatchCheck (*)(const QString&, const QString&);
 
 } // namespace
 
+// The file details here are only shown (the Y2JB tab's result sheet): marked for translation. The
+// verifiers' reasons and the FTP job's details stay English: that job logs them and keeps them in its details.
 Result<Y2jbReport> patchLocalFolder(const QString& folder, Y2jbRegion region)
 {
     if (!QFileInfo(folder).isDir())
@@ -400,7 +403,7 @@ Result<Y2jbReport> patchLocalFolder(const QString& folder, Y2jbRegion region)
         Y2jbFileResult r{QStringLiteral("param.json"), pj, {}, {}, {}};
         if (!QFileInfo(pj).isFile()) {
             r.status = QStringLiteral("○");
-            r.detail = QStringLiteral("not found");
+            r.detail = FW_TR("not found");
         } else {
             QFile f(pj);
             QByteArray text;
@@ -417,7 +420,7 @@ Result<Y2jbReport> patchLocalFolder(const QString& folder, Y2jbRegion region)
                 r.detail = kNothingToBlock;
             } else if (!QFile::copy(pj, bak)) {
                 r.status = QStringLiteral("!");
-                r.detail = QStringLiteral("the backup could not be written; the file was not changed");
+                r.detail = FW_TR("the backup could not be written; the file was not changed");
             } else if (auto st = writeFileAtomic(pj, patched.value()); !st.ok()) {
                 r.status = QStringLiteral("!");
                 r.detail = st.error().message;
@@ -426,10 +429,10 @@ Result<Y2jbReport> patchLocalFolder(const QString& folder, Y2jbRegion region)
                 r.backup = bak;
                 QFile back(pj);
                 const PatchCheck v = back.open(QIODevice::ReadOnly) ? verifyParamJsonText(back.readAll())
-                                                                     : PatchCheck{false, QStringLiteral("could not read it back")};
+                                                                     : PatchCheck{false, FW_TR("could not read it back")};
                 r.status = v.ok ? QStringLiteral("✓") : QStringLiteral("✗");
-                r.detail = v.ok ? QStringLiteral("patched + verified (%1)").arg(v.reason)
-                                : QStringLiteral("patched but VERIFICATION FAILED: ") + v.reason;
+                r.detail = v.ok ? FW_TR("patched + verified (%1)").arg(v.reason)
+                                : FW_TR("patched but VERIFICATION FAILED: %1").arg(v.reason);
                 if (!v.ok)
                     rep.verifyFailures << QStringLiteral("param.json: ") + v.reason;
             }
@@ -447,14 +450,14 @@ Result<Y2jbReport> patchLocalFolder(const QString& folder, Y2jbRegion region)
         Y2jbFileResult r{QLatin1String(db.name), path, {}, {}, {}};
         if (!QFileInfo(path).isFile()) {
             r.status = QStringLiteral("○");
-            r.detail = QStringLiteral("not found — skipped");
+            r.detail = FW_TR("not found — skipped");
             rep.files.push_back(r);
             continue;
         }
         const QString bak = freeBackupName(path);
         if (!QFile::copy(path, bak)) {
             r.status = QStringLiteral("!");
-            r.detail = QStringLiteral("the backup could not be written; the file was not changed");
+            r.detail = FW_TR("the backup could not be written; the file was not changed");
             rep.files.push_back(r);
             continue;
         }
@@ -465,13 +468,13 @@ Result<Y2jbReport> patchLocalFolder(const QString& folder, Y2jbRegion region)
             r.detail = rows.error().message;
         } else if (rows.value() == 0) {
             r.status = QStringLiteral("✗");
-            r.detail = QStringLiteral("NO ROWS for %1 (wrong region selected, or YouTube not installed in this dump?)").arg(tid);
+            r.detail = FW_TR("NO ROWS for %1 (wrong region selected, or YouTube not installed in this dump?)").arg(tid);
             rep.verifyFailures << QStringLiteral("%1: 0 rows matched %2").arg(QLatin1String(db.name), tid);
         } else {
             const PatchCheck v = db.verify(path, tid);
             r.status = v.ok ? QStringLiteral("✓") : QStringLiteral("✗");
-            r.detail = v.ok ? QStringLiteral("patched + verified (%1)").arg(v.reason)
-                            : QStringLiteral("patched but VERIFY FAILED: ") + v.reason;
+            r.detail = v.ok ? FW_TR("patched + verified (%1)").arg(v.reason)
+                            : FW_TR("patched but VERIFY FAILED: %1").arg(v.reason);
             if (!v.ok)
                 rep.verifyFailures << QStringLiteral("%1: %2").arg(QLatin1String(db.name), v.reason);
         }
@@ -860,7 +863,7 @@ const QList<Y2jbYoutubeVersion>& y2jbYoutubeVersions()
 {
     static const QList<Y2jbYoutubeVersion> v = {
         {QStringLiteral("4.03"), QStringLiteral("12.40"), QStringLiteral("v01.000.003"),
-         QStringLiteral("Y2JB 1.6 (Lapse up to 10.01, Y2JB's kernel exploit above)"), QStringLiteral("Gezine/Y2JB 1.6")},
+         FW_TR_NOOP("Y2JB 1.6 (Lapse up to 10.01, Y2JB's kernel exploit above)"), QStringLiteral("Gezine/Y2JB 1.6")},
         {QStringLiteral("12.60"), QStringLiteral("13.20"), QStringLiteral("v01.000.030"), QStringLiteral("Y2JB 1.6"),
          QStringLiteral("Gezine/Y2JB 1.6")},
         {QStringLiteral("13.40"), QStringLiteral("13.60"), QStringLiteral("v01.009.253"), QStringLiteral("Relapse (notmaj0r)"),
