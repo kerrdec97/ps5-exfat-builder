@@ -40,7 +40,7 @@ namespace {
 // source list. A catalogue that is not named here may be partial.
 const QStringList& shipped()
 {
-    static const QStringList codes = {QStringLiteral("de"), QStringLiteral("es"), QStringLiteral("fr"), QStringLiteral("id"), QStringLiteral("it"), QStringLiteral("ja"), QStringLiteral("ko"), QStringLiteral("nl"), QStringLiteral("pl"), QStringLiteral("pt-BR"), QStringLiteral("ru"), QStringLiteral("th"), QStringLiteral("tr"), QStringLiteral("vi"), QStringLiteral("zh-CN")};
+    static const QStringList codes = {QStringLiteral("ar"), QStringLiteral("bg"), QStringLiteral("bn"), QStringLiteral("cs"), QStringLiteral("da"), QStringLiteral("de"), QStringLiteral("el"), QStringLiteral("es"), QStringLiteral("et"), QStringLiteral("fa"), QStringLiteral("fi"), QStringLiteral("fil"), QStringLiteral("fr"), QStringLiteral("he"), QStringLiteral("hi"), QStringLiteral("hr"), QStringLiteral("hu"), QStringLiteral("id"), QStringLiteral("it"), QStringLiteral("ja"), QStringLiteral("ko"), QStringLiteral("lt"), QStringLiteral("lv"), QStringLiteral("ms"), QStringLiteral("nb"), QStringLiteral("nl"), QStringLiteral("pl"), QStringLiteral("pt-BR"), QStringLiteral("pt-PT"), QStringLiteral("ro"), QStringLiteral("ru"), QStringLiteral("sk"), QStringLiteral("sl"), QStringLiteral("sr-Latn"), QStringLiteral("sv"), QStringLiteral("th"), QStringLiteral("tr"), QStringLiteral("uk"), QStringLiteral("ur"), QStringLiteral("vi"), QStringLiteral("zh-CN"), QStringLiteral("zh-TW")};
     return codes;
 }
 

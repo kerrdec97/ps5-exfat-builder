@@ -4,6 +4,8 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Style.h"
 
+#include "core/Tr.h"
+
 #include <QApplication>
 #include <QFontDatabase>
 #include <QPalette>
@@ -55,19 +57,34 @@ QLinearGradient sweep(const QRectF& r, QColor a, QColor b, int alpha)
 
 } // namespace
 
+// Scripts whose letters are taller than Segoe UI's: drawn in a fallback font,
+// they would be clipped by line heights measured with Segoe UI (vowel signs
+// above Devanagari and Bengali letters). For those interface languages the
+// Windows font made for the script comes first; it has Latin letters too.
+static QStringList scriptFamilies()
+{
+    const QString code = i18n::currentCode().section(u'-', 0, 0);
+    static const QStringList indic = {QStringLiteral("hi"), QStringLiteral("bn"), QStringLiteral("mr"), QStringLiteral("ne"),
+                                      QStringLiteral("ta"), QStringLiteral("te"), QStringLiteral("kn"), QStringLiteral("ml"),
+                                      QStringLiteral("gu"), QStringLiteral("pa"), QStringLiteral("or"), QStringLiteral("si")};
+    if (indic.contains(code))
+        return {QStringLiteral("Nirmala UI"), QStringLiteral("Nirmala Text"), QStringLiteral("Noto Sans Devanagari")};
+    return {};
+}
+
 QString sansFamily()
 {
-    static const QString family = pickFamily({QStringLiteral("Segoe UI Variable Text"), QStringLiteral("Segoe UI"),
-                                              QStringLiteral("Inter"), QStringLiteral("Noto Sans"),
-                                              QStringLiteral("DejaVu Sans")},
+    static const QString family = pickFamily(scriptFamilies() + QStringList{QStringLiteral("Segoe UI Variable Text"), QStringLiteral("Segoe UI"),
+                                                                            QStringLiteral("Inter"), QStringLiteral("Noto Sans"),
+                                                                            QStringLiteral("DejaVu Sans")},
                                              QApplication::font().family());
     return family;
 }
 
 static QString displayFamily()
 {
-    static const QString family = pickFamily({QStringLiteral("Segoe UI Variable Display"), QStringLiteral("Segoe UI"),
-                                              QStringLiteral("Inter Display"), QStringLiteral("Inter")},
+    static const QString family = pickFamily(scriptFamilies() + QStringList{QStringLiteral("Segoe UI Variable Display"), QStringLiteral("Segoe UI"),
+                                                                            QStringLiteral("Inter Display"), QStringLiteral("Inter")},
                                              sansFamily());
     return family;
 }

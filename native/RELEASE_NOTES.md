@@ -51,12 +51,15 @@ Images built with 5.0.1 stay valid.
   be "PPSA01234 - Title" or follow your own template, with a live preview.
 * **Folder edition** (#78): each release also offers the program as a zip,
   already unpacked, for PCs whose antivirus removes the single exe.
-* **Languages are back** (#35, #89): Settings › General › Language offers
-  the 15 languages of version 4 next to English: Deutsch, Español, Français, Bahasa Indonesia, Italiano, Nederlands, Polski, Português (Brasil), Русский, Türkçe, Tiếng Việt, ไทย, 日本語, 한국어 and 简体中文. The interface switches after a restart
-  ("Restart now"). Log files and error details from the engines stay in
-  English. The translations are machine-made; "Show in folder" next to the
-  setting opens a folder where you can correct a translation or add a
-  language yourself (README.txt there says how).
+* **Languages are back** (#35, #89): Settings › General › Language offers 42
+  languages next to English: every language Windows 11 itself ships in, plus
+  Persian, Urdu, Hindi, Bengali, Malay and Filipino. Arabic, Persian, Hebrew
+  and Urdu mirror the whole window (right to left); paths, IDs and logs stay
+  left to right. The interface switches after a restart ("Restart now"). Log
+  files and error details from the engines stay in English. The translations
+  are machine-made; "Show in folder" next to the setting opens a folder where
+  you can correct a translation or add a language yourself (README.txt there
+  says how).
 
 ### Safety of your files
 * **Unpacking a crafted packed game or image can no longer write outside the
@@ -494,9 +497,9 @@ interface before this release. What changed:
 ## Known limitations
 * Not code-signed; some antivirus engines flag unsigned self-extracting
   programs by heuristics. Check the SHA-256, or use the folder edition.
-* Interface languages: English and 15 machine-made translations. Log files
-  and engine error details are in English. Arabic (right to left) is not
-  offered yet.
+* Interface languages: English and 42 machine-made translations, not yet
+  reviewed by native speakers. Log files and engine error details are in
+  English.
 * Images from untrusted sources are checked as they are read, but the app is
   not a sandbox: open only images you trust.
 

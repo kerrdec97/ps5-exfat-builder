@@ -13,8 +13,8 @@ refresh of the interface. From the GitHub issues: `ampr_emu.index` for exFAT
 and FFPKG builds again (#93), Add to queue makes a list (#87), 7z and RAR
 build sources (#37), Check dump (#26), Settings › Storage shows every folder
 and makes the app portable (#91, #90), easy image renaming (#88), a folder
-edition for PCs whose antivirus removes the exe (#78), and 15 interface
-languages (#35, #89). The full notes are in
+edition for PCs whose antivirus removes the exe (#78), and 42 interface
+languages, right to left included (#35, #89). The full notes are in
 `native/RELEASE_NOTES.md`.
 
 ## [5.0.1] - 2026-11-08 — version 5
