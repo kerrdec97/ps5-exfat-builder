@@ -419,7 +419,7 @@ private slots:
                 auto* name = s->findChild<QLineEdit*>();
                 QPushButton* stage = nullptr;
                 for (auto* b : s->findChildren<QPushButton*>())
-                    if (b->text() == QLatin1String("Stage"))
+                    if (b->text() == QLatin1String("Stage change"))
                         stage = b;
                 if (!name || !stage) {
                     s->close(0);

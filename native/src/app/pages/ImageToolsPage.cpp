@@ -1388,7 +1388,7 @@ QString ImageToolsPage::askName(Sheet* s, QLineEdit* name)
     auto* why = new MessageRow(s);
     s->body()->addWidget(why);
     s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
-    QPushButton* stageButton = s->addButton(FW_TR("Stage"), Sheet::Role::Primary);
+    QPushButton* stageButton = s->addButton(FW_TR("Stage change"), Sheet::Role::Primary);
     const QString format = m_tree.format;
     const auto check = [name, why, format] {
         const QString problem = imageNameProblem(name->text().trimmed(), format);

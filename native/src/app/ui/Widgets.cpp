@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -24,6 +25,7 @@
 #include <QRegularExpression>
 #include <QStyle>
 #include <QStyleOption>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -107,6 +109,41 @@ QLabel* monoLabel(const QString& text, QWidget* parent, const QColor& color)
 QLabel* heading(const QString& text, TextStyle style, QWidget* parent)
 {
     return label(text, style, color::fg_0, parent);
+}
+
+namespace {
+class WrappedHeightKeeper final : public QObject {
+    bool m_pending = false;
+
+public:
+    using QObject::QObject;
+    bool eventFilter(QObject* watched, QEvent* e) override
+    {
+        if ((e->type() == QEvent::Resize || e->type() == QEvent::FontChange) && !m_pending) {
+            // After the layout pass that sent this event: a minimum set while
+            // the layout is being applied is not acted on.
+            m_pending = true;
+            QPointer<QLabel> l = static_cast<QLabel*>(watched);
+            QTimer::singleShot(0, this, [this, l] {
+                m_pending = false;
+                if (!l)
+                    return;
+                const int h = l->text().isEmpty() ? 0 : std::max(0, l->heightForWidth(l->width()));
+                if (h != l->minimumHeight())
+                    l->setMinimumHeight(h); // only the height: the width, and so this value, stays as it is
+            });
+        }
+        return false;
+    }
+};
+} // namespace
+
+void keepWrappedHeight(QLabel* label)
+{
+    if (!label)
+        return;
+    label->setWordWrap(true);
+    label->installEventFilter(new WrappedHeightKeeper(label));
 }
 
 ElideLabel::ElideLabel(const QString& text, Qt::TextElideMode mode, QWidget* parent)

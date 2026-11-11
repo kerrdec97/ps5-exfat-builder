@@ -848,7 +848,7 @@ void BackportPage::buildSideColumn(QVBoxLayout* into)
         col->setSpacing(1);
         auto* t = label(text, TextStyle::Body, color::fg_1, row);
         auto* d = label(desc, TextStyle::Caption, color::fg_3, row);
-        d->setWordWrap(true);
+        keepWrappedHeight(d); // a long translation wraps to more lines
         t->setToolTip(tip(tooltip));
         d->setToolTip(tip(tooltip));
         col->addWidget(t);

@@ -40,7 +40,7 @@ namespace {
 // source list. A catalogue that is not named here may be partial.
 const QStringList& shipped()
 {
-    static const QStringList codes = {QStringLiteral("de"), QStringLiteral("zh-CN")};
+    static const QStringList codes = {QStringLiteral("de"), QStringLiteral("es"), QStringLiteral("fr"), QStringLiteral("id"), QStringLiteral("it"), QStringLiteral("ja"), QStringLiteral("ko"), QStringLiteral("nl"), QStringLiteral("pl"), QStringLiteral("pt-BR"), QStringLiteral("ru"), QStringLiteral("th"), QStringLiteral("tr"), QStringLiteral("vi"), QStringLiteral("zh-CN")};
     return codes;
 }
 

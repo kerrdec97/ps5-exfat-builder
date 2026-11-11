@@ -48,6 +48,11 @@ void setTextColor(QWidget* w, const QColor& color);
 // Tooltip text that is shown literally: escaped, and wrapped by Qt like any
 // rich-text tooltip (a plain one is a single long line). "" stays "".
 QString plainTip(const QString& text);
+// A word-wrapped label in nested layouts can be squeezed below the height its
+// text needs once the page is taller than its scroll area (a long translation
+// wraps to more lines). This keeps the label's minimum height at what its
+// current width needs.
+void keepWrappedHeight(QLabel* label);
 // A label that elides long text (middle for paths, right for titles).
 class ElideLabel : public QLabel {
     Q_OBJECT
