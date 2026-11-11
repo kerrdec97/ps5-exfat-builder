@@ -3,6 +3,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Motion.h"
 #include "app/ui/Style.h"
+#include "core/Tr.h"
 
 #include <QContextMenuEvent>
 #include <QFileInfo>
@@ -119,8 +120,8 @@ LibraryGrid::LibraryGrid(QWidget* parent) : QWidget(parent)
     setAttribute(Qt::WA_Hover);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     setProperty("fwNoRing", true); // the current item shows the focus itself
-    setAccessibleName(QStringLiteral("Items"));
-    m_headers = {QStringLiteral("Title"), QStringLiteral("ID · version"), QStringLiteral("Size"), QStringLiteral("Formats"), QStringLiteral("Status")};
+    setAccessibleName(FW_TR("Items"));
+    m_headers = {FW_TR("Title"), FW_TR("ID · version"), FW_TR("Size"), FW_TR("Formats"), FW_TR("Status")};
     m_hover = new motion::HoverFade(this, [this](int i) {
         if (i < count())
             update(itemRect(i).adjusted(-4, -4, 4, 4)); // one tile, not the grid

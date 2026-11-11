@@ -7,6 +7,7 @@
 #include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/general/Module.h"
 
 #include <QApplication>
@@ -296,9 +297,10 @@ void StageList::setStages(const QStringList& names)
         row.widget->setFixedHeight(m_compact ? 22 : 26);
         auto* h = hbox(row.widget, space::sm);
         row.icon = new StageMark(row.widget);
-        row.name = new ElideLabel(n, Qt::ElideRight, row.widget);
+        const QString shownName = i18n::translate(n); // stage names are the engines' English
+        row.name = new ElideLabel(shownName, Qt::ElideRight, row.widget);
         row.name->setFont(font::body());
-        row.name->setToolTip(plainTip(n));
+        row.name->setToolTip(plainTip(shownName));
         row.time = label({}, TextStyle::MonoSmall, color::fg_3, row.widget);
         row.time->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row.time->setMinimumWidth(QFontMetrics(font::monoSmall()).horizontalAdvance(QStringLiteral("12 min 40 s")));
@@ -309,7 +311,7 @@ void StageList::setStages(const QStringList& names)
         m_rows.push_back(row);
     }
     if (names.isEmpty())
-        m_layout->addWidget(label(QStringLiteral("No stages"), TextStyle::Caption, color::fg_4, this));
+        m_layout->addWidget(label(FW_TR("No stages"), TextStyle::Caption, color::fg_4, this));
 }
 
 void StageList::update(const ProgressSnapshot& p, JobState state)
@@ -331,7 +333,7 @@ void StageList::update(const ProgressSnapshot& p, JobState state)
             icon = QStringLiteral("check");
             c = color::success_hi;
             nameColor = color::fg_2;
-            time = ms > 0 ? shortDuration(ms) : QStringLiteral("skipped");
+            time = ms > 0 ? shortDuration(ms) : FW_TR("skipped");
             if (ms <= 0)
                 timeColor = color::fg_4; // a real caption, not a disabled one
             row.status = QStringLiteral("done");
@@ -508,11 +510,11 @@ void JobMonitor::build()
 
     // ---- metrics
     auto* metrics = new QWidget(this);
-    m_mElapsed = new MetricTile(QStringLiteral("Elapsed"), metrics);
-    m_mLeft = new MetricTile(QStringLiteral("Remaining"), metrics);
-    m_mSpeed = new MetricTile(QStringLiteral("Speed"), metrics);
-    m_mDone = new MetricTile(QStringLiteral("Done"), metrics);
-    m_mStage = new MetricTile(QStringLiteral("Stage"), metrics);
+    m_mElapsed = new MetricTile(FW_TR("Elapsed"), metrics);
+    m_mLeft = new MetricTile(FW_TR("Remaining"), metrics);
+    m_mSpeed = new MetricTile(FW_TR("Speed"), metrics);
+    m_mDone = new MetricTile(FW_TR("Done"), metrics);
+    m_mStage = new MetricTile(FW_TR("Stage"), metrics);
     m_mSpeed->sparkline();
     if (wide) {
         auto* ml = hbox(metrics, space::sm);
@@ -533,7 +535,7 @@ void JobMonitor::build()
     // ---- stages | live log
     auto* stagesPanel = new QWidget(this);
     auto* sl = vbox(stagesPanel, space::sm);
-    sl->addWidget(label(QStringLiteral("Stages"), TextStyle::Overline, color::fg_4, stagesPanel));
+    sl->addWidget(label(FW_TR("Stages"), TextStyle::Overline, color::fg_4, stagesPanel));
     m_stages = new StageList(stagesPanel);
     m_stages->setCompact(!wide);
     sl->addWidget(m_stages);
@@ -543,20 +545,20 @@ void JobMonitor::build()
     auto* ll = vbox(logPanel, space::sm);
     auto* logHead = new QWidget(logPanel);
     auto* lh = hbox(logHead, space::sm);
-    lh->addWidget(label(QStringLiteral("Live log"), TextStyle::Overline, color::fg_4, logHead));
+    lh->addWidget(label(FW_TR("Live log"), TextStyle::Overline, color::fg_4, logHead));
     m_lineCount = label({}, TextStyle::Caption, color::fg_4, logHead);
     lh->addWidget(m_lineCount);
     lh->addStretch(1);
-    auto* verboseLabel = label(QStringLiteral("Verbose"), TextStyle::Caption, color::fg_3, logHead);
-    verboseLabel->setToolTip(QStringLiteral("Also show the tools' own output and debug lines."));
+    auto* verboseLabel = label(FW_TR("Verbose"), TextStyle::Caption, color::fg_3, logHead);
+    verboseLabel->setToolTip(FW_TR("Also show the tools' own output and debug lines."));
     m_verbose = new Switch(logHead);
-    m_verbose->setAccessibleName(QStringLiteral("Verbose log"));
+    m_verbose->setAccessibleName(FW_TR("Verbose log"));
     m_verbose->setToolTip(verboseLabel->toolTip());
     lh->addWidget(verboseLabel);
     lh->addWidget(m_verbose);
-    m_copy = new IconButton(QStringLiteral("copy"), QStringLiteral("Copy these lines"), IconButton::Size::Small, logHead);
+    m_copy = new IconButton(QStringLiteral("copy"), FW_TR("Copy these lines"), IconButton::Size::Small, logHead);
     lh->addWidget(m_copy);
-    m_openLogs = new Link(QStringLiteral("Open in Logs"), logHead);
+    m_openLogs = new Link(FW_TR("Open in Logs"), logHead);
     lh->addWidget(m_openLogs);
     ll->addWidget(logHead);
     m_console = new LogConsole(m_logs, logPanel);
@@ -565,7 +567,7 @@ void JobMonitor::build()
     auto* jumpRow = new QWidget(logPanel);
     auto* jl = hbox(jumpRow, space::sm);
     jl->addStretch(1);
-    m_jump = new Link(QStringLiteral("Jump to the latest line ↓"), jumpRow);
+    m_jump = new Link(FW_TR("Jump to the latest line ↓"), jumpRow);
     m_jump->setFont(font::caption());
     jl->addWidget(m_jump);
     jumpRow->setVisible(false);
@@ -573,13 +575,13 @@ void JobMonitor::build()
     connect(m_console, &LogConsole::followChanged, jumpRow, [jumpRow](bool follow) { jumpRow->setVisible(!follow); });
     connect(m_jump, &Link::activated, m_console, &LogConsole::jumpToLatest);
     connect(m_console, &LogConsole::lineCountChanged, this, [this](int n) {
-        m_lineCount->setText(n > 0 ? QStringLiteral("%1 line%2").arg(formatCount(n)).arg(n == 1 ? QString() : QStringLiteral("s")) : QString());
+        m_lineCount->setText(n <= 0 ? QString() : n == 1 ? FW_TR("%1 line").arg(formatCount(n)) : FW_TR("%1 lines").arg(formatCount(n)));
     });
     connect(m_verbose, &QAbstractButton::toggled, this, [this](bool on) { m_console->setMinimumLevel(on ? LogLevel::Debug : LogLevel::Info); });
     connect(m_copy, &QToolButton::clicked, this, [this] {
         QApplication::clipboard()->setText(m_console->plainLines());
-        m_copy->setToolTip(QStringLiteral("Copied"));
-        QTimer::singleShot(2000, m_copy, [this] { m_copy->setToolTip(QStringLiteral("Copy these lines")); });
+        m_copy->setToolTip(FW_TR("Copied"));
+        QTimer::singleShot(2000, m_copy, [this] { m_copy->setToolTip(FW_TR("Copy these lines")); });
     });
     connect(m_openLogs, &Link::activated, this, [this] { emit openLogsRequested(m_id); });
 
@@ -606,13 +608,13 @@ void JobMonitor::build()
     l->addWidget(hairline(this));
     auto* foot = new QWidget(this);
     auto* fl = hbox(foot, space::sm);
-    m_pause = button(QStringLiteral("Pause"), ButtonVariant::Secondary, QStringLiteral("pause"), foot);
-    m_cancel = button(QStringLiteral("Cancel"), ButtonVariant::Secondary, QStringLiteral("close"), foot);
-    m_folder = button(QStringLiteral("Show in folder"), ButtonVariant::Primary, QStringLiteral("folder_open"), foot);
-    m_retry = button(QStringLiteral("Retry"), ButtonVariant::Primary, QStringLiteral("undo"), foot);
-    m_newJob = button(QStringLiteral("Start another"), ButtonVariant::Secondary, QStringLiteral("plus"), foot);
-    m_remove = new IconButton(QStringLiteral("trash"), QStringLiteral("Remove from queue"), IconButton::Size::Regular, foot);
-    m_openQueue = new Link(QStringLiteral("Open queue"), foot);
+    m_pause = button(FW_TR("Pause"), ButtonVariant::Secondary, QStringLiteral("pause"), foot);
+    m_cancel = button(FW_TR("Cancel"), ButtonVariant::Secondary, QStringLiteral("close"), foot);
+    m_folder = button(FW_TR("Show in folder"), ButtonVariant::Primary, QStringLiteral("folder_open"), foot);
+    m_retry = button(FW_TR("Retry"), ButtonVariant::Primary, QStringLiteral("undo"), foot);
+    m_newJob = button(FW_TR("Start another"), ButtonVariant::Secondary, QStringLiteral("plus"), foot);
+    m_remove = new IconButton(QStringLiteral("trash"), FW_TR("Remove from queue"), IconButton::Size::Regular, foot);
+    m_openQueue = new Link(FW_TR("Open queue"), foot);
     for (QPushButton* b : {m_pause, m_cancel, m_folder, m_retry, m_newJob})
         setButtonSmall(b, !wide);
     fl->addWidget(m_pause);
@@ -642,8 +644,8 @@ void JobMonitor::build()
         if (auto rec = m_ctx.queue().record(m_id); rec && rec->outcome && !rec->outcome->outputs.isEmpty()) {
             const QString path = rec->outcome->outputs.first();
             if (!openInFileManager(path))
-                Sheet::notify(window(), QStringLiteral("The output is not there any more"),
-                              QStringLiteral("%1 was moved or deleted, and so was its folder.").arg(nativePath(path)), Sheet::Icon::Warning);
+                Sheet::notify(window(), FW_TR("The output is not there any more"),
+                              FW_TR("%1 was moved or deleted, and so was its folder.").arg(nativePath(path)), Sheet::Icon::Warning);
         }
     });
     connect(m_retry, &QPushButton::clicked, this, &JobMonitor::retry);
@@ -687,7 +689,7 @@ void JobMonitor::setJobId(const QString& id)
         m_hadError = false;
         m_mSpeed->sparkline()->clear();
         m_lastSampleMs = 0;
-        m_copy->setToolTip(QStringLiteral("Copy these lines"));
+        m_copy->setToolTip(FW_TR("Copy these lines"));
     }
     if (id.isEmpty()) {
         m_console->setJobId({});
@@ -742,9 +744,10 @@ JobRecord JobMonitor::demoRecord(const QString& state, QStringList* logLines)
     rec.kind = QStringLiteral("fpkg.build");
     rec.title = QStringLiteral("Demon's Souls (PPSA01342)");
     rec.subtitle = QStringLiteral("FPKG · 31.6 GB → D:\\PS5\\Packages");
-    rec.phases = {QStringLiteral("Preparing the source"), QStringLiteral("Planning"), QStringLiteral("Writing project files"),
-                  QStringLiteral("Pre-reading files"), QStringLiteral("Packing"), QStringLiteral("Finishing"),
-                  QStringLiteral("Checking the package"), QStringLiteral("Verifying with img_verify"), QStringLiteral("Computing SHA-256")};
+    // The FPKG job's stage names (engines/fpkg), English as a job has them.
+    rec.phases = {FW_TR_NOOP("Preparing the source"), FW_TR_NOOP("Planning"), FW_TR_NOOP("Writing project files"),
+                  FW_TR_NOOP("Pre-reading files"), FW_TR_NOOP("Packing"), FW_TR_NOOP("Finishing"),
+                  FW_TR_NOOP("Checking the package"), FW_TR_NOOP("Verifying with img_verify"), FW_TR_NOOP("Computing SHA-256")};
     rec.added = now.addSecs(-240);
     rec.started = now.addSecs(-218);
     ProgressSnapshot& p = rec.progress;
@@ -847,7 +850,7 @@ void JobMonitor::applyEmpty()
 {
     m_tile->setIconName(QStringLiteral("queue"));
     m_tile->setTone(Tone::Info);
-    m_title->setFullText(QStringLiteral("No job selected"));
+    m_title->setFullText(FW_TR("No job selected"));
     m_meta->setFullText({});
     m_badge->hide();
     m_bar->setFraction(0);
@@ -916,20 +919,20 @@ void JobMonitor::apply(const JobRecord& r)
     m_tile->setIconName(stateIconFor(r.state));
     m_tile->setTone(toneForState(r.state));
     m_title->setFullText(r.title);
-    QString meta = m_ctx.jobFactory().displayName(r.kind);
+    QString meta = i18n::translate(m_ctx.jobFactory().displayName(r.kind));
     if (!r.subtitle.isEmpty())
         meta += QStringLiteral(" · ") + r.subtitle;
     m_meta->setFullText(meta);
     m_meta->setToolTip(plainTip(meta));
-    QString badge = jobStateName(r.state);
+    QString badge = i18n::translate(jobStateName(r.state));
     if (r.state == JobState::Running)
-        badge = p.indeterminate ? QStringLiteral("Running") : QStringLiteral("Running · %1").arg(thinPercent(p.overallFraction));
+        badge = p.indeterminate ? FW_TR("Running") : FW_TR("Running · %1").arg(thinPercent(p.overallFraction));
     else if (r.state == JobState::Paused)
-        badge = QStringLiteral("Paused");
+        badge = FW_TR("Paused");
     else if (r.state == JobState::Cancelling)
-        badge = QStringLiteral("Cancelling…");
+        badge = FW_TR("Cancelling…");
     else if (r.state == JobState::Succeeded)
-        badge = QStringLiteral("Done"); // what the verification found is in the result below
+        badge = FW_TR("Done"); // what the verification found is in the result below
     const Tone tone = toneForState(r.state);
     m_badge->set(badge, tone);
     m_badge->setIconName(r.state == JobState::Queued || r.state == JobState::Paused || r.state == JobState::Cancelled || r.state == JobState::Cancelling
@@ -947,12 +950,12 @@ void JobMonitor::apply(const JobRecord& r)
         break;
     case JobState::Paused:
         m_bar->setState(ProgressBar::State::Paused);
-        pct = p.indeterminate ? QStringLiteral("Paused") : QStringLiteral("Paused · %1").arg(thinPercent(p.overallFraction));
+        pct = p.indeterminate ? FW_TR("Paused") : FW_TR("Paused · %1").arg(thinPercent(p.overallFraction));
         pctColor = color::fg_3;
         break;
     case JobState::Cancelling:
         m_bar->setState(ProgressBar::State::Paused);
-        pct = QStringLiteral("Cancelling…");
+        pct = FW_TR("Cancelling…");
         pctColor = color::fg_3;
         break;
     case JobState::Succeeded:
@@ -962,18 +965,18 @@ void JobMonitor::apply(const JobRecord& r)
         break;
     case JobState::Failed:
         m_bar->setState(ProgressBar::State::Failed);
-        pct = (!started || p.indeterminate) ? QStringLiteral("Failed") : QStringLiteral("Failed at %1").arg(thinPercent(p.overallFraction));
+        pct = (!started || p.indeterminate) ? FW_TR("Failed") : FW_TR("Failed at %1").arg(thinPercent(p.overallFraction));
         pctColor = color::danger_hi;
         break;
     case JobState::Interrupted:
         // A job restored after the app closed has no start time any more.
         m_bar->setState(ProgressBar::State::Failed);
-        pct = (!started || p.indeterminate) ? QStringLiteral("Interrupted") : QStringLiteral("Interrupted at %1").arg(thinPercent(p.overallFraction));
+        pct = (!started || p.indeterminate) ? FW_TR("Interrupted") : FW_TR("Interrupted at %1").arg(thinPercent(p.overallFraction));
         pctColor = color::warn_hi;
         break;
     case JobState::Cancelled:
         m_bar->setState(ProgressBar::State::Paused);
-        pct = (!started || p.indeterminate) ? QStringLiteral("Cancelled") : QStringLiteral("Cancelled at %1").arg(thinPercent(p.overallFraction));
+        pct = (!started || p.indeterminate) ? FW_TR("Cancelled") : FW_TR("Cancelled at %1").arg(thinPercent(p.overallFraction));
         pctColor = color::fg_3;
         break;
     case JobState::Queued:
@@ -990,48 +993,49 @@ void JobMonitor::apply(const JobRecord& r)
     const bool errorShownBelow = r.error.has_value() && !r.error->isCancelled();
     QString detail;
     QColor detailColor = color::fg_1;
+    const QString phase = i18n::translate(p.phase);
     switch (r.state) {
     case JobState::Running: {
         QStringList parts;
-        if (!p.phase.isEmpty())
-            parts << p.phase;
+        if (!phase.isEmpty())
+            parts << phase;
         if (const QString d = progressDetailText(p); !d.isEmpty())
             parts << d;
         detail = parts.join(QStringLiteral(" · "));
         break;
     }
     case JobState::Paused:
-        detail = p.phase.isEmpty() ? QStringLiteral("Paused. Resume to continue.")
-                                   : QStringLiteral("Paused in “%1”. Resume to continue.").arg(p.phase);
+        detail = phase.isEmpty() ? FW_TR("Paused. Resume to continue.")
+                                 : FW_TR("Paused in “%1”. Resume to continue.").arg(phase);
         break;
     case JobState::Cancelling:
-        detail = QStringLiteral("Stopping at the next safe point…");
+        detail = FW_TR("Stopping at the next safe point…");
         detailColor = color::fg_2;
         break;
     case JobState::Queued: {
         const int maxAttempts = m_ctx.settings().value(general::keys::kAutoRetryCount).toInt() + 1;
         const QString w = waitingText(r, maxAttempts);
-        detail = !w.isEmpty() ? w : m_ctx.queue().isHeld() ? (m_ctx.queue().isBusy() ? QStringLiteral("Waiting · the queue is paused") : QStringLiteral("Waiting · press Start queue")) : QStringLiteral("Waiting for its turn");
+        detail = !w.isEmpty() ? w : m_ctx.queue().isHeld() ? (m_ctx.queue().isBusy() ? FW_TR("Waiting · the queue is paused") : FW_TR("Waiting · press Start queue")) : FW_TR("Waiting for its turn");
         detailColor = color::fg_2;
         break;
     }
     case JobState::Succeeded:
-        detail = r.outcome && !r.outcome->summary.isEmpty() ? r.outcome->summary : QStringLiteral("Finished");
+        detail = r.outcome && !r.outcome->summary.isEmpty() ? r.outcome->summary : FW_TR("Finished");
         break;
     case JobState::Failed:
         if (!errorShownBelow)
-            detail = QStringLiteral("Failed");
-        else if (started && !p.phase.isEmpty())
-            detail = QStringLiteral("Failed in “%1”.").arg(p.phase);
+            detail = FW_TR("Failed");
+        else if (started && !phase.isEmpty())
+            detail = FW_TR("Failed in “%1”.").arg(phase);
         detailColor = color::danger_hi;
         break;
     case JobState::Interrupted:
         if (!errorShownBelow)
-            detail = QStringLiteral("Interrupted when the app closed. Retry to run it again.");
+            detail = FW_TR("Interrupted when the app closed. Retry to run it again.");
         detailColor = color::warn_hi;
         break;
     case JobState::Cancelled:
-        detail = started ? QStringLiteral("Cancelled before it finished.") : QStringLiteral("Cancelled before it started.");
+        detail = started ? FW_TR("Cancelled before it finished.") : FW_TR("Cancelled before it started.");
         detailColor = color::fg_2;
         break;
     }
@@ -1046,15 +1050,15 @@ void JobMonitor::apply(const JobRecord& r)
     // Metrics
     if (started || isActive) {
         m_mElapsed->setValue(clockText(elapsedMsOf(r)));
-        m_mElapsed->setHint(finished ? QStringLiteral("total") : QStringLiteral("since %1").arg(r.started.toString(QStringLiteral("HH:mm"))));
+        m_mElapsed->setHint(finished ? FW_TR("total") : FW_TR("since %1").arg(r.started.toString(QStringLiteral("HH:mm"))));
     } else {
         m_mElapsed->setValue({});
-        m_mElapsed->setHint(r.state == JobState::Queued ? QStringLiteral("not started") : QString());
+        m_mElapsed->setHint(r.state == JobState::Queued ? FW_TR("not started") : QString());
     }
     if (r.state == JobState::Running) {
         const QString left = shortTimeLeft(p.etaMs);
         m_mLeft->setValue(left.isEmpty() ? kDash : left);
-        m_mLeft->setHint(left.isEmpty() ? (p.indeterminate ? QStringLiteral("this stage has no size") : QStringLiteral("measuring")) : QStringLiteral("this stage"));
+        m_mLeft->setHint(left.isEmpty() ? (p.indeterminate ? FW_TR("this stage has no size") : FW_TR("measuring")) : FW_TR("this stage"));
     } else {
         m_mLeft->setValue(r.state == JobState::Succeeded ? clockText(0) : kDash);
         m_mLeft->setHint({});
@@ -1068,23 +1072,24 @@ void JobMonitor::apply(const JobRecord& r)
     }
     if (isActive && p.total > 0) {
         m_mDone->setValue(p.unitIsBytes ? formatBytes(p.done) : formatCount(p.done));
-        m_mDone->setHint(QStringLiteral("of %1").arg(p.unitIsBytes ? formatBytes(p.total) : formatCount(p.total)));
+        m_mDone->setHint(FW_TR("of %1").arg(p.unitIsBytes ? formatBytes(p.total) : formatCount(p.total)));
     } else if (isActive && p.filesTotal > 0) {
         m_mDone->setValue(formatCount(p.filesDone));
-        m_mDone->setHint(QStringLiteral("of %1 files").arg(formatCount(p.filesTotal)));
+        m_mDone->setHint(FW_TR("of %1 files").arg(formatCount(p.filesTotal)));
     } else if (r.state == JobState::Succeeded && r.outcome) {
-        m_mDone->setValue(QStringLiteral("All"));
-        m_mDone->setHint(r.outcome->outputs.isEmpty() ? QString() : QStringLiteral("%1 output%2").arg(r.outcome->outputs.size()).arg(r.outcome->outputs.size() == 1 ? QString() : QStringLiteral("s")));
+        m_mDone->setValue(FW_TR("All"));
+        const qsizetype outputs = r.outcome->outputs.size();
+        m_mDone->setHint(outputs == 0 ? QString() : outputs == 1 ? FW_TR("%1 output").arg(outputs) : FW_TR("%1 outputs").arg(outputs));
     } else {
         m_mDone->setValue({});
-        m_mDone->setHint(isActive ? QStringLiteral("this stage has no size") : QString());
+        m_mDone->setHint(isActive ? FW_TR("this stage has no size") : QString());
     }
     if (started || isActive) {
         const int cur = r.state == JobState::Succeeded ? std::max(1, p.phaseCount) : std::min(p.phaseIndex + 1, std::max(1, p.phaseCount));
-        m_mStage->setValue(QStringLiteral("%1 of %2").arg(cur).arg(std::max(1, p.phaseCount)));
-        m_mStage->setHint(r.state == JobState::Succeeded ? QStringLiteral("all done") : p.phase);
+        m_mStage->setValue(FW_TR("%1 of %2").arg(cur).arg(std::max(1, p.phaseCount)));
+        m_mStage->setHint(r.state == JobState::Succeeded ? FW_TR("all done") : phase);
     } else {
-        m_mStage->setValue(QStringLiteral("0 of %1").arg(std::max<qsizetype>(1, r.phases.size())));
+        m_mStage->setValue(FW_TR("%1 of %2").arg(0).arg(std::max<qsizetype>(1, r.phases.size())));
         m_mStage->setHint({});
     }
     sample(r);
@@ -1115,15 +1120,15 @@ void JobMonitor::apply(const JobRecord& r)
 
     QStringList note;
     if (r.state == JobState::Queued)
-        note << QStringLiteral("Added %1").arg(r.added.toString(QStringLiteral("HH:mm")));
+        note << FW_TR("Added %1").arg(r.added.toString(QStringLiteral("HH:mm")));
     else if (started)
-        note << QStringLiteral("Started %1").arg(r.started.toString(QStringLiteral("HH:mm")));
+        note << FW_TR("Started %1").arg(r.started.toString(QStringLiteral("HH:mm")));
     if (r.attempt > 1)
-        note << QStringLiteral("Attempt %1").arg(r.attempt);
+        note << FW_TR("Attempt %1").arg(r.attempt);
     if (r.finished.isValid())
-        note << QStringLiteral("Finished %1").arg(r.finished.toString(QStringLiteral("HH:mm")));
+        note << FW_TR("Finished %1").arg(r.finished.toString(QStringLiteral("HH:mm")));
     if (!started && finished && r.state != JobState::Interrupted)
-        note << QStringLiteral("Not started");
+        note << FW_TR("Not started");
     m_note->setText(note.join(QStringLiteral(" · ")));
     updateTick(&r);
 }
@@ -1139,9 +1144,9 @@ void JobMonitor::rebuildResult(const JobRecord& r)
     const bool hasError = r.error && !r.error->isCancelled();
     if (hasError) {
         auto* bar = new InfoBar(Tone::Err, m_result);
-        bar->setTitle(r.state == JobState::Interrupted ? QStringLiteral("Interrupted") : QStringLiteral("Failed"));
+        bar->setTitle(r.state == JobState::Interrupted ? FW_TR("Interrupted") : FW_TR("Failed"));
         bar->setMessage(r.error->message);
-        auto* link = bar->addLink(QStringLiteral("Open in Logs"));
+        auto* link = bar->addLink(FW_TR("Open in Logs"));
         connect(link, &Link::activated, this, [this] { emit openLogsRequested(m_id); });
         m_resultLayout->addWidget(bar);
     }
@@ -1150,7 +1155,7 @@ void JobMonitor::rebuildResult(const JobRecord& r)
             auto* row = new MessageRow(m_result);
             const Verification v = r.outcome->verification;
             // The row's word for it ("Not verified"), not the engine's ("Skipped").
-            row->set(QStringLiteral("%1%2").arg(v == Verification::Skipped ? QStringLiteral("Not verified") : verificationName(v), r.outcome->verificationDetail.isEmpty() ? QString() : QStringLiteral(" · %1").arg(r.outcome->verificationDetail)),
+            row->set(QStringLiteral("%1%2").arg(v == Verification::Skipped ? FW_TR("Not verified") : i18n::translate(verificationName(v)), r.outcome->verificationDetail.isEmpty() ? QString() : QStringLiteral(" · %1").arg(r.outcome->verificationDetail)),
                      v == Verification::Passed ? Tone::Ok : v == Verification::Failed ? Tone::Err : Tone::Warn);
             m_resultLayout->addWidget(row);
         }
@@ -1184,16 +1189,16 @@ void JobMonitor::updateActions(const JobRecord& r)
     const bool isActive = active(r.state) && r.state != JobState::Cancelling; // cancelling: nothing left to do
     const bool finished = isTerminal(r.state);
     m_pause->setVisible(isActive);
-    m_pause->setText(r.state == JobState::Paused ? QStringLiteral("Resume") : QStringLiteral("Pause"));
+    m_pause->setText(r.state == JobState::Paused ? FW_TR("Resume") : FW_TR("Pause"));
     setButtonIcon(m_pause, r.state == JobState::Paused ? QStringLiteral("play") : QStringLiteral("pause"));
     m_cancel->setVisible(isActive || r.state == JobState::Queued);
-    m_cancel->setText(r.state == JobState::Queued ? QStringLiteral("Remove") : QStringLiteral("Cancel"));
+    m_cancel->setText(r.state == JobState::Queued ? FW_TR("Remove") : FW_TR("Cancel"));
     setButtonIcon(m_cancel, r.state == JobState::Queued ? QStringLiteral("trash") : QStringLiteral("close"));
     const bool outputs = r.outcome && !r.outcome->outputs.isEmpty();
     m_folder->setVisible(outputs && finished);
     setButtonVariant(m_folder, r.state == JobState::Succeeded ? ButtonVariant::Primary : ButtonVariant::Secondary);
     m_retry->setVisible(finished);
-    m_retry->setText(r.state == JobState::Succeeded ? QStringLiteral("Run again") : QStringLiteral("Retry"));
+    m_retry->setText(r.state == JobState::Succeeded ? FW_TR("Run again") : FW_TR("Retry"));
     setButtonVariant(m_retry, r.state == JobState::Succeeded ? ButtonVariant::Secondary : ButtonVariant::Primary);
     m_newJob->setVisible(m_features.testFlag(ShowNewJob));
     setButtonVariant(m_newJob, finished && r.state == JobState::Succeeded && !outputs ? ButtonVariant::Primary : ButtonVariant::Secondary);
@@ -1208,7 +1213,7 @@ void JobMonitor::retry()
         if (isSignalConnected(QMetaMethod::fromSignal(&JobMonitor::retryFailed)))
             emit retryFailed(m_id, r.error().message);
         else
-            Sheet::notify(window(), QStringLiteral("This job cannot run again"), r.error().message, Sheet::Icon::Error);
+            Sheet::notify(window(), FW_TR("This job cannot run again"), r.error().message, Sheet::Icon::Error);
         return;
     }
     const QString id = r.value();

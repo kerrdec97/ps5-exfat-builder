@@ -1,6 +1,7 @@
 #include "app/ui/LogView.h"
 
 #include "app/ui/Icons.h"
+#include "core/Tr.h"
 
 #include <QHeaderView>
 #include <QPainter>
@@ -152,7 +153,7 @@ ActivityWell::ActivityWell(LogModel& model, QWidget* parent) : Card(parent, Card
     emptyIcon->setFixedSize(size::iconSm, size::iconSm);
     emptyIcon->setPixmap(iconPixmap(QStringLiteral("terminal"), size::iconSm, color::fg_5, devicePixelRatioF()));
     emptyRow->addWidget(emptyIcon);
-    emptyRow->addWidget(label(QStringLiteral("Nothing yet."), TextStyle::Caption, color::fg_4, m_emptyLabel), 1);
+    emptyRow->addWidget(label(FW_TR("Nothing yet."), TextStyle::Caption, color::fg_4, m_emptyLabel), 1);
     m_emptyLabel->setMinimumHeight(font::lineMono);
     m_lines->addWidget(m_emptyLabel);
     connect(&m_model, &LogModel::rowsAppended, this, [this](int) { refresh(); });

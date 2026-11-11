@@ -1,6 +1,7 @@
 #include "app/models/JobQueueModel.h"
 
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 
 namespace fw {
 
@@ -9,12 +10,12 @@ QString progressDetailText(const ProgressSnapshot& p)
     QStringList parts;
     if (p.total > 0) {
         if (p.unitIsBytes)
-            parts << QStringLiteral("%1 of %2").arg(formatBytes(p.done), formatBytes(p.total));
+            parts << FW_TR("%1 of %2").arg(formatBytes(p.done), formatBytes(p.total));
         else
-            parts << QStringLiteral("%1 of %2").arg(formatCount(p.done), formatCount(p.total));
+            parts << FW_TR("%1 of %2").arg(formatCount(p.done), formatCount(p.total));
     }
     if (p.filesTotal > 0)
-        parts << QStringLiteral("%1 of %2 files").arg(formatCount(p.filesDone), formatCount(p.filesTotal));
+        parts << FW_TR("%1 of %2 files").arg(formatCount(p.filesDone), formatCount(p.filesTotal));
     if (p.unitIsBytes && p.ratePerSec > 0)
         parts << formatRate(p.ratePerSec);
     if (p.etaMs >= 0)
@@ -165,8 +166,8 @@ QVariant JobQueueModel::data(const QModelIndex& index, int role) const
     case KindRole: return r.kind;
     case SubtitleRole: return r.subtitle;
     case StateRole: return int(r.state);
-    case StateTextRole: return jobStateName(r.state);
-    case PhaseRole: return p.phase;
+    case StateTextRole: return i18n::translate(jobStateName(r.state)); // shown; StateRole is the value
+    case PhaseRole: return i18n::translate(p.phase);
     case PhaseIndexRole: return p.phaseIndex;
     case PhaseCountRole: return p.phaseCount;
     case FractionRole: return p.overallFraction;
@@ -189,7 +190,7 @@ QVariant JobQueueModel::data(const QModelIndex& index, int role) const
     case CurrentItemRole: return p.currentItem;
     case VerificationRole: return r.outcome ? int(r.outcome->verification) : int(Verification::NotRun);
     case VerificationTextRole:
-        return r.outcome ? verificationName(r.outcome->verification) : QString();
+        return r.outcome ? i18n::translate(verificationName(r.outcome->verification)) : QString();
     case SummaryRole: return r.outcome ? r.outcome->summary : QString();
     case ErrorTextRole: return r.error ? r.error->message : QString();
     case OutputsRole: return r.outcome ? r.outcome->outputs : QStringList();

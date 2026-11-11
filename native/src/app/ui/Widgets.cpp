@@ -2,6 +2,7 @@
 
 #include "app/ui/Icons.h"
 #include "app/ui/Motion.h"
+#include "core/Tr.h"
 
 #include <QAccessible>
 #include <QApplication>
@@ -1242,15 +1243,15 @@ void ProgressBlock::updateLabel()
     bool plainPercent = false;
     switch (m_bar->state()) {
     case ProgressBar::State::Done:
-        text = QStringLiteral("Done");
+        text = FW_TR("Done");
         c = color::success_hi;
         break;
     case ProgressBar::State::Failed:
-        text = m_indeterminate ? QStringLiteral("Failed") : QStringLiteral("Failed at %1").arg(pct);
+        text = m_indeterminate ? FW_TR("Failed") : FW_TR("Failed at %1").arg(pct);
         c = color::danger_hi;
         break;
     case ProgressBar::State::Paused:
-        text = m_indeterminate ? QStringLiteral("Paused") : QStringLiteral("Paused · %1").arg(pct);
+        text = m_indeterminate ? FW_TR("Paused") : FW_TR("Paused · %1").arg(pct);
         c = color::fg_3;
         break;
     case ProgressBar::State::Indeterminate: break;
@@ -1313,7 +1314,8 @@ void StageStepper::setStages(const QStringList& names, int current, bool failed)
         auto* ic = new QLabel(w);
         ic->setPixmap(iconPixmap(iconName, size::iconSm, c, devicePixelRatioF()));
         ic->setFixedSize(size::iconSm, size::iconSm);
-        auto* t = label(names.at(i), TextStyle::Caption, i == current && !failed ? color::fg_0 : c, w);
+        // Stage names are the engines' English: shown translated.
+        auto* t = label(i18n::translate(names.at(i)), TextStyle::Caption, i == current && !failed ? color::fg_0 : c, w);
         t->setFont(f);
         h->addWidget(ic);
         h->addWidget(t);
@@ -1350,7 +1352,7 @@ InfoBar::InfoBar(Tone tone, QWidget* parent) : QFrame(parent), m_tone(tone)
     m_links->addStretch(1);
     col->addLayout(m_links);
     h->addLayout(col, 1);
-    m_dismiss = new IconButton(QStringLiteral("close"), QStringLiteral("Dismiss"), IconButton::Size::Tiny, this);
+    m_dismiss = new IconButton(QStringLiteral("close"), FW_TR("Dismiss"), IconButton::Size::Tiny, this);
     m_dismiss->hide();
     connect(m_dismiss, &QToolButton::clicked, this, [this] {
         hide();
@@ -1560,15 +1562,15 @@ UnavailableState::UnavailableState(const QString& feature, const QString& kind, 
     auto* tile = new IconTile(QStringLiteral("package"), size::emptyTile, this);
     tile->setTone(Tone::Neutral);
     l->addWidget(tile, 0, Qt::AlignHCenter);
-    auto* t = heading(QStringLiteral("%1 is not available in this build").arg(feature), TextStyle::BodyStrong, this);
+    auto* t = heading(FW_TR("%1 is not available in this build").arg(feature), TextStyle::BodyStrong, this);
     t->setAlignment(Qt::AlignCenter);
     t->setWordWrap(true);
     l->addSpacing(space::sm);
     l->addWidget(t, 0, Qt::AlignHCenter);
-    auto* c = caption(QStringLiteral("The engine that does this work is not part of this build. The form stays usable; nothing is queued until the engine is present."), this);
+    auto* c = caption(FW_TR("The engine that does this work is not part of this build. The form stays usable; nothing is queued until the engine is present."), this);
     c->setAlignment(Qt::AlignCenter);
     l->addWidget(c, 0, Qt::AlignHCenter);
-    m_tech = label(QStringLiteral("job kind %1 is not registered").arg(kind), TextStyle::Mono, color::fg_4, this);
+    m_tech = label(FW_TR("job kind %1 is not registered").arg(kind), TextStyle::Mono, color::fg_4, this);
     m_tech->setAlignment(Qt::AlignCenter);
     m_tech->setWordWrap(true);
     l->addWidget(m_tech, 0, Qt::AlignHCenter);
@@ -1578,8 +1580,8 @@ UnavailableState::UnavailableState(const QString& feature, const QString& kind, 
 
 void UnavailableState::setKinds(const QStringList& kinds)
 {
-    m_tech->setText(kinds.size() == 1 ? QStringLiteral("job kind %1 is not registered").arg(kinds.first())
-                                      : QStringLiteral("job kinds %1 are not registered").arg(kinds.join(QStringLiteral(", "))));
+    m_tech->setText(kinds.size() == 1 ? FW_TR("job kind %1 is not registered").arg(kinds.first())
+                                      : FW_TR("job kinds %1 are not registered").arg(kinds.join(QStringLiteral(", "))));
     fitWrapped(m_tech, size::emptyMax);
 }
 
@@ -1621,7 +1623,7 @@ PathField::PathField(Mode mode, QWidget* parent) : QWidget(parent), m_mode(mode)
     auto* row = new QHBoxLayout;
     row->setSpacing(space::sm);
     m_edit = textInput({}, true, this);
-    m_browse = button(QStringLiteral("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder"), this);
+    m_browse = button(FW_TR("Browse…"), ButtonVariant::Secondary, QStringLiteral("folder"), this);
     row->addWidget(m_edit, 1);
     row->addWidget(m_browse);
     l->addLayout(row);
@@ -1723,13 +1725,13 @@ void PathField::browse()
     QString chosen;
     switch (m_mode) {
     case Mode::Directory:
-        chosen = QFileDialog::getExistingDirectory(window(), m_title.isEmpty() ? QStringLiteral("Choose a folder") : m_title, start);
+        chosen = QFileDialog::getExistingDirectory(window(), m_title.isEmpty() ? FW_TR("Choose a folder") : m_title, start);
         break;
     case Mode::OpenFile:
-        chosen = QFileDialog::getOpenFileName(window(), m_title.isEmpty() ? QStringLiteral("Choose a file") : m_title, start, m_filter);
+        chosen = QFileDialog::getOpenFileName(window(), m_title.isEmpty() ? FW_TR("Choose a file") : m_title, start, m_filter);
         break;
     case Mode::SaveFile:
-        chosen = QFileDialog::getSaveFileName(window(), m_title.isEmpty() ? QStringLiteral("Save as") : m_title, start, m_filter);
+        chosen = QFileDialog::getSaveFileName(window(), m_title.isEmpty() ? FW_TR("Save as") : m_title, start, m_filter);
         break;
     }
     if (self && !chosen.isEmpty()) // the form can be rebuilt while the dialog is open
