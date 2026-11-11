@@ -6,6 +6,7 @@
 #include "connect/ps5/RemotePath.h"
 #include "connect/ps5/SmpApi.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -28,9 +29,9 @@ bool lessName(const QString& a, const QString& b)
 
 QString firstFew(const QStringList& items, int n = 5)
 {
-    QString s = items.mid(0, n).join(QStringLiteral(", "));
+    const QString s = items.mid(0, n).join(QStringLiteral(", "));
     if (items.size() > n)
-        s += QStringLiteral(" and %1 more").arg(items.size() - n);
+        return FW_TR("%1 and %2 more").arg(s, QString::number(items.size() - n));
     return s;
 }
 
@@ -131,7 +132,7 @@ Result<ConsoleGameList> listConsoleGames(FtpClient& c, const QStringList& folder
         if (auto items = smp::storage(c.host(), smpApiPort, api, token); items.ok()) {
             if (const smp::StorageItem* fs = smp::storageFor(items.value(), cleanRemotePath(folders.front())); fs && fs->availableBytes >= 0) {
                 out.freeBytes = fs->availableBytes;
-                out.freeText = QStringLiteral("%1 free on %2 (ShadowMount+)").arg(formatBytes(fs->availableBytes), fs->mountPoint);
+                out.freeText = FW_TR("%1 free on %2 (ShadowMount+)").arg(formatBytes(fs->availableBytes), fs->mountPoint);
             }
         } else if (items.error().isCancelled()) {
             return Error::cancelled();
@@ -166,10 +167,10 @@ std::vector<LocalImage> scanLocalImages(const QString& folder)
 QString gameStatusLabel(GameStatus s)
 {
     switch (s) {
-    case GameStatus::OnPs5: return QStringLiteral("On PS5");
-    case GameStatus::SizeMismatch: return QStringLiteral("Size mismatch");
-    case GameStatus::LocalOnly: return QStringLiteral("Local only");
-    case GameStatus::Ps5Only: return QStringLiteral("PS5 only");
+    case GameStatus::OnPs5: return FW_TR("On PS5");
+    case GameStatus::SizeMismatch: return FW_TR("Size mismatch");
+    case GameStatus::LocalOnly: return FW_TR("Local only");
+    case GameStatus::Ps5Only: return FW_TR("PS5 only");
     }
     return {};
 }
@@ -222,9 +223,9 @@ std::vector<GameRow> mergeGames(const std::vector<ConsoleGame>& remote, const st
 QString diffKindLabel(DiffKind k)
 {
     switch (k) {
-    case DiffKind::MissingOnConsole: return QStringLiteral("Missing on the PS5");
-    case DiffKind::OnlyOnConsole: return QStringLiteral("Only on the PS5");
-    case DiffKind::SizeDiffers: return QStringLiteral("Different size");
+    case DiffKind::MissingOnConsole: return FW_TR("Missing on the PS5");
+    case DiffKind::OnlyOnConsole: return FW_TR("Only on the PS5");
+    case DiffKind::SizeDiffers: return FW_TR("Different size");
     }
     return {};
 }
@@ -237,17 +238,17 @@ int CompareReport::count(DiffKind kind) const
 QString CompareReport::summary() const
 {
     if (diffs.empty() && sizeUnknown == 0)
-        return QStringLiteral("All %1 file(s) are on the PS5 with the same size (%2).").arg(formatCount(localFiles), formatBytes(localBytes));
+        return FW_TR("All %1 file(s) are on the PS5 with the same size (%2).").arg(formatCount(localFiles), formatBytes(localBytes));
     QStringList parts;
     if (const int n = count(DiffKind::MissingOnConsole))
-        parts << QStringLiteral("%1 missing on the PS5").arg(formatCount(n));
+        parts << FW_TR("%1 missing on the PS5").arg(formatCount(n));
     if (const int n = count(DiffKind::OnlyOnConsole))
-        parts << QStringLiteral("%1 only on the PS5").arg(formatCount(n));
+        parts << FW_TR("%1 only on the PS5").arg(formatCount(n));
     if (const int n = count(DiffKind::SizeDiffers))
-        parts << QStringLiteral("%1 with a different size").arg(formatCount(n));
+        parts << FW_TR("%1 with a different size").arg(formatCount(n));
     if (sizeUnknown)
-        parts << QStringLiteral("%1 without a size from the console").arg(formatCount(sizeUnknown));
-    parts << QStringLiteral("%1 matching").arg(formatCount(matching));
+        parts << FW_TR("%1 without a size from the console").arg(formatCount(sizeUnknown));
+    parts << FW_TR("%1 matching").arg(formatCount(matching));
     return parts.join(QStringLiteral(" · "));
 }
 
@@ -313,13 +314,13 @@ Result<CompareReport> compareConsoleFolder(FtpClient& c, const QString& remoteFo
     CompareReport rep = compareFiles(local, remote);
     rep.remoteFolder = tree.root;
     if (!tree.unreadableDirs.isEmpty())
-        rep.warnings << QStringLiteral("Could not list %1 folder(s) on the PS5, so their files count as missing: %2")
+        rep.warnings << FW_TR("Could not list %1 folder(s) on the PS5, so their files count as missing: %2")
                             .arg(tree.unreadableDirs.size()).arg(firstFew(tree.unreadableDirs));
     if (!tree.skippedNames.isEmpty())
-        rep.warnings << QStringLiteral("Skipped %1 name(s) from the console that cannot be used safely: %2")
+        rep.warnings << FW_TR("Skipped %1 name(s) from the console that cannot be used safely: %2")
                             .arg(tree.skippedNames.size()).arg(firstFew(tree.skippedNames));
     if (tree.links > 0)
-        rep.warnings << QStringLiteral("%1 symbolic link(s) on the PS5 were not followed.").arg(tree.links);
+        rep.warnings << FW_TR("%1 symbolic link(s) on the PS5 were not followed.").arg(tree.links);
     return rep;
 }
 
