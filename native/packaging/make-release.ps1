@@ -20,9 +20,10 @@
      copy them under dist\exFAT Image Builder\ and run make-onefile.ps1 again.
   6. Smoke test from a fresh folder with private data and cache folders:
      --self-test twice (first start unpacks, the second uses the cache).
-  7. -Zip: the portable zip of the deploy folder (a build artefact: a release
-     is the one exe). Then SHA256SUMS.txt, which names the exe as GitHub
-     serves it (exFAT.Image.Builder.exe).
+  7. -Zip: the folder edition, a zip of the deploy folder that runs without
+     unpacking itself (GitHub #78: offered next to the exe for PCs whose
+     antivirus flags the self-unpacking exe). Then SHA256SUMS.txt, which
+     names the exe as GitHub serves it (exFAT.Image.Builder.exe).
 
   Nothing is installed and the user's own settings and caches are not used.
   The Qt bin folder stays on PATH of the calling session; the other
@@ -274,8 +275,8 @@ try {
 # ---- 7. Zip and checksums -------------------------------------------------------------
 $assets = @($onefile)
 if ($Zip) {
-    Write-Step 'Portable zip'
-    $zipPath = Join-Path $OutDir "exFAT-Image-Builder-$version-win64-portable.zip"
+    Write-Step 'Folder edition (zip)'
+    $zipPath = Join-Path $OutDir "exFAT-Image-Builder-$version-win64-folder.zip"
     if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
     Compress-Archive -Path $dist -DestinationPath $zipPath
     $assets += $zipPath

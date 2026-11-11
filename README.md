@@ -61,6 +61,11 @@ verify and send them to your console — from one app, in one download.**
 Portable use: put an empty `portable.txt` next to the exe and the app keeps
 its settings, logs and unpacked files in that folder.
 
+Antivirus removes the exe? Download the **folder edition**
+(`exFAT-Image-Builder-<version>-win64-folder.zip`) from the same release
+instead: extract it anywhere and run the exe inside. It is the same program,
+already unpacked, so nothing unpacks itself on first start.
+
 ## 🔐 Verify your download
 
 Every release from 5.0.0 has `SHA256SUMS.txt`. In PowerShell:

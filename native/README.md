@@ -31,6 +31,11 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
   `portable.txt` next to the exe, the unpacked copy goes to
   `exFAT Image Builder.data\` and settings and logs to `data\` beside it.
   To remove the app, delete the exe and that `runtime` folder.
+* **Folder edition**: `exFAT-Image-Builder-<version>-win64-folder.zip` is the
+  same program already unpacked. Extract it anywhere (an external drive
+  works) and run the exe inside; nothing is unpacked to your profile. Use it
+  when an antivirus removes the single exe. `portable.txt` next to that exe
+  keeps settings and logs in `data\` beside it.
 * Verify the download with `SHA256SUMS.txt` from the same release.
 
 ## Where things are stored
