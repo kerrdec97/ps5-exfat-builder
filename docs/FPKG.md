@@ -12,7 +12,7 @@ drives your own copy of Sony's Publishing Tools, which do the packing.
 | Publishing Tools that make plaintext debug packages | A package without the plaintext debug marker cannot be installed on a debug console. The app checks every package for it and reports a package without it as failed. |
 | Microsoft Visual C++ 2015-2022 Redistributable (x64) | The Publishing Tools need it. The app tells you when it is missing. |
 | A dump with `sce_sys\param.json` and its own 96-byte `sce_sys\keystone` | The Content ID, version and title come from `param.json`; the tools need the dump's keystone. |
-| For backport packages: a verified SDK Fix toolchain (`sdk-fpkg279-fix13` recommended, `fix12` accepted) | Updates against a base package need it. The app checks the files and says what is wrong. |
+| For backport packages: a verified SDK Fix toolchain (`sdk-fpkg279-fix15` recommended; `fix13` and `fix12` accepted, but they write SDK version 0 into packages) | Updates against a base package need it. The app checks the files and says what is wrong. |
 | Free space on the output drive | About 1.1 times the game's size (twice that for an update), plus the game's size again when the source is an image. |
 
 ## Building a package

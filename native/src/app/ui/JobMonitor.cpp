@@ -760,7 +760,7 @@ JobRecord JobMonitor::demoRecord(const QString& state, QStringList* logLines)
     QStringList lines{
         QStringLiteral("Queued: Demon's Souls (PPSA01342)"),
         QStringLiteral("Started: Demon's Souls (PPSA01342)"),
-        QStringLiteral("Publishing Tools: prospero-pub-cmd 2.6.0 (sdk-fpkg279-fix13)"),
+        QStringLiteral("Publishing Tools: prospero-pub-cmd 2.6.0 (sdk-fpkg279-fix15)"),
         QStringLiteral("Source: D:\\PS5\\Dumps\\PPSA01342 Demon's Souls (18,442 files, 31.6 GB)"),
         QStringLiteral("Left out: 212 SDK files and dump leftovers (AMPR index, journal, logs)"),
         QStringLiteral("Project written: PPSA01342.gp5 (18,230 files, 4 PlayGo chunks)"),

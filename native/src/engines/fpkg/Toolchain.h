@@ -56,12 +56,14 @@ bool exitCodeMeansMissingRuntime(int exitCode);
 // ---- SDK Fix toolchain (the ppr-pkg Companion's SdkFix.Check) -------------------
 // Backport update packages need Sony's publisher from a verified SDK Fix
 // release: prospero-pub-cmd.exe and libScePubTools.dll from the same release
-// (SHA-256 pairs below), and the seven ext\ helpers.
+// (SHA-256 pairs below), and the seven ext\ helpers. fix15 is the release the
+// reference tool (PSVIETHOA FPKG Builder 3.1) ships: it keeps the SDK version
+// of param.json in the package, which fix12 and fix13 replace by 0.
 struct SdkFixStatus {
     enum class State { Ready, Missing, Wrong };
     State state = State::Missing;
-    QString release;          // "sdk-fpkg279-fix13" / "sdk-fpkg279-fix12"
-    bool recommended = false; // fix13
+    QString release;          // "sdk-fpkg279-fix15" / "sdk-fpkg279-fix13" / "sdk-fpkg279-fix12"
+    bool recommended = false; // fix15
     QString text;             // the Companion's status line
     bool ready() const { return state == State::Ready; }
 };

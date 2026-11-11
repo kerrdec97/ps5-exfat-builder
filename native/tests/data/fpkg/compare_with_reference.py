@@ -305,6 +305,17 @@ def run_variant(variant, args, work):
     a = reduce_project(os.path.join(our_out, 'project.gp5'), dump, [os.path.join(our_out, 'generated')])
     b = reduce_project(ref_gp5, dump, [ref_assets])
     problems = []
+    # With a dump's own layout the script copies the retail chunk list and initial count of each
+    # scenario. The reference app (and this one) lists every chunk in every scenario and marks every
+    # chunk initial instead, because a package is installed in full; names and types stay the same.
+    notes = []
+    count = int(a['chunk_info']['chunk_count'])
+    every = '0' if count == 1 else '0-%d' % (count - 1)
+    as_app = [(dict(attrs, initial_chunk_count=str(count)), every) for attrs, _ in b['scenarios']]
+    if a['scenarios'] != b['scenarios'] and a['scenarios'] == as_app:
+        notes.append('scenarios: every chunk in every scenario, all initial (the reference app\'s default); '
+                     'the script alone would keep the retail lists %s' % [text for _, text in b['scenarios']])
+        b['scenarios'] = as_app
     for key in ('volume_type', 'package', 'chunk_info', 'chunks_attrs', 'chunks', 'scenarios_attrs', 'scenarios', 'empty_dirs'):
         compare(key, a[key], b[key], problems)
     # Generated copies of executables are written when the build runs, not at plan time: compare
@@ -334,6 +345,8 @@ def run_variant(variant, args, work):
             load_json(os.path.join(ref_out, 'project.playgo-scenario.json')), problems)
     print('[%s] %d file entries, %d chunk(s) declared: %s' % (
         variant, len(fa), len(a['chunks']), 'identical' if not problems else '%d difference(s)' % len(problems)))
+    for note in notes:
+        print('  note: %s' % note)
     for name, ours_value, ref_value in problems:
         print('  %s' % name)
         print('    this app : %s' % json.dumps(ours_value)[:3000])

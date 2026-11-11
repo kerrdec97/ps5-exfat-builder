@@ -340,7 +340,9 @@ private slots:
         st = checkSdkFixToolchain(tc);
         QVERIFY(st.text.startsWith(QStringLiteral("Not a verified SDK Fix toolchain")));
         QVERIFY(!checkSdkFixToolchain(PubToolchain{}).ready());
-        QCOMPARE(sdkFixReleases().size(), 2);
+        QCOMPARE(sdkFixReleases().size(), 3);
+        QCOMPARE(sdkFixReleases().first().label, QStringLiteral("sdk-fpkg279-fix15"));
+        QVERIFY(sdkFixReleases().first().recommended);
         QCOMPARE(sdkFixExtFiles().size(), 7);
     }
 

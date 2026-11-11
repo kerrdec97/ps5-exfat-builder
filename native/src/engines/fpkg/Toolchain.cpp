@@ -199,9 +199,13 @@ QString exitCodeHint(int exitCode)
 
 const QList<SdkFixRelease>& sdkFixReleases()
 {
+    // fix15 keeps the SDK version of param.json in the package; the older
+    // releases write 0 (a game started from such a package can crash).
     static const QList<SdkFixRelease> r = {
+        {QStringLiteral("sdk-fpkg279-fix15"), QStringLiteral("BB638964165C8DD798E1E2AAB294CAAD46C114C045970D72F540A29D28123A1A"),
+         QStringLiteral("BFA6FD1473F25630C7289328B22CD1D0E43990C17791D2480DE5B9DF7E448945"), true},
         {QStringLiteral("sdk-fpkg279-fix13"), QStringLiteral("763F731FAB92FBF01A5A7F02760EF8EE56AA811578A84DF78623444FAA227CCE"),
-         QStringLiteral("A73E8D1F6C9DCD6DD01735EDA11AAB5C2E5371D4790EEA52BD03E4781954820B"), true},
+         QStringLiteral("A73E8D1F6C9DCD6DD01735EDA11AAB5C2E5371D4790EEA52BD03E4781954820B"), false},
         {QStringLiteral("sdk-fpkg279-fix12"), QStringLiteral("C9C48A6651EC8DE76FA30D30D36862CFCED35596AC98AAEC6BDA14736DEF3A1F"),
          QStringLiteral("6C3DDF34B0EF07DE9CB40C2597D387E1F5F60AEE52C9D0E9C1F1D4EF58744BDB"), false},
     };
@@ -249,7 +253,7 @@ SdkFixStatus checkSdkFixToolchain(const PubToolchain& tools)
     SdkFixStatus st;
     if (tools.exe.isEmpty() || !QFileInfo(tools.exe).isFile()) {
         st.state = SdkFixStatus::State::Missing;
-        st.text = QStringLiteral("SDK Fix toolchain not found. Choose the extracted sdk-fpkg279-fix13 folder (its "
+        st.text = QStringLiteral("SDK Fix toolchain not found. Choose the extracted sdk-fpkg279-fix15 folder (its "
                                  "prospero-pub-cmd.exe) in Settings > Tools.");
         return st;
     }
@@ -269,7 +273,7 @@ SdkFixStatus checkSdkFixToolchain(const PubToolchain& tools)
     }
     if (libSha == kPprPkgOwnLibSha256) {
         st.text = QStringLiteral("This is ppr-pkg's own libScePubTools.dll, not the SDK Fix one. Use the patched DLL from "
-                                 "sdk-fpkg279-fix13.");
+                                 "sdk-fpkg279-fix15.");
         return st;
     }
     const SdkFixRelease* match = nullptr;
@@ -282,10 +286,10 @@ SdkFixStatus checkSdkFixToolchain(const PubToolchain& tools)
     }
     if (!match) {
         st.text = partial ? QStringLiteral("prospero-pub-cmd.exe and libScePubTools.dll come from different SDK Fix "
-                                           "releases (%1…, %2…). Copy both from the same release (fix13 recommended).")
+                                           "releases (%1…, %2…). Copy both from the same release (fix15 recommended).")
                                 .arg(cmdSha.left(8), libSha.left(8))
                           : QStringLiteral("Not a verified SDK Fix toolchain (prospero-pub-cmd %1…, libScePubTools "
-                                           "%2…). Use sdk-fpkg279-fix13.").arg(cmdSha.left(12), libSha.left(12));
+                                           "%2…). Use sdk-fpkg279-fix15.").arg(cmdSha.left(12), libSha.left(12));
         return st;
     }
     QStringList missing;
@@ -303,7 +307,7 @@ SdkFixStatus checkSdkFixToolchain(const PubToolchain& tools)
                   .arg(match->label, QDir::toNativeSeparators(tools.binDir), match->pubCmdSha256.left(8),
                        match->libSha256.left(8));
     if (!match->recommended)
-        st.text += QStringLiteral(" - an older release; fix13 is recommended");
+        st.text += QStringLiteral(" - an older release that writes SDK version 0 into packages; fix15 is recommended");
     return st;
 }
 
