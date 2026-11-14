@@ -40,6 +40,7 @@ struct JobRecord {
     QVariantMap overrides;
     int attempt = 1;          // automatic retries increase this (general.autoRetryCount)
     QDateTime notBefore;      // a retry waits until then (general.autoRetryDelaySeconds)
+    bool runsWhileHeld = false; // Job::runsWhileHeld(): a system job (update check, problem report)
 
     bool isActive() const { return fw::isActive(state); }
     bool isTerminal() const { return fw::isTerminal(state); }
@@ -72,6 +73,9 @@ public:
     // while the queue is paused) without resuming the rest of the queue:
     // "Build now", Retry.
     void startNow(const QString& id);
+    // Several at once, in this order ("Build 3 images", a batch of
+    // transfers): the first may start at once, the others follow it in turn.
+    void startNow(const QStringList& ids);
     void cancel(const QString& id);
     void cancelAll();
     Result<QString> retry(const QString& id); // new job from the same parameters
@@ -84,11 +88,18 @@ public:
     int runningCount() const;
     int pendingCount() const;
     bool isBusy() const { return runningCount() > 0; }
+    // True when a job that is running, paused or being cancelled reads or
+    // writes `path`, a folder holding it or something inside it, by its
+    // busyPaths() (busyPathsOverlap): a page does not rename what a job has open.
+    // A file already in the folder a job saves into (its "output" or
+    // "destination" parameter) is not the job's, so it is not in use.
+    bool isPathInUse(const QString& path) const;
 
     // Persists pending jobs; restores them (and marks interrupted ones). A
     // saved job this build has no job type for is not shown; it stays in the
     // file for the build that knows it. A file that cannot be read is set
-    // aside as "<name>.damaged" and reported as the error.
+    // aside as "<name>.damaged" (or "<name> (2).damaged"...: one set aside
+    // earlier is never replaced) and reported as the error.
     Status saveQueue() const;
     Status restoreQueue();
 

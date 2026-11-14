@@ -58,11 +58,14 @@ QStringList explainToolErrors(const QStringList& errors);
 // Those are counted in `expected`; everything else (a mandatory file missing,
 // a file that must not exist, a CRC error …) is a real problem. The tool's
 // own summary lines ("Number of Error(s)", "Result : ERROR") are dropped.
+// `sdkFieldsExpected` false: the package carries a real SDK version (a fix15
+// toolkit keeps it), so the two SDK version messages are real problems too
+// (sdkVersion does not match eboot.bin, or the required version is below it).
 struct ImgVerifyFindings {
     QStringList problems;
     int expected = 0;
 };
-ImgVerifyFindings sortImgVerifyErrors(const QStringList& errors);
+ImgVerifyFindings sortImgVerifyErrors(const QStringList& errors, bool sdkFieldsExpected = true);
 
 class PubCmdOutputParser {
 public:
@@ -103,6 +106,9 @@ struct ToolRunOptions {
     std::function<void(qint64 bytes)> onBytesWritten;
     std::function<void(const ToolLine&)> onLine;
     Log log{QStringLiteral("fpkg")}; // "Paused ..." / "Resumed ..." notices (the job's log when set)
+    // Every line as printed, also those without an [Error]/[Warn]/[Info]
+    // prefix (which onLine does not get).
+    std::function<void(const QString& raw)> onAnyLine;
 };
 
 struct ToolRunResult {

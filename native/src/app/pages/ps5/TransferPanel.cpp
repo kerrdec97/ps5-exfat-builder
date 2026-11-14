@@ -1,8 +1,10 @@
 #include "app/pages/ps5/TransferPanel.h"
 
 #include "app/AppContext.h"
+#include "app/models/JobQueueModel.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Icons.h"
+#include "app/ui/JobRows.h"
 #include "connect/ps5/Module.h"
 #include "core/FileUtil.h"
 #include "core/Tr.h"
@@ -77,7 +79,7 @@ void TransferRow::setRecord(const JobRecord& r)
     m_tile->setIconName(upload ? QStringLiteral("upload") : QStringLiteral("download"));
     m_title->setFullText(r.title);
     const ProgressSnapshot& p = r.progress;
-    QString item = p.currentItem;
+    QString item = currentItemText(p.currentItem);
     if (item.isEmpty())
         item = r.subtitle;
     m_item->setFullText(item);
@@ -107,8 +109,9 @@ void TransferRow::setRecord(const JobRecord& r)
         parts << FW_TR("%1 of %2").arg(formatBytes(p.done), formatBytes(p.total));
     if (running && p.ratePerSec > 0)
         parts << formatRate(p.ratePerSec);
-    if (running && p.etaMs >= 0)
-        parts << formatTimeLeft(p.etaMs);
+    // The whole transfer's time left, as every other view says it (not its current stage's).
+    if (const qint64 left = running ? jobTimeLeftMs(r) : -1; left >= 0)
+        parts << formatTimeLeft(left);
     if (p.filesTotal > 1)
         parts << FW_TR("file %1 of %2").arg(std::min(p.filesDone + (ended ? 0 : 1), p.filesTotal)).arg(p.filesTotal);
     QString stats = parts.join(QStringLiteral(" · "));
@@ -116,7 +119,7 @@ void TransferRow::setRecord(const JobRecord& r)
     QString word;
     switch (r.state) {
     case JobState::Queued: word = FW_TR("Waiting"); tone = Tone::Neutral; stats = FW_TR("Waits for the queue"); break;
-    case JobState::Running: word = thinPercent(p.overallFraction); tone = Tone::Info; break;
+    case JobState::Running: word = thinPercent(shownFraction(r)); tone = Tone::Info; break;
     case JobState::Paused: word = FW_TR("Paused"); tone = Tone::Warn; break;
     case JobState::Cancelling: word = FW_TR("Cancelling…"); tone = Tone::Neutral; stats = FW_TR("Stopping the transfer"); break;
     case JobState::Succeeded:

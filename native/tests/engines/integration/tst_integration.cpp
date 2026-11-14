@@ -173,6 +173,53 @@ private slots:
         QCOMPARE(env.store->value(pfs::keys::kExcludes).toStringList(), QStringList{QStringLiteral("*.bak")});
     }
 
+    // An exFAT image does not tell letter case apart, so its AMPR index may be
+    // AMPR_EMU.INDEX, which the runtime finds there. An image that tells case
+    // apart (FFPKG, a case-sensitive PFS image) would hide it from the runtime,
+    // which opens /app0/ampr_emu.index: a conversion gives it that name and
+    // keeps its content as it is.
+    void convertGivesTheIndexTheNameTheRuntimeOpens()
+    {
+        Env env(m_root.filePath(QStringLiteral("e-upper")));
+        const QString game = m_root.filePath(QStringLiteral("upper/PPSA05679"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/eboot.bin"), QByteArray(50000, 'E')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA05679","contentVersion":"01.000.000"})"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray(400, 'a')));
+        const QByteArray own("the image's own index");
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/AMPR_EMU.INDEX"), own));
+        const QString out = m_root.filePath(QStringLiteral("upper-out"));
+        QDir().mkpath(out);
+        auto built = env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), game}, {QStringLiteral("output"), out + QStringLiteral("/game.exfat")}},
+                             {{exfat::keys::kAmprIndex, QStringLiteral("off")}});
+        QVERIFY2(succeeded(built), qPrintable(describe(built)));
+        QVERIFY(env.store->setValue(pfs::keys::kCaseInsensitive, false).ok());
+
+        const auto filesOf = [&](const QString& image, const QString& kind) {
+            const QString dir = m_root.filePath(QStringLiteral("upper-x/") + QFileInfo(image).fileName());
+            auto x = env.run(kind, {{QStringLiteral("image"), image}, {QStringLiteral("output"), dir}});
+            if (!succeeded(x))
+                qWarning() << "extract failed:" << describe(x);
+            return snapshot(dir);
+        };
+        // The exFAT image keeps the dump's spelling.
+        QCOMPARE(filesOf(out + QStringLiteral("/game.exfat"), QStringLiteral("image.exfat.extract")).value(QStringLiteral("AMPR_EMU.INDEX")), own);
+
+        const QList<std::pair<QString, QString>> targets{{QStringLiteral("game.ffpkg"), QStringLiteral("image.ffpkg.extract")},
+                                                         {QStringLiteral("game.ffpfs"), QStringLiteral("image.pfs.extract")}};
+        for (const auto& [target, extract] : targets) {
+            auto conv = env.run(integration::kConvertJob, {{QStringLiteral("image"), out + QStringLiteral("/game.exfat")},
+                                                           {QStringLiteral("format"), QFileInfo(target).suffix()},
+                                                           {QStringLiteral("output"), out + u'/' + target},
+                                                           {QStringLiteral("method"), QStringLiteral("repack")}});
+            QVERIFY2(succeeded(conv), qPrintable(target + QStringLiteral(": ") + describe(conv)));
+            QCOMPARE(conv->outcome->verification, Verification::Passed);
+            const QMap<QString, QByteArray> got = filesOf(out + u'/' + target, extract);
+            QVERIFY2(!got.contains(QStringLiteral("AMPR_EMU.INDEX")), qPrintable(target + QStringLiteral(": ") + QStringList(got.keys()).join(u' ')));
+            QCOMPARE(got.value(QStringLiteral("ampr_emu.index")), own);
+            QCOMPARE(got.value(QStringLiteral("eboot.bin")), QByteArray(50000, 'E'));
+        }
+    }
+
     void convertRoundTripThroughEveryFormat()
     {
         Env env(m_root.filePath(QStringLiteral("e1")));

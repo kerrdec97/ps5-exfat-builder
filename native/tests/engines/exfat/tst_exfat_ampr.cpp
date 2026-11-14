@@ -171,6 +171,26 @@ private slots:
         QVERIFY(!m_env.schema->normalize(keys::kAmprIndex, QStringLiteral("sometimes")).ok());
     }
 
+    // A name of 100 CJK letters is a legal exFAT name, but 300 bytes in UTF-8:
+    // the runtime would set aside an index that lists it, and every other file
+    // with it. It is left out of the image's index, and the log says so.
+    void aNameTheRuntimeCannotListIsLeftOut()
+    {
+        const QString src = makeGame(QStringLiteral("long-name"), true);
+        const QString name = QString(100, QChar(0x4E00));
+        QVERIFY(writeRandom(src + QStringLiteral("/data/") + name, 1000, 78));
+        const Built b = build(src, QStringLiteral("auto"));
+        QVERIFY(b.ok);
+        QVERIFY(b.hasIndex);
+        QVERIFY(!b.index.contains(name.toUtf8()));
+        QVERIFY(b.index.contains("/app0/eboot.bin"));
+        QCOMPARE(b.log.size(), 2);
+        QCOMPARE(b.log.value(0), QStringLiteral("ampr_emu.index: added (the dump has none)"));
+        QVERIFY2(b.log.value(1).startsWith(QStringLiteral("ampr_emu.index: 1 file(s) left out")), qPrintable(b.log.value(1)));
+        QVERIFY2(b.log.value(1).contains(QStringLiteral("data/") + name), qPrintable(b.log.value(1)));
+        QVERIFY(b.files.contains(QStringLiteral("data/") + name)); // the file itself is in the image
+    }
+
     // (a) no index in the dump: the image gets a correct one; (e) "off" adds none.
     void missingIndexIsAddedToTheImageOnly()
     {
@@ -255,22 +275,65 @@ private slots:
         QCOMPARE(b.files, hashes(src));
         QVERIFY(!b.outcome.details.contains(QStringLiteral("amprIndex")));
 
-        // A dump that was copied has other file times: still up to date, and
-        // the dump's own bytes go into the image.
+        // Other file times (a dump copied without its times, or files
+        // changed in place): the runtime reports the index's times as the
+        // files' (fstat), so the image gets an index with the times its
+        // files have. The dump keeps its own.
         const QByteArray otherTimes = toolIndex(src, 3600);
         QVERIFY(otherTimes != fresh);
         QVERIFY(pfs::amprIndexesDifferOnlyInTimes(otherTimes, fresh));
         QVERIFY(writeBytes(own, otherTimes));
         b = build(src, QStringLiteral("auto"));
         QVERIFY(b.ok);
+        QCOMPARE(b.index, fresh);
+        QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: rebuilt (it did not match the game's files)")});
+        QVERIFY(sameApartFromIndex(b.files, hashes(src)));
+        QCOMPARE(readAllOf(own), otherTimes);
+        v = m_env.run(kJobVerify, {{QStringLiteral("image"), b.image}, {QStringLiteral("source"), src}});
+        QVERIFY(v.ok());
+        QVERIFY2(v->verification == Verification::Passed, qPrintable(v->verificationDetail));
+        // "Add when the dump has none" copies that one as it is, "always rebuild it" replaces it.
+        b = build(src, QStringLiteral("missing"));
+        QVERIFY(b.ok);
         QCOMPARE(b.index, otherTimes);
-        QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: kept (up to date)")});
-        // "Always rebuild it" replaces even that one.
         b = build(src, QStringLiteral("refresh"));
         QVERIFY(b.ok);
         QCOMPARE(b.index, fresh);
         QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: rebuilt (set to always rebuild it)")});
         QCOMPARE(readAllOf(own), otherTimes);
+    }
+
+    // A file changed in place keeps its size and gets a new time: the
+    // index made before is out of date, and the image gets a current one.
+    void indexOfAFileChangedInPlaceIsRebuilt()
+    {
+        const QString src = makeGame(QStringLiteral("patched"), true);
+        const QString own = src + QStringLiteral("/ampr_emu.index");
+        const QString eboot = src + QStringLiteral("/eboot.bin");
+        const QDateTime then = QFileInfo(eboot).lastModified();
+        QVERIFY(then.isValid());
+        const QByteArray before = toolIndex(src);
+        QVERIFY(writeBytes(own, before));
+        QByteArray patched = readAllOf(eboot);
+        QVERIFY(!patched.isEmpty());
+        patched[0] = char(patched[0] ^ 0x5a);
+        QVERIFY(writeBytes(eboot, patched));
+        {
+            QFile f(eboot);
+            QVERIFY(f.open(QIODevice::ReadWrite));
+            QVERIFY(f.setFileTime(then.addSecs(120), QFileDevice::FileModificationTime));
+        }
+        const QByteArray fresh = toolIndex(src);
+        QCOMPARE(fresh.size(), before.size());
+        QVERIFY(fresh != before);
+        QVERIFY(pfs::amprIndexesDifferOnlyInTimes(before, fresh)); // 5.0.2 kept it as up to date
+
+        const Built b = build(src, QStringLiteral("auto"));
+        QVERIFY(b.ok);
+        QCOMPARE(b.index, fresh);
+        QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: rebuilt (it did not match the game's files)")});
+        QCOMPARE(b.outcome.details.value(QStringLiteral("amprIndex")).toString(), QStringLiteral("rebuilt"));
+        QCOMPARE(readAllOf(own), before);
     }
 
     // A packed game's index lists the files inside its packs: "auto" leaves it alone.
@@ -313,19 +376,23 @@ private slots:
         const CancellationToken token;
         QByteArray images[2];
         int at = 0;
+        // One scan for both builds: writing the first image reads the files,
+        // and Windows may then give them a new last-access time, which a
+        // second scan would put into the second image.
+        const auto scanned = scanSource(src, rules, token);
+        QVERIFY(scanned.ok());
         for (const pfs::AmprMode mode : {pfs::AmprMode::Off, pfs::AmprMode::Auto}) {
-            auto tree = scanSource(src, rules, token);
-            QVERIFY(tree.ok());
-            const qsizetype nodes = qsizetype(tree->nodes.size());
-            auto placed = applyAmprIndex(*tree, mode, path(QStringLiteral("plain-temp")));
+            auto tree = *scanned;
+            const qsizetype nodes = qsizetype(tree.nodes.size());
+            auto placed = applyAmprIndex(tree, mode, path(QStringLiteral("plain-temp")));
             QVERIFY(placed.ok());
             QCOMPARE(placed->action, mode == pfs::AmprMode::Off ? pfs::AmprIndexAction::Off : pfs::AmprIndexAction::NotNeeded);
             QVERIFY(placed->indexFile.isEmpty());
-            QCOMPARE(qsizetype(tree->nodes.size()), nodes);
-            auto plan = planImage(*tree, w);
+            QCOMPARE(qsizetype(tree.nodes.size()), nodes);
+            auto plan = planImage(tree, w);
             QVERIFY(plan.ok());
             const QString image = path(QStringLiteral("plain-%1.exfat").arg(at));
-            QVERIFY(writeImage(*tree, *plan, image, w, token).ok());
+            QVERIFY(writeImage(tree, *plan, image, w, token).ok());
             images[at++] = readAllOf(image);
         }
         QVERIFY(!images[0].isEmpty());

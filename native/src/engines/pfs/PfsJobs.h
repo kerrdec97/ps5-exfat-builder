@@ -32,6 +32,9 @@ public:
     QString title() const override;
     QString subtitle() const override;
     QStringList phases() const override;
+    QList<double> phaseWeights() const override { return {0.05, 0.6, 0.35}; }
+    // Verifying takes no share when checking PFS images is off.
+    QList<double> phaseWeights(const SettingsValues& settings) const override;
     QJsonObject parameters() const override { return m_params; }
     Status validate(const SettingsValues& settings) const override;
     Result<JobOutcome> run(JobContext& ctx) override;

@@ -2,6 +2,11 @@
 
 #include "core/Log.h"
 
+#include <QCoreApplication>
+#include <QFileInfo>
+
+#include <mutex>
+
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <powrprof.h>
@@ -11,6 +16,34 @@ namespace fw::power {
 
 namespace {
 bool g_active = false;
+
+std::mutex g_hookMutex;
+PerformHook g_hook; // g_hookMutex
+
+// Every test program is called tst_<name> (tests/CMakeLists.txt): none of
+// them may put the computer to sleep or shut it down, whatever a test does.
+bool isTestProgram()
+{
+    if (!QCoreApplication::instance())
+        return true; // no application to ask: the safe answer
+    return QFileInfo(QCoreApplication::applicationFilePath()).fileName().startsWith(QLatin1String("tst_"), Qt::CaseInsensitive);
+}
+} // namespace
+
+void setPerformHook(PerformHook hook)
+{
+    std::lock_guard lock(g_hookMutex);
+    g_hook = std::move(hook);
+}
+
+bool performBlocked()
+{
+    {
+        std::lock_guard lock(g_hookMutex);
+        if (g_hook)
+            return false;
+    }
+    return qEnvironmentVariableIsSet("FW_NO_POWER_ACTIONS") || isTestProgram();
 }
 
 bool setKeepAwake(bool keepAwake)
@@ -95,6 +128,18 @@ Status perform(Action action)
 {
     if (action == Action::None)
         return success();
+    PerformHook hook;
+    {
+        std::lock_guard lock(g_hookMutex);
+        hook = g_hook;
+    }
+    if (hook)
+        return hook(action);
+    if (performBlocked()) {
+        Logger::instance().log(LogLevel::Warning, QStringLiteral("power"),
+                               QStringLiteral("Queue finished: %1 refused (power actions are switched off here)").arg(actionLabel(action)));
+        return Error(ErrorCode::PermissionDenied, QStringLiteral("Power actions are switched off in this run of the app."));
+    }
     Logger::instance().log(LogLevel::Info, QStringLiteral("power"),
                            QStringLiteral("Queue finished: %1").arg(actionLabel(action)));
     Logger::instance().flush();

@@ -34,7 +34,11 @@ public:
     QList<ui::ChecklistItem> checklist() const { return m_checklist; }
     QString checklistProgress() const { return m_checklistProgress; }
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
+    void matchRecentHeight(); // Recent jobs as tall as the setup card beside it
     void refreshChecklist();
     void refreshQueueTile();
     void refreshConsoleTile();

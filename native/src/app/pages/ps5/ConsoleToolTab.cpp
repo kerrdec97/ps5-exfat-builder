@@ -3,6 +3,9 @@
 
 
 #include <QHeaderView>
+#include <QStyleOptionViewItem>
+
+#include <algorithm>
 
 namespace fw::pages {
 
@@ -66,6 +69,41 @@ void ConsoleToolTab::postToUi(std::function<void()> fn)
         Qt::QueuedConnection);
 }
 
+namespace {
+constexpr char kToolPrimary[] = "fwToolPrimary";     // on a button: it is its tool's main action
+constexpr char kConnectOffered[] = "fwConnectOffered"; // on the page: its console card shows Connect
+
+bool connectOfferedAbove(const QWidget* w)
+{
+    for (const QWidget* p = w; p; p = p->parentWidget())
+        if (const QVariant v = p->property(kConnectOffered); v.isValid())
+            return v.toBool();
+    return false;
+}
+
+void applyToolPrimary(QPushButton* b)
+{
+    const bool primary = b->property(kToolPrimary).toBool() && !connectOfferedAbove(b);
+    setButtonVariant(b, primary ? ButtonVariant::Primary : ButtonVariant::Secondary);
+}
+} // namespace
+
+void setToolPrimary(QPushButton* button, bool primary)
+{
+    button->setProperty(kToolPrimary, primary);
+    applyToolPrimary(button);
+}
+
+void setConnectOffered(QWidget* root, bool offered)
+{
+    if (root->property(kConnectOffered).isValid() && root->property(kConnectOffered).toBool() == offered)
+        return;
+    root->setProperty(kConnectOffered, offered);
+    for (QPushButton* b : root->findChildren<QPushButton*>())
+        if (b->property(kToolPrimary).isValid())
+            applyToolPrimary(b);
+}
+
 void styleToolTable(QTableWidget* table, int minimumRows)
 {
     table->horizontalHeader()->setFixedHeight(32);
@@ -90,10 +128,14 @@ QTableWidgetItem* toolItem(const QString& text, bool mono, const QColor& c)
     return it;
 }
 
+namespace {
+constexpr int kBadgeMargin = space::sm; // around a badge in its cell, on each side
+} // namespace
+
 void setBadgeCell(QTableWidget* table, int row, int column, const QString& text, Tone tone, const QString& icon)
 {
     auto* wrap = new QWidget(table);
-    auto* h = hbox(wrap, 0, QMargins(8, 0, 8, 0));
+    auto* h = hbox(wrap, 0, QMargins(kBadgeMargin, 0, kBadgeMargin, 0));
     auto* badge = new Badge(text, tone, wrap);
     if (!icon.isNull())
         badge->setIconName(icon);
@@ -105,6 +147,27 @@ void setBadgeCell(QTableWidget* table, int row, int column, const QString& text,
     anchor->setData(Qt::AccessibleTextRole, text);
     anchor->setToolTip(text);
     table->setItem(row, column, anchor);
+}
+
+int cellPadding(QTableWidget* table)
+{
+    table->ensurePolished();
+    QStyleOptionViewItem opt;
+    opt.initFrom(table->viewport());
+    opt.widget = table;
+    opt.rect = QRect(0, 0, 200, size::row);
+    opt.showDecorationSelected = true;
+    return opt.rect.width() - table->style()->subElementRect(QStyle::SE_ItemViewItemText, &opt, table).width();
+}
+
+int badgeColumnWidth(QTableWidget* table, int column, const QStringList& badges)
+{
+    int w = 0;
+    for (const QString& b : badges)
+        w = std::max(w, badgeWidth(b, true));
+    w += 2 * kBadgeMargin + cellPadding(table);
+    const QString title = table->horizontalHeaderItem(column) ? table->horizontalHeaderItem(column)->text() : QString();
+    return std::max(w, table->horizontalHeader()->fontMetrics().horizontalAdvance(title) + 2 * space::lg);
 }
 
 } // namespace fw::pages

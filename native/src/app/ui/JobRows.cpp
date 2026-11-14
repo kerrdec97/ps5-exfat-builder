@@ -8,6 +8,7 @@
 #include "app/ui/Sheet.h"
 #include "app/services/JobSubmit.h"
 #include "core/FileUtil.h"
+#include "core/Power.h"
 #include "core/Tr.h"
 #include "engines/general/Module.h"
 
@@ -28,6 +29,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <vector>
 
 namespace fw::ui {
 
@@ -119,7 +121,10 @@ qint64 jobTimeLeftMs(const JobRecord& r)
     if (r.state != JobState::Running)
         return -1;
     const auto& p = r.progress;
-    // In the last stage the stage's own estimate is the job's.
+    // The reporter's: smoothed, and only once there is enough to go on.
+    if (p.jobEtaMs >= 0 || !p.phaseNames.isEmpty())
+        return p.jobEtaMs;
+    // A record made by hand. In the last stage the stage's own estimate is the job's.
     if (p.etaMs >= 0 && p.phaseIndex >= p.phaseCount - 1)
         return p.etaMs;
     // Earlier: the time spent so far, scaled by the weighted share still to do.
@@ -128,6 +133,25 @@ qint64 jobTimeLeftMs(const JobRecord& r)
         return -1;
     const qint64 ms = qint64(double(p.elapsedMs) * (1.0 - f) / f);
     return std::max(ms, p.etaMs); // never less than what this stage still needs
+}
+
+QString runningDetailText(const JobRecord& r)
+{
+    const auto& p = r.progress;
+    const bool running = r.state == JobState::Running;
+    QStringList parts;
+    if (const QString phase = i18n::translate(p.phase); !phase.isEmpty())
+        parts << phase;
+    ProgressSnapshot shown = p;
+    if (!running)
+        shown.ratePerSec = 0; // paused or stopping: nothing moves
+    if (const QString d = progressDetailText(shown, -1); !d.isEmpty())
+        parts << d;
+    if (running && p.unitIsBytes && p.averageRatePerSec > 0)
+        parts << FW_TR("avg %1").arg(formatRate(p.averageRatePerSec));
+    if (const QString left = formatTimeLeft(jobTimeLeftMs(r)); !left.isEmpty())
+        parts << left;
+    return parts.join(QStringLiteral(" · "));
 }
 
 // ---- row ---------------------------------------------------------------------------
@@ -204,6 +228,31 @@ QSize JobRow::sizeHint() const
     return {m_variant == Variant::Queue ? 560 : 360, m_variant == Variant::Queue ? size::rowJob : size::row};
 }
 
+void JobRow::resizeEvent(QResizeEvent* e)
+{
+    QWidget::resizeEvent(e);
+    fitMiddle();
+}
+
+// The title is what tells the jobs apart. Beside the Queue's details column
+// (a 1440 px window) a 220 px note column left it about 120 px ("Demon's
+// Souls (…"): in a narrow list the note column gives way, down to 150 px,
+// until the title has 200 px. The note is cut to its column (tooltip whole).
+void JobRow::fitMiddle()
+{
+    if (m_variant != Variant::Queue)
+        return;
+    constexpr int kTitleRoom = 200, kMiddleMin = 150, kMiddleMax = 220;
+    const auto* row = static_cast<QHBoxLayout*>(layout());
+    const QMargins m = row->contentsMargins();
+    const int others = m.left() + m.right() + m_grip->minimumWidth() + m_stateIcon->minimumWidth()
+                     + m_badge->parentWidget()->minimumWidth() + m_actions->minimumWidth() + 5 * row->spacing();
+    const int middle = std::clamp(width() - others - kTitleRoom, kMiddleMin, kMiddleMax);
+    if (m_middle->maximumWidth() != middle)
+        m_middle->setFixedWidth(middle);
+    m_note->setText(QFontMetrics(m_note->font()).elidedText(m_noteText, Qt::ElideRight, middle - 4));
+}
+
 void JobRow::setSelected(bool on)
 {
     m_selected = on;
@@ -259,6 +308,7 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
     const QString waiting = waitingText(r, maxAttempts);
     const QString phase = i18n::translate(r.progress.phase);
     QString note;
+    QString tip; // the note in full; a running job's says more than fits
     QColor noteColor = color::fg_3;
     bool showBar = false;
     switch (r.state) {
@@ -266,14 +316,19 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
     case JobState::Paused:
     case JobState::Cancelling:
         showBar = true;
-        m_bar->setFraction(r.progress.overallFraction);
+        m_bar->setFraction(shownFraction(r));
         m_bar->setState(r.state != JobState::Running ? ProgressBar::State::Paused
                         : r.progress.indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
         if (r.state == JobState::Cancelling) {
             note = FW_TR("Stopping at the next safe point…");
         } else if (r.state == JobState::Paused) {
             note = phase.isEmpty() ? FW_TR("Paused") : FW_TR("Paused in %1").arg(phase);
+            ProgressSnapshot still = r.progress;
+            still.ratePerSec = 0;
+            if (const QString d = progressDetailText(still, -1); !d.isEmpty())
+                tip = note + QStringLiteral(" · ") + d; // how far it got
         } else {
+            tip = runningDetailText(r);
             QStringList parts;
             if (!phase.isEmpty())
                 parts << phase;
@@ -317,15 +372,16 @@ void JobRow::setRecord(const JobRecord& r, int queuePosition, int maxAttempts, b
         break;
     }
     m_bar->setVisible(showBar);
-    m_note->setText(QFontMetrics(m_note->font()).elidedText(note, Qt::ElideRight, 216));
-    m_note->setToolTip(plainTip(note));
+    m_noteText = note;
+    m_note->setText(QFontMetrics(m_note->font()).elidedText(note, Qt::ElideRight, m_middle->maximumWidth() - 4));
+    m_note->setToolTip(plainTip(tip.isEmpty() ? note : tip));
     setTextColor(m_note, noteColor);
 
     // Badge
     QString badgeText = i18n::translate(jobStateName(r.state));
     Tone tone = toneForState(r.state);
     if (r.state == JobState::Running)
-        badgeText = r.progress.indeterminate ? FW_TR("Running") : FW_TR("Running · %1").arg(thinPercent(r.progress.overallFraction));
+        badgeText = r.progress.indeterminate ? FW_TR("Running") : FW_TR("Running · %1").arg(thinPercent(shownFraction(r)));
     else if (r.state == JobState::Cancelling)
         badgeText = FW_TR("Cancelling…");
     else if (r.state == JobState::Queued && queuePosition > 0 && m_variant == Variant::Queue) {
@@ -611,6 +667,12 @@ QStringList JobList::visibleIds() const
     return out;
 }
 
+void JobList::setDemoRecord(const std::optional<JobRecord>& record)
+{
+    m_demo = record;
+    rebuild();
+}
+
 void JobList::wire(JobRow* row)
 {
     auto& q = m_ctx.queue();
@@ -696,6 +758,17 @@ void JobList::rebuildNow()
     const int maxAttempts = int(m_ctx.settings().value(general::keys::kAutoRetryCount).toInt()) + 1;
     int queuedPos = 0;
     bool anyWaiting = false;
+    if (m_demo && (!m_filter || m_filter(*m_demo))) { // screenshot mode: the made-up job first
+        JobRow* row = old.take(m_demo->id);
+        if (!row) {
+            row = new JobRow(m_variant, this);
+            wire(row);
+        }
+        row->setRecord(*m_demo, 0, maxAttempts, false);
+        row->setSelected(m_demo->id == m_selected);
+        m_rows.push_back(row);
+        m_layout->addWidget(row);
+    }
     for (int r = 0; r < m_model.rowCount(); ++r) {
         const JobRecord* rec = m_model.recordAt(r);
         if (!rec)
@@ -744,7 +817,7 @@ void JobList::rebuildNow()
     }
     if (anyWaiting && !m_tick.isActive())
         m_tick.start();
-    if (!m_selected.isEmpty() && m_model.rowOf(m_selected) < 0) {
+    if (!m_selected.isEmpty() && m_model.rowOf(m_selected) < 0 && !(m_demo && m_demo->id == m_selected)) {
         m_selected.clear();
         emit selectionChanged({});
     }
@@ -884,6 +957,103 @@ QString startQueueText(int waiting)
     return waiting > 1 ? FW_TR("Start queue (%1)").arg(waiting) : FW_TR("Start queue");
 }
 
+QString afterQueueText(const QString& actionName)
+{
+    // The header chip's words (MainWindow), so both places say it alike.
+    switch (power::actionFromName(actionName)) {
+    case power::Action::Sleep: return FW_TR("then sleep");
+    case power::Action::Hibernate: return FW_TR("then hibernate");
+    case power::Action::Shutdown: return FW_TR("then shut down");
+    case power::Action::Restart: return FW_TR("then restart");
+    case power::Action::None: break;
+    }
+    return {};
+}
+
+namespace {
+// The Queue page's note for the chosen action ("When the last job ends, …").
+QString afterQueueNote(const QString& actionName, int seconds)
+{
+    switch (power::actionFromName(actionName)) {
+    case power::Action::Sleep: return FW_TR("When the last job ends, the computer goes to sleep after a %1 s countdown that you can cancel.").arg(seconds);
+    case power::Action::Hibernate: return FW_TR("When the last job ends, the computer hibernates after a %1 s countdown that you can cancel.").arg(seconds);
+    case power::Action::Shutdown: return FW_TR("When the last job ends, the computer shuts down after a %1 s countdown that you can cancel.").arg(seconds);
+    case power::Action::Restart: return FW_TR("When the last job ends, the computer restarts after a %1 s countdown that you can cancel.").arg(seconds);
+    case power::Action::None: break;
+    }
+    return {};
+}
+} // namespace
+
+// ---- meta line --------------------------------------------------------------------------
+
+MetaLine::MetaLine(QWidget* parent) : QLabel(parent)
+{
+    setTextFormat(Qt::PlainText);
+    setWordWrap(false);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+}
+
+int MetaLine::pathStart(const QString& text)
+{
+    const QString arrow = QStringLiteral("\u2192 ");
+    if (const qsizetype a = text.lastIndexOf(arrow); a >= 0)
+        return int(a + arrow.size());
+    const QString dot = QStringLiteral(" \u00b7 ");
+    if (const qsizetype d = text.lastIndexOf(dot); d >= 0) {
+        const QString tail = text.mid(d + dot.size());
+        if (tail.contains(u'\\') || tail.contains(u'/'))
+            return int(d + dot.size());
+    }
+    return 0;
+}
+
+void MetaLine::setFullText(const QString& text)
+{
+    if (text == m_text)
+        return;
+    m_text = text;
+    setToolTip(plainTip(text));
+    setAccessibleName(text);
+    relayout();
+}
+
+QSize MetaLine::minimumSizeHint() const
+{
+    return {0, QLabel::minimumSizeHint().height()};
+}
+
+void MetaLine::resizeEvent(QResizeEvent* e)
+{
+    QLabel::resizeEvent(e);
+    relayout();
+}
+
+void MetaLine::changeEvent(QEvent* e)
+{
+    QLabel::changeEvent(e);
+    if (e->type() == QEvent::FontChange)
+        relayout();
+}
+
+void MetaLine::relayout()
+{
+    const int w = contentsRect().width();
+    const QFontMetrics fm(font());
+    if (w <= 0 || fm.horizontalAdvance(m_text) <= w) {
+        setText(m_text);
+        return;
+    }
+    const int at = pathStart(m_text);
+    const QString head = m_text.left(at);
+    const int headW = fm.horizontalAdvance(head);
+    // The destination keeps at least a few characters around its "…".
+    if (at > 0 && headW + fm.horizontalAdvance(QStringLiteral("D:\\…\\Packages")) <= w)
+        setText(head + fm.elidedText(m_text.mid(at), Qt::ElideMiddle, w - headW));
+    else
+        setText(fm.elidedText(m_text, at > 0 ? Qt::ElideRight : Qt::ElideMiddle, w));
+}
+
 // ---- dock -----------------------------------------------------------------------------
 
 JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
@@ -921,7 +1091,7 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     m_runTitle = new ElideLabel({}, Qt::ElideRight, m_running);
     m_runTitle->setFont(font::bodyStrong());
     setTextColor(m_runTitle, color::fg_0);
-    m_runMeta = new ElideLabel({}, Qt::ElideMiddle, m_running);
+    m_runMeta = new MetaLine(m_running);
     m_runMeta->setFont(font::mono());
     setTextColor(m_runMeta, color::fg_3);
     tcol->addWidget(m_runTitle);
@@ -975,6 +1145,7 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
 
     auto* f = footer();
     m_footer = caption({}, this);
+    m_footer->setObjectName(QStringLiteral("dock-footer"));
     f->addWidget(m_footer, 1);
     // A list made with "Add to queue" (or restored at start) waits for this.
     m_start = button(FW_TR("Start queue"), ButtonVariant::Primary, QStringLiteral("play"), this);
@@ -991,7 +1162,16 @@ JobsDock::JobsDock(AppContext& ctx, JobQueueModel& model, QWidget* parent)
     connect(&m_model, &QAbstractItemModel::modelReset, this, [this] { refresh(); });
     connect(&m_model, &JobQueueModel::countsChanged, this, [this] { refresh(); });
     connect(&m_ctx.queue(), &JobQueue::heldChanged, this, [this] { refresh(); });
+    connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
+        if (key == general::keys::kAfterQueueAction || key == general::keys::kAfterQueueDelay)
+            refresh();
+    });
     refresh();
+}
+
+QString JobsDock::footerText() const
+{
+    return m_footer->text();
 }
 
 // System jobs (update checks) never show in the dock, like in the Queue page
@@ -1013,8 +1193,13 @@ void JobsDock::refresh()
     int runningCount = 0;
     int activeCount = 0; // running, paused or being cancelled
     qint64 etaMs = -1;
-    for (int r = 0; r < rows; ++r) {
-        const JobRecord* rec = m_model.recordAt(r);
+    // The queue's jobs, and in screenshot mode the made-up one first.
+    std::vector<const JobRecord*> records;
+    if (m_demo)
+        records.push_back(&*m_demo);
+    for (int r = 0; r < rows; ++r)
+        records.push_back(m_model.recordAt(r));
+    for (const JobRecord* rec : records) {
         if (!rec || jobs::isSystemKind(rec->kind))
             continue;
         ++total;
@@ -1046,13 +1231,17 @@ void JobsDock::refresh()
         m_runTitle->setFullText(running->title);
         m_runMeta->setFullText(running->subtitle);
         const auto& p = running->progress;
-        QString detail = progressDetailText(p);
+        // The job's time left, and a speed only while it runs (paused, nothing moves).
+        ProgressSnapshot shown = p;
+        if (running->state != JobState::Running)
+            shown.ratePerSec = 0;
+        QString detail = progressDetailText(shown, jobTimeLeftMs(*running));
         if (const QString phase = i18n::translate(p.phase); !phase.isEmpty())
             detail = detail.isEmpty() ? phase : QStringLiteral("%1 · %2").arg(phase, detail);
-        m_progress->setProgress(p.overallFraction, p.indeterminate, detail);
+        m_progress->setProgress(shownFraction(*running), p.indeterminate, detail);
         m_progress->setState(running->state != JobState::Running ? ProgressBar::State::Paused
                              : p.indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
-        m_progress->setPhases(running->phases, p.phaseIndex);
+        m_progress->setPhases(stageNames(*running), p.phaseIndex);
         const bool cancelling = running->state == JobState::Cancelling;
         m_runPause->setVisible(!cancelling);
         m_runCancel->setVisible(!cancelling);
@@ -1089,7 +1278,14 @@ void JobsDock::refresh()
         foot = FW_TR("Nothing running");
     else
         foot = FW_TR("Nothing in the queue");
-    m_footer->setText(foot);
+    // What the computer does once the queue is done, where the queue is
+    // started from: "3 waiting · then sleep", in the warning colour, as the
+    // header chip says it on every page.
+    const QString action = m_ctx.settings().value(general::keys::kAfterQueueAction).toString();
+    const QString then = total > 0 ? afterQueueText(action) : QString();
+    m_footer->setText(then.isEmpty() ? foot : foot + QStringLiteral(" · ") + then);
+    setTextColor(m_footer, then.isEmpty() ? color::fg_3 : color::warn_hi);
+    m_footer->setToolTip(then.isEmpty() ? QString() : afterQueueNote(action, m_ctx.settings().value(general::keys::kAfterQueueDelay).toInt()));
 }
 
 void JobsDock::setWatchedJob(const QString& id)
@@ -1097,6 +1293,16 @@ void JobsDock::setWatchedJob(const QString& id)
     if (m_watched == id)
         return;
     m_watched = id;
+    refresh();
+}
+
+void JobsDock::setDemoRunning(const JobRecord& record)
+{
+    if (record.id.isEmpty())
+        m_demo.reset();
+    else
+        m_demo = record;
+    m_list->setDemoRecord(m_demo); // a finished one is listed; a running one stays out (applyListFilter)
     refresh();
 }
 

@@ -12,6 +12,11 @@
 //    A failed or cancelled edit, or one whose verification fails, is rolled
 //    back from the journal, leaving the image byte-identical. A journal left
 //    by a crash is rolled back by the next edit (or recoverInterruptedEdit()).
+//  * A cancel while a written edit is verified keeps the edit when a quick
+//    check of names, sizes and the structure (metadata only, not cancelled)
+//    passes; it is then reported as not verified
+//    (EditResult::verificationCancelled). A problem the verification found
+//    before the cancel, or a failed quick check, undoes the edit as above.
 //  * Everything else (adding files or folders, a replacement that needs more
 //    clusters, "always rebuild"): a new image is written to "<image>.part",
 //    verified against the expected tree, then swapped in (the old image is
@@ -76,6 +81,11 @@ struct EditResult {
     bool recoveredJournal = false; // an earlier interrupted edit was rolled back first
     bool restored = false;         // verification failed; the original image was kept or put back
     bool changed = true;           // false: the operations left the tree as it was, nothing was written
+    // Verification was cancelled after the edit was written: the edit is kept
+    // (as finished work is when verification is turned off), and
+    // `verification` holds the names, sizes and structure check it passed
+    // instead of the one that was cancelled. It is not verified.
+    bool verificationCancelled = false;
     VerifyReport verification;
     QStringList warnings;
 

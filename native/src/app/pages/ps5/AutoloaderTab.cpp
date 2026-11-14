@@ -59,6 +59,7 @@ AutoloaderTab::AutoloaderTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     h->addWidget(hint, 1);
     m_sleep = button(FW_TR("Insert !sleep…"), ButtonVariant::Secondary, QStringLiteral("timer"), edit);
     m_save = button(FW_TR("Save autoload.txt"), ButtonVariant::Primary, QStringLiteral("save"), edit);
+    setToolPrimary(m_save);
     h->addWidget(m_sleep);
     h->addWidget(m_save);
     m_editor = new QPlainTextEdit(edit);

@@ -52,6 +52,8 @@ QString toolsDir();    // where user-chosen tool paths are remembered / extracte
 
 // Removes the "fw-" folders in the app's own temp root that are older than
 // `maxAgeHours` (startup sweep, audit M9). Returns how many were removed.
+// A folder whose marker names a process that still runs (TempDir::isInUse)
+// stays in both sweeps, whatever its age.
 int sweepStaleTemp(int maxAgeHours = 24);
 // The same sweep in another folder (the temporary folder chosen in Settings).
 // That folder is the user's, so only what the app can prove it created goes:

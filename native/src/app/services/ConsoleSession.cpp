@@ -6,6 +6,8 @@
 #include "core/Cancellation.h"
 #include "core/Tr.h"
 
+#include <QTimer>
+
 #include <atomic>
 #include <deque>
 #include <functional>
@@ -13,6 +15,10 @@
 #include <mutex>
 
 namespace fw::ui {
+
+namespace {
+std::atomic<int> g_keepAliveMs{60000};
+}
 
 class ConsoleWorker : public QObject {
     Q_OBJECT
@@ -29,6 +35,9 @@ public:
         if (m_busy)
             return;
         m_busy = true;
+        // The connection is not idle while a request uses it.
+        if (m_keepAlive)
+            m_keepAlive->stop();
         while (!m_pending.empty()) {
             auto next = std::move(m_pending.front());
             m_pending.pop_front();
@@ -36,6 +45,7 @@ public:
                 next.fn();
         }
         m_busy = false;
+        armKeepAlive();
     }
 
     // Any thread: the value a request posted now has to carry.
@@ -145,6 +155,42 @@ private:
             emit m_session->disconnected(st.error().message);
         }
     }
+
+    // Console FTP servers close a control connection that stays silent for a
+    // while; a NOOP after every idle minute keeps the browser's one open. It
+    // is armed only between requests (run() stops it while one runs) and
+    // only while connected, so it never lands inside a listing or a delete.
+    // Transfers use connections of their own.
+    void armKeepAlive()
+    {
+        if (!m_client || !m_client->isConnected()) {
+            if (m_keepAlive)
+                m_keepAlive->stop();
+            return;
+        }
+        if (!m_keepAlive) {
+            m_keepAlive = new QTimer(this);
+            m_keepAlive->setSingleShot(true);
+            connect(m_keepAlive, &QTimer::timeout, this, [this] {
+                if (!m_busy && m_client)
+                    run([this] { doKeepAlive(); }, m_epoch.load());
+            });
+        }
+        m_keepAlive->start(std::max(1, g_keepAliveMs.load()));
+    }
+    void doKeepAlive()
+    {
+        if (!m_client)
+            return;
+        auto r = m_client->command(QStringLiteral("NOOP"), token());
+        if (!r.ok() && r.error().isCancelled()) {
+            m_client.reset(); // Disconnect stopped it; that request reports the state
+            return;
+        }
+        // A refused NOOP still proves the link; a lost one ends the session.
+        noteDroppedLink(r.ok() ? success() : Status(r.error()));
+    }
+
     CancellationToken token()
     {
         std::lock_guard lock(m_cancelMutex);
@@ -163,7 +209,13 @@ private:
     std::atomic<quint64> m_epoch{0};
     std::mutex m_cancelMutex;
     CancellationSource m_cancel;
+    QTimer* m_keepAlive = nullptr; // worker thread only
 };
+
+void ConsoleSession::setKeepAliveIntervalForTests(int ms)
+{
+    g_keepAliveMs.store(ms > 0 ? ms : 60000);
+}
 
 ConsoleSession::ConsoleSession(QObject* parent) : QObject(parent)
 {

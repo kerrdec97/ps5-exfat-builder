@@ -54,6 +54,10 @@ public:
     // the decimal separator of `locale` (a comma in much of Europe) is taken
     // for one. "1,5" -> "1.5" there; everything else is returned trimmed.
     static QString numberText(const QString& typed, const QLocale& locale = QLocale::system());
+    // What a value of 0 means for `def` where it is not a quantity
+    // ("Automatic" threads, "Off" retries); "" for every other setting. The
+    // number field shows it beside the 0.
+    static QString zeroMeaning(const SettingDef& def);
 signals:
     void edited(const QVariant& value); // user interaction only
 

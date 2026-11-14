@@ -7,6 +7,7 @@
 // folder) and FW_BACKPORT_E2E_GAME (a game folder with sce_sys/param.json)
 // are set.
 
+#include "core/Log.h"
 #include "core/Paths.h"
 #include "engines/fpkg/AsciiAliases.h"
 #include "engines/fpkg/BackportUpdate.h"
@@ -26,7 +27,12 @@
 #include <QtTest>
 
 #include <atomic>
+#include <mutex>
 #include <thread>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 using namespace fw;
 using namespace fw::fpkg;
@@ -323,6 +329,22 @@ private slots:
         QVERIFY(found.ok());
         QVERIFY(found->has_value());
         QCOMPARE(**found, table);
+
+        // A base built from a dump's own layout can have more than 255 chunks (up to 800).
+        std::vector<PlgxChunk> many;
+        for (int c = 0; c < 300; ++c)
+            many.push_back({langBit(QStringLiteral("en-US")), QByteArray("c") + QByteArray::number(c)});
+        const QByteArray big = buildPlgx(many, {{1, "s", {0, 299}}}, 0, QStringLiteral("en-US"), langBit(QStringLiteral("en-US")));
+        QByteArray pkg300("\x7F" "FIH", 4);
+        pkg300 += QByteArray(5000, '\0') + big + QByteArray(300, '\0');
+        put(d, QStringLiteral("p300.pkg"), pkg300);
+        auto found300 = findPlayGoChunkDatInPackage(QDir(d).filePath(QStringLiteral("p300.pkg")), cs.token());
+        QVERIFY(found300.ok());
+        QVERIFY(found300->has_value());
+        QCOMPARE(**found300, big);
+        auto parsed = parsePlayGoChunkDat(**found300);
+        QVERIFY(parsed.ok());
+        QCOMPARE(parsed->chunkCount, 300);
     }
 
     void sdkFixToolchain()
@@ -437,6 +459,13 @@ private slots:
         // The base's table could not be read: the user's PlayGo settings stay.
         const FpkgSettings plain = backportUpdateSettings(s, 0, {});
         QVERIFY(!plain.playGoFallback && plain.useSourcePlayGoTable && plain.playGoAllLanguages);
+        // The base a dual backport builds gets the layout its updates get: the
+        // generated one, never the game folder's own table.
+        const FpkgSettings base = backportBaseSettings(s);
+        QVERIFY(!base.useSourcePlayGoTable);
+        QCOMPARE(base.playGoFallback, s.playGoFallback);
+        QCOMPARE(base.postVerify, PostVerify::HeaderOnly);
+        QCOMPARE(base.outputConflict, OutputConflict::Fail);
     }
 
     void digestPlausibility()
@@ -643,6 +672,166 @@ private slots:
         }
         QCOMPARE(readAll(basePkg), baseBytes);
         QVERIFY(!readAll(index).contains(QDir::toNativeSeparators(out).toUtf8()));
+
+        // ---- cancelled while the publisher checks a finished package (GitHub #97) ----------------
+        // The package is kept under its name, and the job finishes as with
+        // verification off: its outcome lists what was verified and the kept
+        // package, Skipped, and nothing more is built.
+        const auto cancelWhileChecking = [&](const BackportUpdateRequest& r, const QByteArray& only, const QByteArray& skip = {}) {
+            const QString started = QDir(m_tmp.path()).filePath(QStringLiteral("standin/verify.started"));
+            QFile::remove(started);
+            QFile::remove(started + QStringLiteral(".skipped"));
+            EnvVar slow("FAKE_PUBCMD_VERIFY", "slow");
+            EnvVar marker("FAKE_PUBCMD_VERIFY_STARTED", started.toUtf8());
+            EnvVar picked("FAKE_PUBCMD_VERIFY_ONLY", only);
+            EnvVar skipped("FAKE_PUBCMD_VERIFY_SKIP", skip);
+            CancellationSource cancel;
+            std::atomic<bool> finished{false};
+            std::thread canceller([&] {
+                while (!finished && !QFileInfo::exists(started))
+                    QThread::msleep(25);
+                cancel.cancel(QStringLiteral("test"));
+            });
+            auto result = runBackport(r, values, cancel.token());
+            finished = true;
+            canceller.join();
+            return std::make_pair(QFileInfo::exists(started), result);
+        };
+        const auto warnedAbout = [](const JobOutcome& o, const QString& text) {
+            for (const QString& w : o.warnings)
+                if (w.contains(text))
+                    return true;
+            return false;
+        };
+        {
+            // The base it built: kept, and no update is built against it.
+            BackportUpdateRequest r = request;
+            r.output = QDir(m_tmp.path()).filePath(QStringLiteral("standin/vcancel-base"));
+            r.backport5xx.clear();
+            const auto [checked, finished] = cancelWhileChecking(r, QByteArray());
+            QVERIFY2(checked, "img_verify never ran");
+            QVERIFY2(finished.ok(), qPrintable(errorOf(finished).toLogString()));
+            const QString kept = QDir(r.output).filePath(kStem + QStringLiteral(".pkg"));
+            QCOMPARE(finished->outputs, QStringList{kept});
+            QCOMPARE(finished->verification, Verification::Skipped);
+            QVERIFY(finished->details.value(QStringLiteral("verificationCancelled")).toBool());
+            QCOMPARE(finished->details.value(QStringLiteral("basePackage")).toString(), kept);
+            QVERIFY2(warnedAbout(*finished, QDir::toNativeSeparators(kept)), qPrintable(finished->warnings.join(u'|')));
+            QVERIFY2(warnedAbout(*finished, QStringLiteral("no update was built")), qPrintable(finished->warnings.join(u'|')));
+            QCOMPARE(packagesIn(r.output), QStringList{kStem + QStringLiteral(".pkg")});
+            QCOMPARE(workFoldersIn(r.output), QStringList());
+            const auto inspected = inspectPackage(kept, CancellationToken());
+            QVERIFY(inspected.ok());
+            QCOMPARE(inspected->kind, PackageKind::Ps5);
+        }
+        {
+            // The first of two updates: kept; the second is not built.
+            BackportUpdateRequest r;
+            r.basePackage = basePkg;
+            r.gameFolder = game;
+            r.backport4xx = b4;
+            r.backport5xx = b5;
+            r.output = QDir(m_tmp.path()).filePath(QStringLiteral("standin/vcancel-update"));
+            const auto [checked, finished] = cancelWhileChecking(r, QByteArrayLiteral("remastered"));
+            QVERIFY2(checked, "the update's image was never checked");
+            QVERIFY2(finished.ok(), qPrintable(errorOf(finished).toLogString()));
+            const QString kept = QDir(r.output).filePath(QStringLiteral("PPSA01234-backport-4xx.pkg"));
+            QCOMPARE(finished->outputs, QStringList{kept});
+            QCOMPARE(finished->verification, Verification::Skipped);
+            QVERIFY(finished->details.value(QStringLiteral("verificationCancelled")).toBool());
+            QCOMPARE(finished->details.value(QStringLiteral("version")).toString(), QStringLiteral("01.000.001"));
+            QCOMPARE(finished->details.value(QStringLiteral("baseDigest")).toString(), base->digestHex);
+            QVERIFY2(warnedAbout(*finished, QDir::toNativeSeparators(kept)), qPrintable(finished->warnings.join(u'|')));
+            QVERIFY2(warnedAbout(*finished, QStringLiteral("Cancelled before the 5.xx+ update could be built.")),
+                     qPrintable(finished->warnings.join(u'|')));
+            QCOMPARE(packagesIn(r.output), QStringList{QStringLiteral("PPSA01234-backport-4xx.pkg")});
+            QCOMPARE(workFoldersIn(r.output), QStringList());
+            const auto delta = inspectPackage(kept, CancellationToken());
+            QVERIFY(delta.ok());
+            QCOMPARE(delta->kind, PackageKind::Ps5Delta);
+            QVERIFY(readAll(kept).contains(base->digest));
+        }
+        {
+            // The last update of a dual backport: the verified base and the
+            // verified first update are outputs as well.
+            BackportUpdateRequest r = request;
+            r.output = QDir(m_tmp.path()).filePath(QStringLiteral("standin/vcancel-dual"));
+            const auto [checked, finished] = cancelWhileChecking(r, QByteArrayLiteral("remastered"), QByteArrayLiteral("2"));
+            QVERIFY2(checked, "the second update's image was never checked");
+            QVERIFY2(finished.ok(), qPrintable(errorOf(finished).toLogString()));
+            const QString keptBase = QDir(r.output).filePath(kStem + QStringLiteral(".pkg"));
+            const QString verified = QDir(r.output).filePath(QStringLiteral("PPSA01234-backport-4xx.pkg"));
+            const QString kept = QDir(r.output).filePath(QStringLiteral("PPSA01234-backport-5xxplus.pkg"));
+            QCOMPARE(finished->outputs, (QStringList{keptBase, verified, kept}));
+            QCOMPARE(finished->verification, Verification::Skipped);
+            QVERIFY(finished->details.value(QStringLiteral("verificationCancelled")).toBool());
+            QVERIFY2(warnedAbout(*finished, QDir::toNativeSeparators(kept)), qPrintable(finished->warnings.join(u'|')));
+            QVERIFY(!warnedAbout(*finished, QStringLiteral("Cancelled before")));
+            QVERIFY2(finished->summary.contains(QStringLiteral("PPSA01234-backport-4xx.pkg, PPSA01234-backport-5xxplus.pkg")),
+                     qPrintable(finished->summary));
+            QCOMPARE(packagesIn(r.output), (QStringList{QFileInfo(verified).fileName(), QFileInfo(kept).fileName(),
+                                                        QFileInfo(keptBase).fileName()}));
+            QCOMPARE(workFoldersIn(r.output), QStringList());
+            for (const QString& update : {verified, kept})
+                QVERIFY2(QFileInfo(update + QStringLiteral(".naps_metric.json")).isFile(), qPrintable(update));
+        }
+        QCOMPARE(readAll(basePkg), baseBytes);
+
+#ifdef Q_OS_WIN
+        // ---- the verified base cannot be renamed (a scanner holds it) and the job is cancelled meanwhile ----
+        // It is copied to its name instead, and the cancel does not cut that copy
+        // short: the work folder holds the only copy, and it is removed when the
+        // job ends. The cancel stops the job once the base has its name.
+        {
+            const QString heldOut = QDir(m_tmp.path()).filePath(QStringLiteral("standin/held"));
+            BackportUpdateRequest held = request;
+            held.output = heldOut;
+            held.backport5xx.clear();
+            CancellationSource cancel;
+            HANDLE scanner = INVALID_HANDLE_VALUE;
+            QString heldPath;
+            QByteArray heldBytes;
+            std::mutex sinkMutex;
+            // Sinks are called as the line is logged: the base is held as soon as
+            // the build has given it its name in the work folder, and the job is
+            // cancelled when the rename to the output folder is refused.
+            const auto sink = std::make_shared<CallbackSink>([&](const LogRecord& r) {
+                std::lock_guard lock(sinkMutex);
+                if (scanner == INVALID_HANDLE_VALUE) {
+                    for (const QString& work : workFoldersIn(heldOut)) {
+                        const QString p = QDir(QDir(heldOut).filePath(work)).filePath(kStem + QStringLiteral(".pkg"));
+                        if (!work.startsWith(QStringLiteral(".ppr-sdkbase-")) || !QFileInfo(p).isFile())
+                            continue;
+                        heldBytes = readAll(p);
+                        scanner = CreateFileW(QDir::toNativeSeparators(p).toStdWString().c_str(), GENERIC_READ,
+                                              FILE_SHARE_READ | FILE_SHARE_WRITE /* no delete, no rename */, nullptr,
+                                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                        heldPath = p;
+                    }
+                }
+                if (r.message.startsWith(QStringLiteral("MoveFileEx failed")))
+                    cancel.cancel(QStringLiteral("test"));
+            });
+            Logger::instance().addSink(sink);
+            auto cancelled = runBackport(held, values, cancel.token());
+            Logger::instance().removeSink(sink);
+            if (scanner != INVALID_HANDLE_VALUE)
+                CloseHandle(scanner);
+            QVERIFY2(!heldPath.isEmpty(), "the base was never seen in its work folder");
+            QVERIFY2(scanner != INVALID_HANDLE_VALUE, "the base could not be held");
+            QVERIFY2(cancel.token().isCancelled(), "the rename of the base was not refused");
+            QVERIFY2(errorOf(cancelled).isCancelled(), qPrintable(errorOf(cancelled).toLogString()));
+            const QString finalBase = QDir(heldOut).filePath(kStem + QStringLiteral(".pkg"));
+            QVERIFY(!heldBytes.isEmpty());
+            QCOMPARE(readAll(finalBase), heldBytes);
+            QCOMPARE(packagesIn(heldOut), QStringList{kStem + QStringLiteral(".pkg")});
+            QCOMPARE(QDir(heldOut).entryList({QStringLiteral("*.part")}, QDir::Files | QDir::Hidden), QStringList());
+            // The work folder could not go while the file was held.
+            removeTrackedWorkFolder(QFileInfo(heldPath).absolutePath());
+            QCOMPARE(workFoldersIn(heldOut), QStringList());
+            QVERIFY(!readAll(index).contains(QDir::toNativeSeparators(heldOut).toUtf8()));
+        }
+#endif
     }
 
     // ---- end to end with real tools (skipped without them) -----------------------------

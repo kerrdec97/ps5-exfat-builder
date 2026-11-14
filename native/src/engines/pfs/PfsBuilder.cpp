@@ -4,11 +4,11 @@
 // and compression.py (_encode_pfsc_into_handle, _analyze_pfsc_file_storage),
 // derived from PSBrew/MkPFS. GPL-3.0-or-later.
 //
-// Compression runs as an ordered pipeline: the calling thread reads 1 MiB
-// chunks in image order and submits them to a bounded worker pool; it then
-// consumes the results strictly in submission order and writes them. Every
-// 64 KiB block is compressed independently, so the bytes written do not
-// depend on the number of workers.
+// Compression runs as an ordered pipeline: 1 MiB chunks are read in image
+// order and submitted to a bounded worker pool (by a reader thread when the
+// pool has workers); the calling thread consumes the results strictly in
+// submission order and writes them. Every 64 KiB block is compressed
+// independently, so the bytes written do not depend on the number of workers.
 
 #include "engines/pfs/PfsBuilder.h"
 
@@ -18,7 +18,13 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 
+#include <condition_variable>
 #include <deque>
+#include <exception>
+#include <mutex>
+#include <optional>
+#include <system_error>
+#include <thread>
 
 namespace fw::pfs {
 
@@ -85,74 +91,70 @@ public:
             bool last = false;
             std::shared_ptr<CompressPool::Task> task; // null: raw item
         };
-        std::deque<Pending> queue;
         const size_t window = size_t(std::max(4, m_pool.threads() * 3));
 
+        // ---- produce: the next entry in image order (false: none left) ----
         int prodItem = 0;
         qint64 prodOff = 0;
         std::unique_ptr<SeqSource> owned;
         SeqSource* prodSrc = nullptr;
+        QElapsedTimer readClock;
+        const int n = int(items.size());
+        const auto produce = [&](Pending& out) -> Result<bool> {
+            if (prodItem >= n)
+                return false;
+            const PipelineItem& it = items[size_t(prodItem)];
+            if (!it.encode || it.size <= 0) {
+                out = {prodItem, true, true, nullptr};
+                ++prodItem;
+                return true;
+            }
+            if (!prodSrc) {
+                if (it.borrowed) {
+                    prodSrc = it.borrowed;
+                    FW_TRY(prodSrc->rewind());
+                } else {
+                    owned = it.open();
+                    prodSrc = owned.get();
+                }
+                prodOff = 0;
+            }
+            if (!m_token.checkpoint())
+                return Error::cancelled();
+            const qint64 take = std::min<qint64>(qint64(kBlocksPerTask) * kPfscBlock, it.size - prodOff);
+            const int nblocks = int(ceilDiv(take, kPfscBlock));
+            auto task = m_pool.makeTask(nblocks);
+            readClock.restart();
+            FW_TRY_ASSIGN(const qint64 got, prodSrc->read(task->raw.data(), take));
+            readNs += readClock.nsecsElapsed();
+            if (got != take)
+                return Error(ErrorCode::IoError, QStringLiteral("%1 ended early.").arg(prodSrc->describe()));
+            if (qint64(task->raw.size()) > take)
+                std::memset(task->raw.data() + take, 0, size_t(task->raw.size() - take));
+            task->rawBytes = take;
+            m_pool.submit(task);
+            const bool first = prodOff == 0;
+            prodOff += take;
+            const bool last = prodOff >= it.size;
+            out = {prodItem, first, last, task};
+            if (last) {
+                owned.reset();
+                prodSrc = nullptr;
+                ++prodItem;
+            }
+            return true;
+        };
 
-        // Consumer state for the item being written.
+        // ---- consume in order ----
+        // State for the item being written.
         qint64 base = 0, pos = 0, blockCount = 0, headerSize = 0, compressedBlocks = 0, allCompressed = 0;
         std::vector<qint64> offsets;
-
-        const int n = int(items.size());
-        for (;;) {
-            // ---- produce ----
-            while (queue.size() < window && prodItem < n) {
-                const PipelineItem& it = items[size_t(prodItem)];
-                if (!it.encode || it.size <= 0) {
-                    queue.push_back({prodItem, true, true, nullptr});
-                    ++prodItem;
-                    continue;
-                }
-                if (!prodSrc) {
-                    if (it.borrowed) {
-                        prodSrc = it.borrowed;
-                        FW_TRY(prodSrc->rewind());
-                    } else {
-                        owned = it.open();
-                        prodSrc = owned.get();
-                    }
-                    prodOff = 0;
-                }
-                if (!m_token.checkpoint())
-                    return Error::cancelled();
-                const qint64 take = std::min<qint64>(qint64(kBlocksPerTask) * kPfscBlock, it.size - prodOff);
-                const int nblocks = int(ceilDiv(take, kPfscBlock));
-                auto task = m_pool.makeTask(nblocks);
-                m_clock.restart();
-                FW_TRY_ASSIGN(const qint64 got, prodSrc->read(task->raw.data(), take));
-                readNs += m_clock.nsecsElapsed();
-                if (got != take)
-                    return Error(ErrorCode::IoError, QStringLiteral("%1 ended early.").arg(prodSrc->describe()));
-                if (qint64(task->raw.size()) > take)
-                    std::memset(task->raw.data() + take, 0, size_t(task->raw.size() - take));
-                task->rawBytes = take;
-                m_pool.submit(task);
-                const bool first = prodOff == 0;
-                prodOff += take;
-                const bool last = prodOff >= it.size;
-                queue.push_back({prodItem, first, last, task});
-                if (last) {
-                    owned.reset();
-                    prodSrc = nullptr;
-                    ++prodItem;
-                }
-            }
-            if (queue.empty())
-                break;
-
-            // ---- consume in order ----
-            Pending p = std::move(queue.front());
-            queue.pop_front();
+        const auto consume = [&](Pending& p) -> Status {
             const PipelineItem& it = items[size_t(p.item)];
             if (!p.task) {
                 if (m_hooks.item)
                     m_hooks.item(it.label);
-                FW_TRY(onRaw(p.item));
-                continue;
+                return onRaw(p.item);
             }
             m_clock.restart();
             m_pool.wait(p.task);
@@ -209,13 +211,118 @@ public:
                 }
                 FW_TRY(onEncoded(p.item, r));
             }
+            return success();
+        };
+
+        // This thread reads, then writes what is next in order.
+        const auto serially = [&]() -> Status {
+            std::deque<Pending> queue;
+            for (;;) {
+                while (queue.size() < window) {
+                    Pending p;
+                    FW_TRY_ASSIGN(const bool more, produce(p));
+                    if (!more)
+                        break;
+                    queue.push_back(std::move(p));
+                }
+                if (queue.empty())
+                    return success();
+                Pending p = std::move(queue.front());
+                queue.pop_front();
+                FW_TRY(consume(p));
+            }
+        };
+        if (m_pool.threads() <= 1)
+            return serially(); // compression runs inside submit(): one thread does everything
+
+        // With a worker pool a reader thread fills and submits the tasks, at
+        // most `window` ahead, while this thread writes the results: reading
+        // the input no longer waits for writing the output. Entries are
+        // produced and consumed in the same order as on one thread, so the
+        // bytes written do not change.
+        struct Shared {
+            std::mutex mutex;
+            std::condition_variable changed;
+            std::deque<Pending> queue;
+            std::optional<Error> error;
+            std::exception_ptr exception;
+            bool finished = false; // the reader produced everything, or failed
+            bool stop = false;     // the writer returned early
+        } shared;
+        const auto readAhead = [&] {
+            for (;;) {
+                {
+                    std::unique_lock lock(shared.mutex);
+                    shared.changed.wait(lock, [&] { return shared.stop || shared.queue.size() < window; });
+                    if (shared.stop)
+                        return;
+                }
+                Pending p;
+                std::optional<Result<bool>> more;
+                try {
+                    more.emplace(produce(p));
+                } catch (...) {
+                    std::lock_guard lock(shared.mutex);
+                    shared.exception = std::current_exception();
+                    shared.finished = true;
+                    shared.changed.notify_all();
+                    return;
+                }
+                std::lock_guard lock(shared.mutex);
+                if (!more->ok())
+                    shared.error = more->takeError();
+                else if (more->value())
+                    shared.queue.push_back(std::move(p));
+                if (!more->ok() || !more->value())
+                    shared.finished = true;
+                shared.changed.notify_all();
+                if (shared.finished)
+                    return;
+            }
+        };
+        std::thread reader;
+        try {
+            reader = std::thread(readAhead);
+        } catch (const std::system_error&) {
+            return serially(); // the system would not start another thread
         }
-        return success();
+        struct StopReader {
+            Shared& s;
+            std::thread& t;
+            ~StopReader()
+            {
+                {
+                    std::lock_guard lock(s.mutex);
+                    s.stop = true;
+                }
+                s.changed.notify_all();
+                t.join();
+            }
+        } stopReader{shared, reader};
+
+        for (;;) {
+            Pending p;
+            {
+                std::unique_lock lock(shared.mutex);
+                m_clock.restart();
+                shared.changed.wait(lock, [&] { return !shared.queue.empty() || shared.finished; });
+                waitNs += m_clock.nsecsElapsed();
+                if (shared.exception)
+                    std::rethrow_exception(shared.exception);
+                if (shared.error)
+                    return *shared.error;
+                if (shared.queue.empty())
+                    return success();
+                p = std::move(shared.queue.front());
+                shared.queue.pop_front();
+            }
+            shared.changed.notify_all();
+            FW_TRY(consume(p));
+        }
     }
 
-private:
-public:
-    // Time the calling thread spent reading input, waiting for compression and writing.
+    // Time spent reading input (on the reader thread when there is one), and
+    // the writing thread's time waiting for the next block in order and writing.
     qint64 readNs = 0, waitNs = 0, writeNs = 0;
 
 private:
@@ -491,8 +598,8 @@ Result<BuildStats> writeImage(const BuildInput& input, OutputFormat format, cons
     }
     FW_TRY(out.close());
     st.seconds = double(timer.nsecsElapsed()) / 1e9;
-    log.debug(QStringLiteral("PFS image written: %1 bytes in %2 s with %3 thread(s); writer thread: read %4 s, "
-                             "waiting for compression %5 s, write %6 s")
+    log.debug(QStringLiteral("PFS image written: %1 bytes in %2 s with %3 thread(s); reading the input %4 s; writer "
+                             "thread: waiting for the next block %5 s, write %6 s")
                   .arg(st.imageBytes)
                   .arg(st.seconds, 0, 'f', 2)
                   .arg(st.threads)

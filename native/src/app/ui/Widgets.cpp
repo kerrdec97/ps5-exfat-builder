@@ -24,9 +24,12 @@
 #include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QStyle>
 #include <QStyleOption>
 #include <QStyledItemDelegate>
+#include <QTextLayout>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -170,6 +173,50 @@ void ElideLabel::setFullText(const QString& text)
     relayout();
 }
 
+void ElideLabel::setMaxLines(int lines)
+{
+    lines = std::max(1, lines);
+    if (lines == m_maxLines)
+        return;
+    m_maxLines = lines;
+    relayout();
+}
+
+namespace {
+// `text` in at most `maxLines` lines of `width` px, broken where it may wrap
+// (the lines joined with "\n", so the label shows exactly these); the last
+// line ends in "…" when the text needs more. `cut`: it did.
+QString wrapToLines(const QString& text, const QFont& font, int width, int maxLines, bool* cut)
+{
+    *cut = false;
+    if (text.isEmpty())
+        return text;
+    QTextLayout layout(text, font);
+    QTextOption option;
+    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    layout.setTextOption(option);
+    QStringList lines;
+    layout.beginLayout();
+    for (QTextLine line = layout.createLine(); line.isValid(); line = layout.createLine()) {
+        line.setLineWidth(width);
+        const int start = line.textStart(), length = line.textLength();
+        if (int(lines.size()) == maxLines - 1 && start + length < text.size()) {
+            const QString rest = text.mid(start);
+            const QString last = QFontMetrics(font).elidedText(rest, Qt::ElideRight, width);
+            *cut = last != rest;
+            lines << last;
+            break;
+        }
+        QString l = text.mid(start, length);
+        while (l.endsWith(u' '))
+            l.chop(1);
+        lines << l;
+    }
+    layout.endLayout();
+    return lines.join(u'\n');
+}
+} // namespace
+
 QSize ElideLabel::minimumSizeHint() const
 {
     return {24, QLabel::minimumSizeHint().height()};
@@ -192,12 +239,19 @@ void ElideLabel::relayout()
 {
     const QFontMetrics fm(font());
     const int w = std::max(0, width() - 2);
-    const QString shown = fm.elidedText(m_text, m_mode, w);
+    bool cut = false;
+    QString shown;
+    if (m_maxLines > 1 && w > 10) { // not before the label has a width
+        shown = wrapToLines(m_text, font(), w, m_maxLines, &cut);
+    } else {
+        shown = fm.elidedText(m_text, m_mode, w);
+        cut = shown != m_text;
+    }
     QLabel::setText(shown);
     // The whole text while it is cut, unless the owner gave the label a
     // tooltip of its own (a path with more to say than the label shows).
     if (toolTip() == m_autoTip) {
-        m_autoTip = shown != m_text ? plainTip(m_text) : QString();
+        m_autoTip = cut ? plainTip(m_text) : QString();
         setToolTip(m_autoTip);
     }
     // Assistive tools read the whole text, not the cut one (unless the owner
@@ -305,10 +359,28 @@ QWidget* field(const QString& labelText, QWidget* control, const QString& help, 
 
 // ---- buttons -----------------------------------------------------------------
 
+// The application style sheet remembers the font a widget had when it was
+// first polished and puts it back on every later polish (a repolish, the
+// polish when it is first shown, a new parent); QWidget::setFont() does not
+// tell it. A widget whose font follows its state (a button's variant, a field
+// that turns mono for a value) has the record kept in step, so that any
+// polish keeps the font it has now.
+static void keepFont(QWidget* w, const QFont& f)
+{
+    static const char kRemembered[] = "_q_styleSheetWidgetFont"; // QStyleSheetStyle's record
+    w->setFont(f);
+    if (w->property(kRemembered).isValid())
+        w->setProperty(kRemembered, f);
+}
+
 void repolish(QWidget* w)
 {
+    const bool ownFont = w->testAttribute(Qt::WA_SetFont);
+    const QFont f = w->font();
     w->style()->unpolish(w);
     w->style()->polish(w);
+    if (ownFont && w->font() != f)
+        keepFont(w, f); // a font set since the first polish
     w->update();
 }
 
@@ -329,12 +401,14 @@ void setButtonVariant(QPushButton* b, ButtonVariant variant)
     if (b->property("variant").toString() == name)
         return; // unchanged: no repolish (views call this on every progress tick)
     b->setProperty("variant", name);
-    b->setFont(variant == ButtonVariant::Primary || variant == ButtonVariant::Danger ? font::bodyStrong() : font::body());
-    const QColor iconColor = (variant == ButtonVariant::Primary || variant == ButtonVariant::Danger) ? color::on_accent
-                                                                                                     : color::fg_3;
+    const bool filled = variant == ButtonVariant::Primary || variant == ButtonVariant::Danger;
     if (!b->property("fwIcon").toString().isEmpty())
-        setButtonIcon(b, b->property("fwIcon").toString(), iconColor);
+        setButtonIcon(b, b->property("fwIcon").toString(), filled ? color::on_accent : color::fg_3);
     repolish(b);
+    // After the restyle, and remembered by the style sheet: a later polish
+    // would otherwise put back the font the button was made with (one made
+    // Primary stayed bold as a Secondary).
+    keepFont(b, filled ? font::bodyStrong() : font::body());
 }
 
 void setButtonSmall(QPushButton* b, bool small)
@@ -575,6 +649,69 @@ int naturalText(const QWidget* w, Qt::Alignment align, const QString& text)
          | (text.isRightToLeft() ? Qt::TextForceRightToLeft : Qt::TextForceLeftToRight);
 }
 
+QString bidiSafe(const QString& text)
+{
+    constexpr QChar kLrm(0x200E);
+    auto isSign = [](QChar c) { return c == u'+' || c == u'#'; };
+    auto isLatin = [](QChar c) { return c.isDigit() || (c.isLetter() && c.script() == QChar::Script_Latin); };
+    QString out;
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        out += text.at(i);
+        // The last sign of a run ("++") right after a Latin letter or digit.
+        if (!isSign(text.at(i)) || (i + 1 < text.size() && isSign(text.at(i + 1))))
+            continue;
+        qsizetype start = i;
+        while (start > 0 && isSign(text.at(start - 1)))
+            --start;
+        if (start == 0 || !isLatin(text.at(start - 1)))
+            continue;
+        // Followed by Latin text, or marked already: it is in a Latin run as it is.
+        if (i + 1 < text.size() && (isLatin(text.at(i + 1)) || text.at(i + 1) == kLrm))
+            continue;
+        out += kLrm;
+    }
+    return out;
+}
+
+namespace {
+
+// An item's text in a right-to-left view (ItemDelegate).
+QString rightToLeftItemText(const QString& text)
+{
+    if (text.isEmpty())
+        return text;
+    const bool hasRightToLeft = std::any_of(text.cbegin(), text.cend(), [](QChar c) {
+        switch (c.direction()) {
+        case QChar::DirR:
+        case QChar::DirAL:
+        case QChar::DirRLE:
+        case QChar::DirRLO:
+        case QChar::DirRLI: return true;
+        default: return false;
+        }
+    });
+    if (hasRightToLeft)
+        return bidiSafe(text);
+    // Between two left-to-right marks nothing takes the paragraph's direction:
+    // a full stop, a bracket or a sign at either end stays where it is read.
+    constexpr QChar kLrm(0x200E);
+    QString out = text;
+    if (out.front() != kLrm)
+        out.prepend(kLrm);
+    if (out.size() < 2 || out.back() != kLrm)
+        out.append(kLrm);
+    return out;
+}
+
+} // namespace
+
+void ItemDelegate::initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const
+{
+    QStyledItemDelegate::initStyleOption(option, index);
+    if (option->direction == Qt::RightToLeft)
+        option->text = rightToLeftItemText(option->text);
+}
+
 void mirrorPainter(QPainter& p, const QWidget* w)
 {
     if (!w || !w->isRightToLeft())
@@ -589,6 +726,9 @@ void keepLeftToRight(QWidget* w)
         return;
     // A label keeps its place in the row (right to left it starts at the
     // right); only its text is read left to right (FwStyle::drawItemText).
+    // A text box's placeholder is not one of its lines: Qt paints it in the
+    // application's direction, so it still reads right to left in a
+    // right-to-left language.
     if (qobject_cast<QLabel*>(w))
         w->setProperty("fwLtrText", true);
     else
@@ -824,8 +964,9 @@ int badgeWidth(const QString& text, bool withIcon, bool count)
     return count ? std::max(w, int(size::badgeCount)) : w;
 }
 
-void paintBadge(QPainter& p, const QRectF& rect, const QString& text, Tone tone, const QString& iconName, bool onAccent)
+void paintBadge(QPainter& p, const QRectF& rect, const QString& shownText, Tone tone, const QString& iconName, bool onAccent)
 {
+    const QString text = p.layoutDirection() == Qt::RightToLeft ? bidiSafe(shownText) : shownText;
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF r = rect.adjusted(0.5, 0.5, -0.5, -0.5);
@@ -887,15 +1028,50 @@ void Badge::set(const QString& text, Tone tone)
     const bool resize = m_text != text || (!m_iconSet && defaultBadgeIcon(m_tone).isEmpty() != defaultBadgeIcon(tone).isEmpty());
     m_text = text;
     m_tone = tone;
-    // A badge lets clicks through to what it sits on; only one whose text is
-    // cut takes mouse events itself, so that its tooltip can show.
-    const bool cut = text.size() > 32;
-    setToolTip(cut ? plainTip(text) : QString());
-    setAttribute(Qt::WA_TransparentForMouseEvents, !cut);
+    updateCut();
     if (resize)
         updateGeometry();
     update();
     notifyAccessibleNameChanged(this);
+}
+
+// A badge lets clicks through to what it sits on; only one whose text is cut
+// (a long text, or a badge squeezed below its width in a narrow table cell)
+// takes mouse events itself, so that its tooltip can show.
+QString Badge::shortText() const
+{
+    return m_maxChars > 0 ? elideMiddle(m_text, m_maxChars) : m_text;
+}
+
+void Badge::setMaxLength(int chars)
+{
+    if (m_maxChars == chars)
+        return;
+    m_maxChars = chars;
+    updateCut();
+    updateGeometry();
+    update();
+}
+
+void Badge::updateCut()
+{
+    const bool cut = shortText() != m_text || (isVisible() && width() < sizeHint().width());
+    const QString tip = cut ? plainTip(m_text) : QString();
+    if (toolTip() != tip)
+        setToolTip(tip);
+    setAttribute(Qt::WA_TransparentForMouseEvents, !cut);
+}
+
+void Badge::resizeEvent(QResizeEvent* e)
+{
+    QWidget::resizeEvent(e);
+    updateCut();
+}
+
+void Badge::showEvent(QShowEvent* e)
+{
+    QWidget::showEvent(e);
+    updateCut();
 }
 
 void Badge::setText(const QString& text) { set(text, m_tone); }
@@ -921,14 +1097,22 @@ void Badge::setCount(bool count)
 QSize Badge::sizeHint() const
 {
     const QString iconName = m_iconSet ? m_icon : defaultBadgeIcon(m_tone);
-    return {badgeWidth(elideMiddle(m_text, 32), !iconName.isEmpty(), m_count), m_count ? size::badgeCount : size::badge};
+    return {badgeWidth(shortText(), !iconName.isEmpty(), m_count), m_count ? size::badgeCount : size::badge};
 }
 
 void Badge::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     const QString iconName = m_count ? QString() : (m_iconSet ? m_icon : defaultBadgeIcon(m_tone));
-    paintBadge(p, QRectF(rect()), elideMiddle(m_text, 32), m_tone, iconName);
+    QString text = shortText();
+    // Narrower than it asks to be (a table column too narrow for a long
+    // translation): the end gives way to "…" inside the outline, instead of
+    // the last letters being cut by it. The tooltip has the whole text.
+    if (width() < badgeWidth(text, !iconName.isEmpty(), m_count)) {
+        const int room = width() - 2 * (m_count ? kCountPad : kBadgePad) - (iconName.isEmpty() ? 0 : size::iconSm + kBadgeIconGap);
+        text = QFontMetrics(font::chip()).elidedText(text, Qt::ElideRight, std::max(0, room));
+    }
+    paintBadge(p, QRectF(rect()), text, m_tone, iconName);
 }
 
 // ---- switch -------------------------------------------------------------------
@@ -1168,7 +1352,8 @@ void Segmented::paintEvent(QPaintEvent*)
                          iconPixmap(s.icon, size::icon, fg, devicePixelRatioF()));
             tx += size::icon + 6;
         }
-        p.drawText(mirrored(this, QRect(tx, r.y(), w - (tx - x), r.height())), naturalText(this, Qt::AlignVCenter | Qt::AlignLeft, s.text), s.text);
+        p.drawText(mirrored(this, QRect(tx, r.y(), w - (tx - x), r.height())), naturalText(this, Qt::AlignVCenter | Qt::AlignLeft, s.text),
+                   isRightToLeft() ? bidiSafe(s.text) : s.text);
         x += w + 2;
     }
 }
@@ -1739,8 +1924,21 @@ QLineEdit* textInput(const QString& placeholder, bool mono, QWidget* parent)
     e->setPlaceholderText(placeholder);
     e->setProperty("mono", mono);
     if (mono) {
-        e->setFont(font::mono());
         keepLeftToRight(e); // paths, IDs, keys, addresses
+        // The value in the mono font; a placeholder that is a sentence
+        // ("Choose a folder…", "Default") stays in the body font while the
+        // field is empty. One that shows a value ("192.168.1.40",
+        // "01.000.000") is set like the value.
+        auto fit = [e] {
+            static const QRegularExpression valueSign(QStringLiteral("[0-9/\\\\.:_-]"));
+            const QString hint = e->placeholderText();
+            const bool specimen = !hint.isEmpty() && !hint.contains(u' ') && hint.contains(valueSign);
+            const QFont want = e->text().isEmpty() && !specimen ? font::body() : font::mono();
+            if (e->font() != want)
+                keepFont(e, want);
+        };
+        QObject::connect(e, &QLineEdit::textChanged, e, fit);
+        fit();
     }
     e->setFixedHeight(size::control);
     return e;
@@ -1752,6 +1950,49 @@ void setInputError(QLineEdit* edit, bool error)
         return;
     edit->setProperty("error", error);
     repolish(edit);
+}
+
+void setInputSuffix(QLineEdit* edit, const QString& suffix)
+{
+    if (!edit)
+        return;
+    edit->setProperty("fwSuffix", suffix);
+    // The room it takes at the end of the field (the start right to left);
+    // the stylesheet's padding stays around both.
+    const int w = suffix.isEmpty() ? 0 : QFontMetrics(edit->font()).horizontalAdvance(suffix) + space::xs;
+    QMargins m = edit->textMargins();
+    m.setLeft(edit->isRightToLeft() ? w : 0);
+    m.setRight(edit->isRightToLeft() ? 0 : w);
+    edit->setTextMargins(m);
+    edit->update();
+}
+
+QString inputSuffix(const QLineEdit* edit) { return edit ? edit->property("fwSuffix").toString() : QString(); }
+
+void setInputNote(QLineEdit* edit, const QString& note)
+{
+    if (!edit || edit->property("fwNote").toString() == note)
+        return;
+    edit->setProperty("fwNote", note);
+    edit->setAccessibleDescription(note);
+    edit->update();
+}
+
+QString inputNote(const QLineEdit* edit) { return edit ? edit->property("fwNote").toString() : QString(); }
+
+bool isTextCut(const QLineEdit* edit)
+{
+    if (!edit)
+        return false;
+    const QString shown = edit->displayText();
+    if (shown.isEmpty())
+        return false;
+    QStyleOptionFrame opt;
+    opt.initFrom(edit);
+    const QRect contents = edit->style()->subElementRect(QStyle::SE_LineEditContents, &opt, edit);
+    const QMargins tm = edit->textMargins();
+    const int room = contents.width() - tm.left() - tm.right() - 5; // QLineEdit's own 2 px margins and the cursor
+    return QFontMetrics(edit->font()).horizontalAdvance(shown) > room;
 }
 
 QComboBox* dropdown(QWidget* parent)
@@ -2168,6 +2409,28 @@ int FlowLayout::doLayout(const QRect& rect, bool testOnly) const
         lineH = std::max(lineH, s.height());
     }
     return y + lineH - r.y() + contentsMargins().top() + contentsMargins().bottom();
+}
+
+// ---- scroll areas -------------------------------------------------------------------
+
+void reserveScrollBarSpace(QAbstractScrollArea* area)
+{
+    if (!area)
+        return;
+    area->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    QScrollBar* bar = area->verticalScrollBar();
+    // Nothing to scroll: the bar keeps its room, without a handle (the
+    // stylesheet's QScrollBar[fwIdle="true"]).
+    auto sync = [bar] {
+        const bool idle = bar->maximum() <= bar->minimum();
+        if (bar->property("fwIdle").toBool() == idle && bar->property("fwIdle").isValid())
+            return;
+        bar->setProperty("fwIdle", idle);
+        repolish(bar);
+        bar->update();
+    };
+    QObject::connect(bar, &QScrollBar::rangeChanged, bar, sync);
+    sync();
 }
 
 // ---- misc -------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 #include "app/pages/DlcEmuEditor.h"
 
+#include "app/pages/Page.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
 #include "core/Tr.h"
@@ -66,13 +67,16 @@ DlcEmuEditor::DlcEmuEditor(QWidget* parent) : QWidget(parent)
     auto* h = card->header();
     h->addWidget(heading(FW_TR("Entries"), TextStyle::Subtitle, card));
     h->addStretch(1);
-    m_find = button(FW_TR("Find entries…"), ButtonVariant::Secondary, QStringLiteral("search"), card);
+    // An action that looks through the dump, not a search box: no magnifier.
+    m_find = button(FW_TR("Find entries…"), ButtonVariant::Secondary, QStringLiteral("wand"), card);
     m_find->setToolTip(FW_TR("Look through the dump for add-on content IDs"));
     m_add = button(FW_TR("Add entry"), ButtonVariant::Secondary, QStringLiteral("plus"), card);
     auto* dup = new IconButton(QStringLiteral("copy"), FW_TR("Duplicate"), IconButton::Size::Regular, card);
     dup->setToolTip(FW_TR("Duplicate the selected entry"));
     auto* rem = new IconButton(QStringLiteral("trash"), FW_TR("Remove"), IconButton::Size::Regular, card);
     rem->setToolTip(FW_TR("Remove the selected entry"));
+    for (IconButton* b : {dup, rem})
+        outlineIconButton(b); // in one row with the labelled buttons: the same plates
     m_duplicate = dup;
     m_remove = rem;
     m_save = button(FW_TR("Save…"), ButtonVariant::Primary, QStringLiteral("save"), card);
@@ -329,7 +333,9 @@ void DlcEmuEditor::revalidate()
     m_emptyChoose->setVisible(m_folder->path().isEmpty());
     const dlc::Validation v = dlc::validate(all, m_folder->path());
     const int bytes = dlc::byteSize(all);
-    m_bytes->setText((all.size() == 1 ? FW_TR("%1 entry · %2 of %3 KiB") : FW_TR("%1 entries · %2 of %3 KiB")).arg(all.size()).arg(QString::number(bytes / 1024.0, 'f', 1)).arg(dlc::kMaxIniBytes / 1024));
+    // "0 of 32 KiB" for an empty list, not "0.0 of 32 KiB"; "1.4 of 32 KiB" once there is something.
+    const QString used = bytes == 0 ? QStringLiteral("0") : QString::number(bytes / 1024.0, 'f', 1);
+    m_bytes->setText((all.size() == 1 ? FW_TR("%1 entry · %2 of %3 KiB") : FW_TR("%1 entries · %2 of %3 KiB")).arg(all.size()).arg(used).arg(dlc::kMaxIniBytes / 1024));
     setTextColor(m_bytes, bytes > dlc::kMaxIniBytes || int(all.size()) > dlc::kMaxEntries ? color::danger_hi : color::fg_3);
     if (!v.errors.isEmpty())
         m_validation->set((v.errors.size() == 1 ? FW_TR("%1 error: %2") : FW_TR("%1 errors: %2")).arg(v.errors.size()).arg(v.errors.first()), Tone::Err);

@@ -81,8 +81,13 @@ public:
     void jumpToLatest();
     int lineCount() const { return m_lines; }
     QString plainLines() const;                   // the shown lines, for Copy
+    // Below Warning, a decoration line (see isDecoration) is left out unless
+    // the minimum level is Debug (Verbose).
     void appendLine(const QDateTime& time, LogLevel level, const QString& message, const QString& source = {});
     void clearLines();
+    // A line with nothing to read: a tool's bar frame or rule ("SDK: |____|",
+    // "-----"), no letter or digit after an optional "Tool: " prefix.
+    static bool isDecoration(const QString& message);
 signals:
     void followChanged(bool follow);
     void lineCountChanged(int count);

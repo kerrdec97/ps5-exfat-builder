@@ -5,6 +5,7 @@
 
 #include "core/FileUtil.h"
 #include "core/PathSafety.h"
+#include "core/Tr.h"
 #include "engines/ampr/GameFiles.h"
 #include "engines/ampr/GamePack.h"
 #include "engines/ampr/HostPaths.h"
@@ -26,7 +27,17 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <thread>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using namespace fw;
 using namespace fw::ampr;
@@ -403,6 +414,110 @@ private slots:
         QCOMPARE(rep->packedFiles, qint64(2));
     }
 
+    // A cancel while the written packs are read back keeps the finished
+    // folder, complete with its ampr_emu.index, and says it was not checked.
+    void cancelWhileThePacksAreCheckedKeepsTheFolder()
+    {
+        const QString game = sampleGame();
+        QVERIFY(!game.isEmpty());
+        auto files = openFolderGame(game, {});
+        QVERIFY(files.ok());
+        PackGameOptions o;
+        o.freeSpaceMarginBytes = 0;
+        o.packPhase = 1;
+        o.verifyPhase = 2;
+        CancellationSource cancel;
+        ProgressReporter progress([&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2)
+                cancel.cancel();
+        }, 0);
+        progress.setPhases({QStringLiteral("Preparing"), QStringLiteral("Packing"), QStringLiteral("Checking packs")});
+        const QString out = m_tmp.filePath(QStringLiteral("check-cancel/PPSA01234"));
+        auto rep = packGame(*files, out, o, cancel.token(), &progress, Log(QStringLiteral("test")));
+        QVERIFY(cancel.token().isCancelled());
+        QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+        QVERIFY(rep->verifyCancelled);
+        QVERIFY(rep->amprIndexWritten);
+        QVERIFY(bytesOf(out + QStringLiteral("/ampr_emu.index")).startsWith("AMPRIDX3"));
+        // The folder is the whole pack: read through its packs, it is the game.
+        auto packed = openFolderGame(out, {});
+        QVERIFY(packed.ok());
+        auto logical = logicalGame(*packed, {});
+        QVERIFY(logical.ok());
+        const int i = (*logical)->find(QStringLiteral("data/level1.bin"));
+        QVERIFY(i >= 0);
+        const QByteArray want = bytesOf(game + QStringLiteral("/data/level1.bin"));
+        QByteArray back(want.size(), '\0');
+        auto n = (*logical)->read(i, 0, back.data(), back.size());
+        QVERIFY(n.ok());
+        QCOMPARE(back, want);
+
+        // Without a cancel the same pack is checked.
+        auto checked = packGame(*files, m_tmp.filePath(QStringLiteral("check-ok/PPSA01234")), o, {}, nullptr, Log(QStringLiteral("test")));
+        QVERIFY2(checked.ok(), checked.ok() ? "" : qPrintable(checked.error().toLogString()));
+        QVERIFY(!checked->verifyCancelled);
+
+        // Closing the app is no Cancel the user chose: the packs are not kept
+        // unchecked, the job ends as cancelled (its staged folder then goes).
+        CancellationSource closing;
+        ProgressReporter closingProgress([&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2)
+                closing.shutdown();
+        }, 0);
+        closingProgress.setPhases({QStringLiteral("Preparing"), QStringLiteral("Packing"), QStringLiteral("Checking packs")});
+        auto closed = packGame(*files, m_tmp.filePath(QStringLiteral("check-close/PPSA01234")), o, closing.token(), &closingProgress,
+                               Log(QStringLiteral("test")));
+        QVERIFY(closing.token().isCancelled());
+        QVERIFY(!closed.ok());
+        QVERIFY2(closed.error().isCancelled(), qPrintable(closed.error().toLogString()));
+        QVERIFY(!closing.token().finishedWorkKept());
+    }
+
+    // A name of 100 CJK letters is 300 bytes in UTF-8: the runtime would set
+    // aside an index that lists it, and every other file with it. Packing and
+    // unpacking leave it out of ampr_emu.index and warn, as the builds do.
+    void aNameTheRuntimeCannotListIsLeftOutWithAWarning()
+    {
+        const QString game = m_tmp.filePath(QStringLiteral("cjk/PPSA06666"));
+        const QString name = QStringLiteral("data/") + QString(100, QChar(0x4E00));
+        const QByteArray content = compressible(5000, 4);
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/eboot.bin"), QByteArray("\x54\x14\xF5\xEE", 4) + QByteArray(6000, 'E')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA06666"})"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray("old runtime")));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/a.bin"), compressible(200000, 3)));
+        QVERIFY(fwtest::writeTextFile(game + u'/' + name, content));
+        const auto warned = [&](const QStringList& warnings) {
+            return std::any_of(warnings.begin(), warnings.end(), [&](const QString& w) {
+                return w.startsWith(QStringLiteral("ampr_emu.index: 1 file(s) left out")) && w.contains(name);
+            });
+        };
+
+        auto files = openFolderGame(game, {});
+        QVERIFY(files.ok());
+        PackGameOptions o;
+        o.freeSpaceMarginBytes = 0;
+        const QString out = m_tmp.filePath(QStringLiteral("cjk-packed/PPSA06666"));
+        auto rep = packGame(*files, out, o, {}, nullptr, Log(QStringLiteral("test")));
+        QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+        QVERIFY(rep->amprIndexWritten);
+        const QByteArray packedIndex = bytesOf(out + QStringLiteral("/ampr_emu.index"));
+        QVERIFY(packedIndex.contains("/app0/data/a.bin"));
+        QVERIFY(!packedIndex.contains(name.toUtf8()));
+        QVERIFY2(warned(rep->warnings), qPrintable(rep->warnings.join(u'\n')));
+
+        auto packed = openFolderGame(out, {});
+        QVERIFY(packed.ok());
+        const QString un = m_tmp.filePath(QStringLiteral("cjk-unpacked/PPSA06666"));
+        auto u = unpackGame(*packed, un, {}, {}, nullptr, Log(QStringLiteral("test")));
+        QVERIFY2(u.ok(), u.ok() ? "" : qPrintable(u.error().toLogString()));
+        QVERIFY(u->amprIndexWritten);
+        QCOMPARE(bytesOf(un + u'/' + name), content); // the file itself is unpacked
+        const QByteArray unpackedIndex = bytesOf(un + QStringLiteral("/ampr_emu.index"));
+        QVERIFY(unpackedIndex.contains("/app0/data/a.bin"));
+        QVERIFY(!unpackedIndex.contains(name.toUtf8()));
+        QVERIFY2(warned(u->warnings), qPrintable(u->warnings.join(u'\n')));
+    }
+
 private:
     // The dump several functions pack: written by whichever of them runs
     // first, so each also works alone. Empty when it could not be written.
@@ -728,6 +843,84 @@ private slots:
         }
         QCOMPARE(bytesOf(out + QStringLiteral("/a.bin")), QByteArray("a"));
         QCOMPARE(QDir(base).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), QStringList{QStringLiteral("out")});
+    }
+
+    // The finished folder could not take its name (the empty folder chosen is
+    // open in another program): it is kept as "<out>.new", and the error is
+    // not one the queue retries by itself, which would make another copy.
+    void aKeptFolderIsNotRetriedByTheQueue()
+    {
+#ifdef Q_OS_WIN
+        const QString base = m_tmp.filePath(QStringLiteral("kept"));
+        const QString out = base + QStringLiteral("/out");
+        QVERIFY(QDir().mkpath(out));
+        auto s = StagedFolder::begin(out);
+        QVERIFY(s.ok());
+        QVERIFY(fwtest::writeTextFile((*s)->path() + QStringLiteral("/a.bin"), "a"));
+        // Held without delete sharing, as a command prompt whose current folder it is holds it.
+        const HANDLE h = CreateFileW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(out).utf16()), GENERIC_READ,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        QVERIFY(h != INVALID_HANDLE_VALUE);
+        const Status st = (*s)->commitOrKeep(QStringLiteral("The game was packed"));
+        CloseHandle(h);
+        QVERIFY(!st.ok());
+        QVERIFY2(st.error().code != ErrorCode::IoError && st.error().code != ErrorCode::ExternalToolFailed
+                     && st.error().code != ErrorCode::Timeout,
+                 qPrintable(st.error().toLogString()));
+        QVERIFY2(st.error().message.contains(QDir::toNativeSeparators(out + QStringLiteral(".new"))), qPrintable(st.error().message));
+        QCOMPARE(bytesOf(out + QStringLiteral(".new/a.bin")), QByteArray("a"));
+        QVERIFY(QDir(out).isEmpty());
+#else
+        QSKIP("An open folder can be removed on this platform.");
+#endif
+    }
+
+    // A virus scanner or the search indexer that holds a file of the finished
+    // folder for a moment (Windows then refuses to rename the folder) does not
+    // leave it under its working name: the rename is tried again.
+    void stagedFolderIsRenamedOnceAFileInItIsLetGo()
+    {
+        const QString out = m_tmp.filePath(QStringLiteral("held/out"));
+        auto s = StagedFolder::begin(out);
+        QVERIFY(s.ok());
+        const QString inside = (*s)->path() + QStringLiteral("/data/a.bin");
+        QVERIFY(fwtest::writeTextFile(inside, "a"));
+        QFile scanner(inside);
+        QVERIFY(scanner.open(QIODevice::ReadOnly));
+        std::thread letGo([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            scanner.close();
+        });
+        const Status committed = (*s)->commitOrKeep(QStringLiteral("The game was packed"));
+        letGo.join(); // before any check: a check that returns with the thread running ends the program
+        QVERIFY2(committed.ok(), committed.ok() ? "" : qPrintable(committed.error().toLogString()));
+        QCOMPARE(bytesOf(out + QStringLiteral("/data/a.bin")), QByteArray("a"));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".new")));
+    }
+
+    // The runtime's problem is English as an engine error (it reaches the log,
+    // the job records and problem reports) and translated for the list of tools.
+    void bundledRuntimeProblemIsEnglishForTheJobs()
+    {
+        const QByteArray before = qgetenv("FW_AMPR_RUNTIME");
+        const QString missing = m_tmp.filePath(QStringLiteral("no-runtime/libSceAmpr.sprx"));
+        qputenv("FW_AMPR_RUNTIME", missing.toUtf8());
+        QVERIFY(i18n::load(i18n::pseudoCode()));
+        const QString error = bundledRuntimeProblem(), shown = bundledRuntimeProblemShown();
+        const Result<QByteArray> loaded = loadBundledRuntime();
+        (void)i18n::load(QStringLiteral("en"));
+        if (before.isEmpty())
+            qunsetenv("FW_AMPR_RUNTIME");
+        else
+            qputenv("FW_AMPR_RUNTIME", before);
+        const QString english = QStringLiteral("The ampr-emu-ng runtime is missing from this installation (%1).")
+                                    .arg(QDir::toNativeSeparators(missing));
+        QCOMPARE(error, english);
+        QVERIFY(!loaded.ok());
+        QCOMPARE(loaded.error().message, english);
+        QVERIFY2(shown != english && shown.contains(QDir::toNativeSeparators(missing)), qPrintable(shown));
+        QVERIFY(bundledRuntimeProblem().isEmpty()); // the real one again
     }
 
 private:

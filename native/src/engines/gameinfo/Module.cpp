@@ -331,6 +331,9 @@ void registerModule(ModuleContext& ctx)
         d.type = SettingType::StringList;
         d.folderList = true;
         d.defaultValue = QStringList();
+        // The Library page's folders: Reset section / Reset all would take
+        // them from the page (5.0.2 kept them in library.json only).
+        d.keptOnReset = true;
         d.order = 100;
         s.add(d);
     }

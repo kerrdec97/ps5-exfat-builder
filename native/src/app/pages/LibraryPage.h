@@ -154,7 +154,12 @@ private:
     ui::ImageScanner* m_scanner;
     QTabBar* m_tabs;
     QStackedWidget* m_stack;
+    // Rescan, Add folder… and the overflow menu (last): Games and Images only,
+    // the tabs they act on.
     QWidget* m_headerActions = nullptr;
+    QPushButton* m_rescan = nullptr;
+    QPushButton* m_addFolder = nullptr;
+    void updateHeaderActions();
 
     // games
     QLineEdit* m_search;

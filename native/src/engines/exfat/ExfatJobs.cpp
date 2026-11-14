@@ -145,9 +145,43 @@ void applyVerification(JobOutcome& o, const VerifyReport& r)
         o.warnings << w;
 }
 
+// Cancel while finished work is being verified (GitHub #97): the work is kept
+// exactly as with verification turned off, and the outcome says it was not
+// verified. Anything that went wrong while the token was cancelled is part of
+// that cancel, as the queue sees it. Not while the app is closing: the result
+// is then false, and the cancel stands.
+template <typename T>
+bool verificationCancelled(const Result<T>& r, const JobContext& ctx)
+{
+    return !r.ok() && ctx.token.keepFinishedWork();
+}
+
+void markVerificationCancelled(JobOutcome& o, const QString& detail, const Log& log)
+{
+    o.verification = Verification::Skipped;
+    o.verificationDetail = detail;
+    o.details.insert(QStringLiteral("verificationCancelled"), true);
+    log.warn(detail);
+}
+
 QString rate(qint64 bytes, qint64 ms)
 {
     return ms > 0 ? formatRate(double(bytes) * 1000.0 / double(ms)) : QStringLiteral("—");
+}
+
+// The share of the bar each of the three phases (reading or scanning, writing,
+// verifying) takes. Scanning a folder or reading an image's tree is quick;
+// with a zipped dump the first phase also holds the unpacking (a step that
+// takes its first half), which takes about as long as writing. A verification
+// of names, sizes and structure reads metadata only, and one that is turned
+// off takes no share: the bar does not stop short of the end.
+QList<double> threePhaseWeights(bool zip, bool verify, bool fullVerify)
+{
+    QList<double> w = zip ? QList<double>{0.3, 0.45, 0.25} : QList<double>{0.05, 0.6, 0.35};
+    const double check = !verify ? 0.0 : fullVerify ? w[2] : 0.05;
+    w[1] += w[2] - check;
+    w[2] = check;
+    return w;
 }
 
 // ---- build ---------------------------------------------------------------------------
@@ -168,6 +202,13 @@ public:
     QStringList phases() const override
     {
         return {QStringLiteral("Scanning"), QStringLiteral("Writing image"), QStringLiteral("Verifying")};
+    }
+    // The verification's share follows the settings (none when it is off).
+    QList<double> phaseWeights() const override { return threePhaseWeights(zipSource(), true, true); }
+    QList<double> phaseWeights(const SettingsValues& settings) const override
+    {
+        const ExfatSettings x = readSettings(settings);
+        return threePhaseWeights(zipSource(), x.verify, x.fullVerify);
     }
     QJsonObject parameters() const override { return m_p; }
 
@@ -214,6 +255,9 @@ public:
     Result<JobOutcome> run(JobContext& ctx) override
     {
         const ExfatSettings x = readSettings(ctx.settings);
+        // Before anything is counted (the unpacking of a zipped dump is the
+        // first step of Scanning), so the shares never change under the bar.
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         if (archive::isZipSource(m_source)) {
             const QString zip = m_source;
             FW_TRY(validate(ctx.settings));
@@ -222,7 +266,6 @@ public:
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
         }
         FW_TRY(validate(ctx.settings));
-        ctx.progress->setPhases(phases(), {0.05, 0.6, 0.35});
         QElapsedTimer timer;
         timer.start();
 
@@ -244,6 +287,8 @@ public:
         FW_TRY_ASSIGN(const AmprPlacement ampr, applyAmprIndex(tree, x.ampr, ctx.tempDir));
         if (const QString line = pfs::amprActionLogLine(ampr.action); !line.isEmpty())
             ctx.log.info(line);
+        if (const QString line = pfs::amprLeftOutLogLine(ampr.leftOut); !line.isEmpty())
+            ctx.log.warn(line);
 
         // Plan.
         WriterOptions w = x.writer;
@@ -263,13 +308,15 @@ public:
             return Error(ErrorCode::Unsupported,
                          QStringLiteral("The output drive uses FAT32, which cannot store files of 4 GB or more. "
                                         "Choose a folder on an NTFS or exFAT drive."));
+        // Made before the free-space check: it removes what an interrupted
+        // build of this image left, whose space the check must count as free.
+        PartFile part(m_output);
         FW_TRY(ensureFreeSpace(outDir, volume, x.marginBytes));
         if (!ctx.token.checkpoint())
             return Error::cancelled();
 
         // Write.
         ctx.progress->beginPhase(1, tree.totalBytes, tree.fileCount);
-        PartFile part(m_output);
         FW_TRY_ASSIGN(WriteStats ws, writeImage(tree, plan, part.partPath(), w, ctx.token, ctx.progress, &ctx.log));
         ctx.log.info(QStringLiteral("Wrote %1 in %2 ms (%3)")
                          .arg(formatBytes(ws.bytesWritten))
@@ -281,16 +328,24 @@ public:
             ctx.progress->beginPhase(2, 0);
             // The folder is scanned again and compared with the image; the
             // index the build made is expected in place of the folder's.
-            FW_TRY_ASSIGN(SourceTree expected, scanSource(m_source, rules, ctx.token, ctx.progress));
-            if (!ampr.indexFile.isEmpty())
-                placeAmprIndex(expected, ampr.indexFile);
-            FW_TRY_ASSIGN(VerifyReport rep, verifyImage(part.partPath(), expectedFromFolder(expected), verifyOptions(x, ctx, 2),
-                                                         ctx.token, ctx.progress));
-            applyVerification(o, rep);
-            ctx.log.info(QStringLiteral("Verification (%1): %2").arg(x.fullVerify ? QStringLiteral("full") : QStringLiteral("structure"), rep.summary()));
-            if (!rep.passed()) {
-                o.summary = QStringLiteral("The image was not saved because it did not verify.");
-                return o; // the .part is removed; an older image stays in place
+            auto checked = [&]() -> Result<VerifyReport> {
+                FW_TRY_ASSIGN(SourceTree expected, scanSource(m_source, rules, ctx.token, ctx.progress));
+                if (!ampr.indexFile.isEmpty())
+                    placeAmprIndex(expected, ampr.indexFile);
+                return verifyImage(part.partPath(), expectedFromFolder(expected), verifyOptions(x, ctx, 2), ctx.token, ctx.progress);
+            }();
+            if (verificationCancelled(checked, ctx)) {
+                markVerificationCancelled(o, QStringLiteral("Verification was cancelled, so the image is not verified."), ctx.log);
+            } else {
+                if (!checked.ok())
+                    return checked.takeError();
+                const VerifyReport& rep = checked.value();
+                applyVerification(o, rep);
+                ctx.log.info(QStringLiteral("Verification (%1): %2").arg(x.fullVerify ? QStringLiteral("full") : QStringLiteral("structure"), rep.summary()));
+                if (!rep.passed()) {
+                    o.summary = QStringLiteral("The image was not saved because it did not verify.");
+                    return o; // the .part is removed; an older image stays in place
+                }
             }
         } else {
             o.verification = Verification::Skipped;
@@ -298,12 +353,13 @@ public:
         }
 
         FW_TRY(commitOrKeep(part, x.overwrite,
-                            x.verify ? QStringLiteral("The image was built and verified")
-                                     : QStringLiteral("The image was built")));
+                            o.verification == Verification::Passed ? QStringLiteral("The image was built and verified")
+                                                                   : QStringLiteral("The image was built")));
         o.outputs << m_output;
         // An undo journal of the image that was just replaced must never be
         // applied to the new one.
-        for (const QString& j : {editJournalPath(m_output), editJournalPath(m_output) + QStringLiteral(".part")})
+        for (const QString& j : {editJournalPath(m_output), PartFile::partPathFor(editJournalPath(m_output)),
+                                 editJournalPath(m_output) + QStringLiteral(".part")})
             if (QFileInfo::exists(j) && QFile::remove(j))
                 ctx.log.info(QStringLiteral("Removed %1, left by an interrupted edit of the image that was replaced.").arg(native(j)));
 
@@ -349,6 +405,8 @@ public:
     }
 
 private:
+    bool zipSource() const { return !m_zip.isEmpty() || archive::isZipSource(m_source); }
+
     QJsonObject m_p;
     QString m_source, m_output, m_label;
     QString m_zip; // the zipped dump m_source was unpacked from, if any
@@ -374,6 +432,13 @@ public:
                                   : QStringLiteral("Verify against %1").arg(native(m_source));
     }
     QStringList phases() const override { return {QStringLiteral("Reading image"), QStringLiteral("Comparing")}; }
+    QList<double> phaseWeights() const override { return {0.1, 0.9}; }
+    // A check of the image on its own in structure mode has no second phase.
+    QList<double> phaseWeights(const SettingsValues& settings) const override
+    {
+        const bool structureOnly = m_source.trimmed().isEmpty() && !readSettings(settings).fullVerify;
+        return structureOnly ? QList<double>{1, 0} : phaseWeights();
+    }
     QJsonObject parameters() const override { return m_p; }
     Status validate(const SettingsValues&) const override
     {
@@ -386,7 +451,7 @@ public:
     {
         FW_TRY(validate(ctx.settings));
         const ExfatSettings x = readSettings(ctx.settings);
-        ctx.progress->setPhases(phases(), {0.1, 0.9});
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         ctx.progress->beginPhase(0, 0);
         FW_TRY_ASSIGN(const bool recovered, recoverInterruptedEdit(m_image, &ctx.log));
         if (m_source.trimmed().isEmpty())
@@ -506,6 +571,12 @@ public:
     {
         return {QStringLiteral("Reading image"), QStringLiteral("Extracting"), QStringLiteral("Verifying")};
     }
+    QList<double> phaseWeights() const override { return threePhaseWeights(false, true, true); }
+    QList<double> phaseWeights(const SettingsValues& settings) const override
+    {
+        const ExfatSettings x = readSettings(settings);
+        return threePhaseWeights(false, x.verify, x.fullVerify);
+    }
     QJsonObject parameters() const override { return m_p; }
     Status validate(const SettingsValues&) const override
     {
@@ -525,7 +596,7 @@ public:
     {
         FW_TRY(validate(ctx.settings));
         const ExfatSettings x = readSettings(ctx.settings);
-        ctx.progress->setPhases(phases(), {0.05, 0.6, 0.35});
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         ctx.progress->beginPhase(0, 0);
         FW_TRY_ASSIGN(const bool recovered, recoverInterruptedEdit(m_image, &ctx.log));
         FW_TRY_ASSIGN(std::unique_ptr<ExfatReader> reader, ExfatReader::open(m_image));
@@ -603,32 +674,43 @@ public:
 
         if (x.verify) {
             ctx.progress->beginPhase(2, 0);
-            FW_TRY_ASSIGN(SourceTree out, scanSource(stage, {}, ctx.token));
-            // Compare renamed entries under their names in the image.
-            for (SourceNode& n : out.nodes)
-                if (const auto it = st.imagePath.constFind(n.relativePath); it != st.imagePath.cend())
-                    n.relativePath = *it;
-            FW_TRY_ASSIGN(VerifyReport rep, verifyImage(m_image, expectedFromFolder(out), verifyOptions(x, ctx, 2),
-                                                         ctx.token, ctx.progress));
-            applyVerification(o, rep);
-            if (!rep.passed()) {
-                o.summary = QStringLiteral("Nothing was kept because the extracted files did not verify.");
-                return o;
+            auto checked = [&]() -> Result<VerifyReport> {
+                FW_TRY_ASSIGN(SourceTree out, scanSource(stage, {}, ctx.token));
+                // Compare renamed entries under their names in the image.
+                for (SourceNode& n : out.nodes)
+                    if (const auto it = st.imagePath.constFind(n.relativePath); it != st.imagePath.cend())
+                        n.relativePath = *it;
+                return verifyImage(m_image, expectedFromFolder(out), verifyOptions(x, ctx, 2), ctx.token, ctx.progress);
+            }();
+            if (verificationCancelled(checked, ctx)) {
+                // GitHub #97: the extracted files are kept.
+                markVerificationCancelled(o, QStringLiteral("Verification was cancelled, so the extracted files are not verified."),
+                                          ctx.log);
+            } else {
+                if (!checked.ok())
+                    return checked.takeError();
+                applyVerification(o, checked.value());
+                if (!checked->passed()) {
+                    o.summary = QStringLiteral("Nothing was kept because the extracted files did not verify.");
+                    return o;
+                }
             }
         } else {
             o.verification = Verification::Skipped;
             o.verificationDetail = QStringLiteral("Verification is turned off in Settings.");
         }
         reader.reset();
-        if ((QFileInfo(m_output).isDir() && !QDir().rmdir(m_output)) || !QDir().rename(stage, m_output)) {
+        if ((QFileInfo(m_output).isDir() && !QDir().rmdir(m_output)) || !renameWithoutCopying(stage, m_output)) {
             // The files are extracted (and verified): they are not deleted
             // because a folder name could not be taken.
             guard.keep = true;
             const QString kept = keepStagedFolder(stage, m_output);
-            return Error(ErrorCode::IoError,
+            // Not an IoError: a retry would only extract another full copy.
+            return Error(ErrorCode::PermissionDenied,
                          QStringLiteral("The files were extracted%1, but the folder %2 could not be used because it is "
                                         "open in another program. They were saved in %3.")
-                             .arg(x.verify ? QStringLiteral(" and verified") : QString(), native(m_output), native(kept)));
+                             .arg(o.verification == Verification::Passed ? QStringLiteral(" and verified") : QString(),
+                                  native(m_output), native(kept)));
         }
         guard.keep = true;
         o.outputs << m_output;
@@ -665,6 +747,12 @@ public:
     {
         return {QStringLiteral("Planning"), QStringLiteral("Writing"), QStringLiteral("Verifying")};
     }
+    // An edit is always verified (it is undone when it does not pass).
+    QList<double> phaseWeights() const override { return threePhaseWeights(false, true, true); }
+    QList<double> phaseWeights(const SettingsValues& settings) const override
+    {
+        return threePhaseWeights(false, true, readSettings(settings).fullVerify);
+    }
     QJsonObject parameters() const override { return m_p; }
     Status validate(const SettingsValues&) const override
     {
@@ -680,7 +768,7 @@ public:
     {
         FW_TRY(validate(ctx.settings));
         const ExfatSettings x = readSettings(ctx.settings);
-        ctx.progress->setPhases(phases(), {0.05, 0.6, 0.35});
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         EditOptions eo;
         eo.strategy = x.editStrategy;
         eo.rules = x.rules;
@@ -700,6 +788,14 @@ public:
         if (!r.changed) {
             o.verification = Verification::NotRun;
             o.verificationDetail = QStringLiteral("Nothing needed to change.");
+        } else if (r.verificationCancelled) {
+            // GitHub #97: the edit was kept after a check of names, sizes and
+            // the structure, which the engine has already logged.
+            applyVerification(o, r.verification);
+            o.verification = Verification::Skipped;
+            o.verificationDetail = QStringLiteral("Verification was cancelled, so the edited image is not verified (its "
+                                                  "structure, names and sizes were checked).");
+            o.details.insert(QStringLiteral("verificationCancelled"), true);
         } else {
             applyVerification(o, r.verification);
         }

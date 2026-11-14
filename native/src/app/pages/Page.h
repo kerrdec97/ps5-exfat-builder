@@ -15,6 +15,8 @@
 //                  monitor (stages, clocks, live log) until the user asks for
 //                  the form back ("New build") or the job has been over for a
 //                  while; "Watch" in the dock opens any running job there.
+//                  The dock column stays in view while a long form scrolls
+//                  (it slides down beside the form, never past its end).
 
 #include "app/ui/JobMonitor.h"
 #include "app/ui/JobRows.h"
@@ -29,12 +31,17 @@
 #include <QWidget>
 
 #include <functional>
+#include <vector>
 
 namespace fw {
 class AppContext;
 class JobQueueModel;
 class LogModel;
 } // namespace fw
+
+namespace fw::ui {
+class SelectionGlow;
+} // namespace fw::ui
 
 namespace fw::pages {
 
@@ -109,6 +116,9 @@ public:
     ui::JobsDock* dock() { return m_dock; }
     QVBoxLayout* form() { return m_form; }
     QVBoxLayout* aside() { return m_aside; }
+    // The widget that holds the dock column's content (the dock and what a
+    // page puts above it); it follows the scrolled form (tests).
+    QWidget* asideBody() const { return m_asideBody; }
     QPushButton* primaryButton() { return m_primary; }
     QPushButton* queueButton() { return m_queue; }
     bool isAvailable() const { return m_available; }
@@ -129,8 +139,8 @@ public:
     bool isMonitorShown() const { return m_view == View::Monitor; }
     void showMonitor(const QString& id);
     void showForm();
-    void setNewJobText(const QString& text); // the header button that brings the form back
-    QPushButton* newJobButton() { return m_newJob; }
+    void setNewJobText(const QString& text); // the monitor's button that brings the form back ("New build")
+    QPushButton* newJobButton() { return m_monitor->newJobButton(); } // the one way back, in the monitor's footer
     // Whether the primary button switches to the monitor (default) or keeps
     // the form, for actions whose result lives in the form (Image tools › Compare).
     void setMonitorOnStart(bool on) { m_monitorOnStart = on; }
@@ -156,6 +166,11 @@ protected:
     // not validateForm() and must cost nothing.
     void setStartHint(const QString& hint);
     QString startHint() const { return m_startHint; }
+    // For an action that starts at once and is never put on the list: "Add
+    // to queue" stays where it is (the header keeps its buttons), disabled,
+    // with `why` as its tooltip. "" lets it queue again.
+    void setQueueBlocked(const QString& why);
+    bool isQueueBlocked() const { return !m_queueBlocked.isEmpty(); }
     void setSourceCard(ui::Card* card) { m_sourceCard = card; }
     // Standard "job settings" card with the schema's perJob settings.
     ui::JobOptionsPanel* addJobOptionsCard(const QString& title, const QStringList& sections,
@@ -178,6 +193,7 @@ private:
     void applyStartTip();
     QString m_feature;
     QString m_startHint;
+    QString m_queueBlocked;
     QStringList m_kinds;
     bool m_available = true;
     void setView(View view);
@@ -189,10 +205,10 @@ private:
     bool m_monitorOnStart = true;
     QVBoxLayout* m_form;
     QVBoxLayout* m_aside;
+    QWidget* m_asideBody = nullptr;
     QWidget* m_submitBar; // Add to queue + the primary button (hidden as one in the Monitor view)
     QPushButton* m_primary;
     QPushButton* m_queue;
-    QPushButton* m_newJob;
     ui::UnavailableState* m_unavailable = nullptr;
     ui::Card* m_unavailableCard = nullptr;
     ui::InfoBar* m_error;
@@ -226,6 +242,61 @@ DriveSpace driveSpaceOf(const QString& folder);
 // `done(ready, bytesAvailable, driveLabel)` on the UI thread while `context`
 // still exists. Callers keep a generation counter to drop stale answers.
 void probeFreeSpace(QObject* context, const QString& folder, std::function<void(bool ready, qint64 available, const QString& label)> done);
+
+// An icon button that sits among labelled buttons (Refresh next to Change…,
+// a tool row): the same plate, outline and states as they have, so it does
+// not read as a stray glyph. The button keeps its size, icon and tooltip.
+void outlineIconButton(ui::IconButton* button);
+
+// The large choice of a form (Build › Format, Image tools › Convert to): icon
+// square at the top, title, a description of up to three lines, optional tag;
+// the selected tile has the gradient outline, a tint, a check bubble and a
+// glow. One row when the tiles fit (150 px each), else three per row (five
+// or more tiles), else two, else one; a last row with fewer tiles shares the
+// whole width, so no slot is left empty. Painted (no item widgets);
+// keyboard: arrows. The accessible description names the selected tile.
+class OptionTiles : public QWidget {
+public:
+    explicit OptionTiles(QWidget* parent = nullptr);
+    void addTile(const QString& title, const QString& description, const QString& icon, const QString& value,
+                 const QString& tag = {});
+    int count() const { return int(m_items.size()); }
+    int currentIndex() const { return m_current; }
+    QString currentValue() const;
+    QString titleAt(int i) const;
+    void setCurrentValue(const QString& value);
+    void setCurrentIndex(int i);
+    std::function<void(int)> onChanged;
+    // Where tile `i` is, left to right (tests).
+    QRect tileRect(int i) const;
+
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int w) const override;
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent* e) override;
+    void mousePressEvent(QMouseEvent* e) override;
+    void mouseMoveEvent(QMouseEvent* e) override;
+    void leaveEvent(QEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
+    void keyPressEvent(QKeyEvent* e) override;
+    void focusInEvent(QFocusEvent* e) override;
+    void focusOutEvent(QFocusEvent* e) override;
+
+private:
+    struct Item {
+        QString title, description, icon, tag, value;
+    };
+    int columns(int w) const;
+    int at(const QPoint& pt) const;
+    void syncGlow();
+    std::vector<Item> m_items;
+    int m_current = -1;
+    ui::motion::HoverFade* m_hover; // which tile the pointer is over; the tint fades
+    ui::SelectionGlow* m_glow;
+};
 
 } // namespace fw::pages
 

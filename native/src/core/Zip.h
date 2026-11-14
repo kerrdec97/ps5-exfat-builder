@@ -44,7 +44,7 @@ public:
     Writer(const Writer&) = delete;
     Writer& operator=(const Writer&) = delete;
 
-    // Opens `<path>.part`. `replaceExisting` decides what finish() may do when
+    // Opens `<path>.fw.part` (a PartFile). `replaceExisting` decides what finish() may do when
     // `path` exists (never silently overwrite an earlier archive by default).
     Status open(const QString& path, bool replaceExisting = false);
 
@@ -117,5 +117,16 @@ private:
 };
 
 quint32 crc32(const QByteArray& data, quint32 seed = 0);
+
+// Unpacking a file of a long name: an extractor writes it through a PartFile
+// for stagingPath(target) and then calls moveIntoPlace(). stagingPath() is
+// `target` itself, or, when the PartFile's working name would be longer than
+// the 255 characters NTFS and exFAT allow in a name, a free short name in the
+// same folder (PartFile::partPathFor() keeps its own name within that limit,
+// so a name a drive can hold is written as it is). moveIntoPlace() renames such a file to `target` (a no-op for
+// `target` itself); when it fails, or `target` exists and may not be
+// replaced, the staged file is removed.
+QString stagingPath(const QString& target);
+Status moveIntoPlace(const QString& staged, const QString& target, bool replaceExisting);
 
 } // namespace fw::zip

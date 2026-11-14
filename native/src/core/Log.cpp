@@ -249,7 +249,7 @@ void Logger::flush()
         s->flush();
 }
 
-static void fwQtMessageHandler(QtMsgType type, const QMessageLogContext&, const QString& msg)
+static void fwQtMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
 {
     LogLevel level = LogLevel::Debug;
     switch (type) {
@@ -259,7 +259,18 @@ static void fwQtMessageHandler(QtMsgType type, const QMessageLogContext&, const 
     case QtCriticalMsg:
     case QtFatalMsg: level = LogLevel::Error; break;
     }
-    Logger::instance().log(level, QStringLiteral("qt"), msg);
+    // Qt's own notes (category "qt.*": "OpenType support missing for ..." from
+    // qt.text.font.db, a dozen per start) say nothing the user can act on: at
+    // Info they filled the Logs page and every problem report. They are kept
+    // as detail (Debug); Qt's warnings and errors keep their level.
+    const QLatin1StringView category(context.category ? context.category : "");
+    QJsonObject fields;
+    if (!category.isEmpty() && category != QLatin1StringView("default")) {
+        fields.insert(QStringLiteral("category"), QString(category));
+        if (level == LogLevel::Info && category.startsWith(QLatin1StringView("qt.")))
+            level = LogLevel::Debug;
+    }
+    Logger::instance().log(level, QStringLiteral("qt"), msg, {}, fields);
 }
 
 void Logger::installQtMessageHandler()

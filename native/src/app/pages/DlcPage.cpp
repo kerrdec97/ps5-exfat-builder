@@ -28,6 +28,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QScopeGuard>
 #include <QScrollBar>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
@@ -142,27 +143,36 @@ void DlcPage::buildListCard()
     card->body()->addWidget(m_drop);
 
     m_table = new QTableWidget(0, ColCount, card);
-    m_table->setHorizontalHeaderLabels({FW_TR("Icon"), FW_TR("Title"), FW_TR("Content ID"),
+    m_table->setHorizontalHeaderLabels({QString(), FW_TR("Title"), FW_TR("Content ID"),
                                         FW_TR("Title ID"), FW_TR("Region"),
                                         FW_TR("Version"), FW_TR("Source file"), FW_TR("Result")});
+    // The picture column needs no word over it; its name is still there for
+    // a screen reader and on hover.
+    if (QTableWidgetItem* head = m_table->horizontalHeaderItem(IconCol)) {
+        head->setToolTip(FW_TR("Icon"));
+        head->setData(Qt::AccessibleTextRole, FW_TR("Icon"));
+    }
     for (const int c : {int(ContentIdCol), int(TitleIdCol), int(VersionCol), int(SourceCol)})
         keepColumnLeftToRight(m_table, c); // sizes, dates, paths, IDs: left to right in any language
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_table->setShowGrid(false);
-    m_table->setWordWrap(false);
+    // Titles and results are sentences: two lines of the 52 px row before a
+    // "…" (the whole text is the cell's tooltip). IDs have their width.
+    m_table->setWordWrap(true);
     m_table->verticalHeader()->hide();
     m_table->verticalHeader()->setDefaultSectionSize(52);
     m_table->setIconSize(QSize(40, 40));
     m_table->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     m_table->setAccessibleName(FW_TR("DLC entries"));
-    m_table->setMinimumHeight(300);
     auto* hh = m_table->horizontalHeader();
     hh->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     hh->setSectionResizeMode(QHeaderView::Interactive);
     hh->resizeSection(IconCol, 48);
-    hh->resizeSection(TitleCol, 144);
-    hh->resizeSection(ContentIdCol, 290);
+    hh->resizeSection(TitleCol, 132);
+    // As wide as a content ID (36 characters of mono) and its padding, no wider:
+    // the room left goes to the Result, the last column, which takes the rest.
+    hh->resizeSection(ContentIdCol, QFontMetrics(font::mono()).horizontalAdvance(QStringLiteral("UP9000-PPSA01341_00-DSDIGITALDELUXE0")) + 24);
     hh->resizeSection(RegionCol, 104);
     hh->setMinimumSectionSize(40);
     hh->setStretchLastSection(true);
@@ -244,6 +254,7 @@ void DlcPage::buildListCard()
     m_log = new QPlainTextEdit(logTitle);
     keepLeftToRight(m_log); // log, code or hex: left to right in any language
     m_log->setReadOnly(true);
+    m_log->setPlaceholderText(FW_TR("New lines appear here as the app works.")); // not a blank well before the first line
     m_log->setMinimumHeight(140);
     m_log->setFont(font::mono());
     m_log->setMaximumBlockCount(5000);
@@ -420,6 +431,7 @@ void DlcPage::addInputs(const QStringList& paths)
             const QString tempDir = QDir(Paths::tempRoot()).filePath(QStringLiteral("dlc-inspect"));
             struct Loaded {
                 Result<dlc::DlcPackageInfo> info = Error(ErrorCode::Internal, QString());
+                QString shownError; // the error in the interface language ("" = shown as the engine wrote it)
                 QByteArray icon;
             };
             auto* watcher = new QFutureWatcher<std::shared_ptr<Loaded>>(this);
@@ -434,8 +446,8 @@ void DlcPage::addInputs(const QStringList& paths)
                 const auto loaded = watcher->result();
                 if (!loaded->info.ok()) {
                     appendLog(QStringLiteral("LOAD FAILED: %1 \u2014 %2").arg(nativePath(path), loaded->info.error().message));
-                    m_loadRow->set(FW_TR("%1 could not be read: %2").arg(QFileInfo(path).fileName(), loaded->info.error().message),
-                                   Tone::Err);
+                    const QString why = loaded->shownError.isEmpty() ? loaded->info.error().message : loaded->shownError;
+                    m_loadRow->set(FW_TR("%1 could not be read: %2").arg(QFileInfo(path).fileName(), why), Tone::Err);
                     updateState();
                     return;
                 }
@@ -480,6 +492,7 @@ void DlcPage::addInputs(const QStringList& paths)
                 const dlc::FpkgCli cli = dlc::locateFpkgCli(cliPath);
                 if (!cli.ok() && !dlc::looksLikePs4Package(path)) {
                     loaded->info = Error(ErrorCode::DependencyMissing, cli.problems.join(u' '));
+                    loaded->shownError = cli.shownProblems.join(u' '); // the log keeps the English text
                     return loaded;
                 }
                 loaded->info = dlc::inspectDlcPackage(cli, path, passcode, cancel);
@@ -666,10 +679,18 @@ void DlcPage::updateState()
     const bool any = !m_rows.empty();
     m_drop->setVisible(!any);
     m_table->setVisible(any);
+    // As tall as its rows (three at least, ten at most, then it scrolls): no
+    // empty band under a short list.
+    const int shownRows = std::clamp(int(m_rows.size()), 3, 10);
+    m_table->setFixedHeight(m_table->horizontalHeader()->sizeHint().height() + shownRows * m_table->verticalHeader()->defaultSectionSize()
+                            + 2 * m_table->frameWidth() + 2);
     m_regionBtn->setEnabled(any);
     m_previewBtn->setEnabled(any);
     m_saveIniBtn->setEnabled(any);
     m_clearLink->setVisible(any);
+    // The regional line speaks about the listed DLC: with none, it would be an
+    // empty line of space under the buttons.
+    m_regionLine->setVisible(any && !m_regionLine->text().isEmpty());
     if (m_loading > 0)
         m_countBadge->set((m_loading == 1 ? FW_TR("Reading %1 package\u2026") : FW_TR("Reading %1 packages\u2026")).arg(m_loading),
                           Tone::Info);
@@ -790,6 +811,8 @@ void DlcPage::pumpLookups()
 
 void DlcPage::updateRegionLine()
 {
+    // Whatever is said below: the line shows only with DLC listed (as updateState() keeps it).
+    const auto shown = qScopeGuard([this] { m_regionLine->setVisible(!m_rows.empty() && !m_regionLine->text().isEmpty()); });
     const QList<int> rows = selectedRows();
     const int r = rows.isEmpty() ? (m_rows.empty() ? -1 : 0) : rows.first();
     if (r < 0 || r >= int(m_rows.size())) {

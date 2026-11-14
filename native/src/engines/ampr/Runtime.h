@@ -21,8 +21,11 @@ inline const QString kRuntimeRelPath = QStringLiteral("fakelib/libSceAmpr.sprx")
 QString bundledRuntimePath();
 // The bundled runtime's bytes, checked against the pinned SHA-256.
 Result<QByteArray> loadBundledRuntime();
-// For the UI and the dependency check: "" when the runtime is usable, else why not.
+// For the jobs and the dependency check: "" when the runtime is usable, else
+// why not (English, like every engine error).
 QString bundledRuntimeProblem();
+// The same text in the interface's language, for the list of tools.
+QString bundledRuntimeProblemShown();
 
 enum class RuntimeKind { None, AmprEmuNg, AmprEmu, Unknown };
 

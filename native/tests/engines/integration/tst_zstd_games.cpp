@@ -2,9 +2,13 @@
 // format (read back through the packs), an image wrapped in a PFS container
 // read straight through, FPKG staging of packed and wrapped sources (only the
 // files the package keeps, packs unpacked), and game.extract.
+// FW_BENCH_MODE, FW_BENCH_THREADS and FW_BENCH_BUFFER_MIB run every job with
+// those Performance settings (engines/BenchSettings.h), so the packing of
+// realGameEndToEnd, which logs each format's time, can be timed per mode.
 
 #include "connect/ps5/Module.h"
 #include "core/Settings.h"
+#include "engines/BenchSettings.h"
 #include "engines/ampr/GameFiles.h"
 #include "engines/ampr/Module.h"
 #include "engines/ampr/Runtime.h"
@@ -26,6 +30,7 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
 #include <QTemporaryDir>
@@ -55,6 +60,15 @@ struct Env {
         store = std::make_unique<SettingsStore>(schema, dir + QStringLiteral("/settings.json"));
         (void)store->load();
         (void)store->setValue(general::keys::kFreeSpaceMarginMiB, 0);
+        // The benchmark's Performance settings, when one is given (checked in initTestCase).
+        const benchsettings::Performance perf = benchsettings::fromEnvironment();
+        if (perf.given && perf.problem.isEmpty()) {
+            (void)store->setValue(general::keys::kPerformanceMode, perf.mode);
+            if (qEnvironmentVariableIsSet("FW_BENCH_THREADS"))
+                (void)store->setValue(general::keys::kWorkerThreads, qEnvironmentVariableIntValue("FW_BENCH_THREADS"));
+            if (qEnvironmentVariableIsSet("FW_BENCH_BUFFER_MIB"))
+                (void)store->setValue(general::keys::kIoBufferMiB, qEnvironmentVariableIntValue("FW_BENCH_BUFFER_MIB"));
+        }
         queue = std::make_unique<JobQueue>(*store, jobs);
     }
     std::optional<JobRecord> run(const QString& kind, const QJsonObject& params, const QVariantMap& overrides = {})
@@ -133,6 +147,9 @@ private slots:
     {
         QVERIFY(m_root.isValid());
         fwtest::isolateAppData(m_root);
+        const benchsettings::Performance perf = benchsettings::fromEnvironment();
+        QVERIFY2(perf.problem.isEmpty(), qPrintable(perf.problem));
+        qInfo("zstd games settings: %s", qPrintable(perf.describe()));
         m_game = m_root.filePath(QStringLiteral("dumps/PPSA01234"));
         QVERIFY(fwtest::writeTextFile(m_game + QStringLiteral("/eboot.bin"), QByteArray("\x54\x14\xF5\xEE", 4) + QByteArray(70000, 'E')));
         QVERIFY(fwtest::writeTextFile(m_game + QStringLiteral("/sce_sys/param.json"),
@@ -348,10 +365,14 @@ private slots:
             originalBytes += b.size();
         for (const QString& fmt : {QStringLiteral("exfat"), QStringLiteral("ffpkg"), QStringLiteral("ffpfs")}) {
             const QString image = out + QStringLiteral("/real.") + fmt;
+            QElapsedTimer timer;
+            timer.start();
             auto r = env.run(integration::kZstdBuildJob, {{QStringLiteral("format"), fmt}, {QStringLiteral("source"), game},
                                                           {QStringLiteral("output"), image}});
+            const qint64 elapsedMs = timer.elapsed();
             QVERIFY2(r && r->state == JobState::Succeeded, qPrintable(fmt + u' ' + describe(r)));
-            qInfo("%s: %s (%lld bytes, dump %lld)", qPrintable(fmt), qPrintable(r->outcome->summary), QFileInfo(image).size(), originalBytes);
+            qInfo("%s: %s (%lld bytes, dump %lld) in %lld ms", qPrintable(fmt), qPrintable(r->outcome->summary), QFileInfo(image).size(),
+                  originalBytes, elapsedMs);
             auto files = integration::openGameFiles(image, {});
             QVERIFY(files.ok());
             auto logical = ampr::logicalGame(*files, {});

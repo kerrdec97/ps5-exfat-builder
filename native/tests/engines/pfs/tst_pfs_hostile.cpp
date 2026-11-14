@@ -18,6 +18,8 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <utility>
+
 using namespace fw;
 using namespace fw::pfs;
 
@@ -494,6 +496,177 @@ private slots:
         QVERIFY2(replaced.ok(), replaced.ok() ? "" : qPrintable(replaced.error().toLogString()));
         QVERIFY(!QFileInfo::exists(again + QStringLiteral("/half.bin")));
         QCOMPARE(listTree(tmp.path()).filter(QStringLiteral(".part")), QStringList());
+    }
+
+    // Extracting into a folder the user allowed to be filled: a file of theirs
+    // called like the temporary name of an extracted file ("<name>.part") is
+    // left as it is.
+    void aUsersPartFileIsNeverTaken()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "boot", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/level.bin"), "level data", -1));
+        const QString image = buildFolderImage(src, tmp.filePath(QStringLiteral("game.ffpfs")));
+        QVERIFY(!image.isEmpty());
+        const QString out = tmp.filePath(QStringLiteral("filled"));
+        QVERIFY(pfstest::writeFile(out + QStringLiteral("/data/level.bin.part"), "the user's download", -1));
+        auto er = extractImage(image, out, ExtractOptions{true, true, 0}, CancellationToken());
+        QVERIFY2(er.ok(), er.ok() ? "" : qPrintable(er.error().toLogString()));
+        QCOMPARE(pfstest::readAll(out + QStringLiteral("/data/level.bin")), QByteArray("level data"));
+        QCOMPARE(pfstest::readAll(out + QStringLiteral("/data/level.bin.part")), QByteArray("the user's download"));
+        QCOMPARE(listTree(out), (QStringList{QStringLiteral("data"), QStringLiteral("data/level.bin"), QStringLiteral("data/level.bin.part"),
+                                             QStringLiteral("eboot.bin")}));
+    }
+
+    // A file of the image called like the working name of another one
+    // ("<name>.fw.part") is never taken for a leftover and removed. Windows
+    // ignores letter case and the image's sorted order puts "A.BIN.FW.PART"
+    // before "a.bin": that one then gets a free name.
+    void aFileCalledLikeAWorkingNameIsKept()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "boot", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/A.BIN.FW.PART"), "named like a working file", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/a.bin"), "level data", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/b.bin"), "more data", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/b.bin.fw.part"), "named like one too", -1));
+        const QString image = buildFolderImage(src, tmp.filePath(QStringLiteral("game.ffpfs")));
+        QVERIFY(!image.isEmpty());
+        const QString out = tmp.filePath(QStringLiteral("x"));
+        auto er = extractImage(image, out, ExtractOptions{true, false, 0}, CancellationToken());
+        QVERIFY2(er.ok(), er.ok() ? "" : qPrintable(er.error().toLogString()));
+        const bool windows = hostUsesWindowsNames();
+        QCOMPARE(pfstest::readAll(out + QStringLiteral("/data/A.BIN.FW.PART")), QByteArray("named like a working file"));
+        QCOMPARE(pfstest::readAll(out + (windows ? QStringLiteral("/data/a.bin (2)") : QStringLiteral("/data/a.bin"))),
+                 QByteArray("level data"));
+        QCOMPARE(pfstest::readAll(out + QStringLiteral("/data/b.bin")), QByteArray("more data"));
+        QCOMPARE(pfstest::readAll(out + QStringLiteral("/data/b.bin.fw.part")), QByteArray("named like one too"));
+        QCOMPARE(er->files, qint64(5));
+        QCOMPARE(listTree(out).size(), 6); // data and the five files
+        QCOMPARE(er->renamed.join(u'\n').contains(QStringLiteral("data/a.bin → a.bin (2)")), windows);
+    }
+
+    // A folder of the image called like a file's working name is never taken
+    // for that file's leftover (nor written into): the file gets a free name.
+    void aFolderCalledLikeAWorkingNameIsKept()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "boot", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/c.bin.fw.part/inside.bin"), "in a folder", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/c.bin"), "beside the folder", -1));
+        const QString image = buildFolderImage(src, tmp.filePath(QStringLiteral("game.ffpfs")));
+        QVERIFY(!image.isEmpty());
+        const QString out = tmp.filePath(QStringLiteral("x"));
+        auto er = extractImage(image, out, ExtractOptions{true, false, 0}, CancellationToken());
+        QVERIFY2(er.ok(), er.ok() ? "" : qPrintable(er.error().toLogString()));
+        QCOMPARE(pfstest::readAll(out + QStringLiteral("/data/c.bin.fw.part/inside.bin")), QByteArray("in a folder"));
+        QCOMPARE(pfstest::readAll(out + QStringLiteral("/data/c.bin (2)")), QByteArray("beside the folder"));
+        QCOMPARE(listTree(out).size(), 5); // data, its folder, three files
+        const QString renamed = er->renamed.join(u'\n');
+        QVERIFY2(renamed.contains(QStringLiteral("data/c.bin → c.bin (2)")), qPrintable(renamed));
+    }
+
+    // A name of 248 to 255 characters has no room for the working name of an
+    // extracted file ("<name>.fw.part"): it is written under a shortened
+    // working name of its own and renamed.
+    void longNamesAreExtracted()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        const QStringList names{QString(246, u'n') + QStringLiteral(".bin"), QString(251, u'm') + QStringLiteral(".bin")}; // 250, 255
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "boot", -1));
+        for (const QString& n : names)
+            QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/") + n, n.left(1).toLatin1(), -1));
+        const QString image = buildFolderImage(src, tmp.filePath(QStringLiteral("game.ffpfs")));
+        QVERIFY(!image.isEmpty());
+        const QString out = tmp.filePath(QStringLiteral("x"));
+        auto er = extractImage(image, out, ExtractOptions{true, false, 0}, CancellationToken());
+        QVERIFY2(er.ok(), er.ok() ? "" : qPrintable(er.error().toLogString()));
+        for (const QString& n : names)
+            QCOMPARE(pfstest::readAll(out + QStringLiteral("/data/") + n), n.left(1).toLatin1());
+        QCOMPARE(listTree(out).size(), 4); // data, its two files, eboot.bin: nothing else
+    }
+
+    // The empty folder chosen for the extraction is in use when the finished
+    // extraction is to take its name: the files are kept next to it, not
+    // deleted, the error says where, and the user's folder stays as it was.
+    void finishedExtractionIsKeptWhenTheFolderCannotBeUsed()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("A folder in use can be removed on this platform.");
+#endif
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "boot", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/level.bin"), "level data", -1));
+        const QString image = buildFolderImage(src, tmp.filePath(QStringLiteral("game.ffpfs")));
+        QVERIFY(!image.isEmpty());
+        const QString out = tmp.filePath(QStringLiteral("held"));
+        QVERIFY(QDir().mkpath(out));
+        const QString before = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(out)); // the current folder of a process cannot be removed
+        auto er = extractImage(image, out, ExtractOptions{true, false, 0}, CancellationToken());
+        QVERIFY(QDir::setCurrent(before));
+        QVERIFY(!er.ok());
+        // The work is saved: not an error the queue retries by itself, which
+        // would extract another full copy.
+        QVERIFY2(er.error().code != ErrorCode::IoError, qPrintable(er.error().toLogString()));
+        const QString kept = out + QStringLiteral(".new");
+        QVERIFY2(er.error().message.contains(QStringLiteral("were extracted")), qPrintable(er.error().toLogString()));
+        QVERIFY2(er.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(er.error().toLogString()));
+        QCOMPARE(pfstest::readAll(kept + QStringLiteral("/data/level.bin")), QByteArray("level data"));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part.extracting")));
+        QVERIFY(QFileInfo(out).isDir());
+        QVERIFY(QDir(out).isEmpty());
+    }
+
+    // What is at the folder's name when the extraction is done decides what
+    // the error says: files were put into it meanwhile, or a file of that
+    // name was made. The extracted files are kept next to it either way, and
+    // what the user put there is not touched.
+    void finishedExtractionSaysWhyTheFolderCouldNotBeUsed()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), "boot", -1));
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/data/level.bin"), "level data", -1));
+        const QString image = buildFolderImage(src, tmp.filePath(QStringLiteral("game.ffpfs")));
+        QVERIFY(!image.isEmpty());
+        for (const bool fileInTheWay : {false, true}) {
+            const QString out = tmp.filePath(fileInTheWay ? QStringLiteral("file") : QStringLiteral("filled"));
+            QVERIFY(QDir().mkpath(out));
+            bool done = false;
+            ProgressHooks hooks;
+            hooks.item = [&](const QString&) {
+                if (std::exchange(done, true))
+                    return;
+                if (fileInTheWay)
+                    done = QDir().rmdir(out) && pfstest::writeFile(out, "theirs", -1);
+                else
+                    done = pfstest::writeFile(out + QStringLiteral("/theirs.txt"), "theirs", -1);
+            };
+            auto er = extractImage(image, out, ExtractOptions{true, false, 0}, CancellationToken(), hooks);
+            QVERIFY(done);
+            QVERIFY(!er.ok());
+            QCOMPARE(er.error().code, ErrorCode::AlreadyExists);
+            const QString kept = out + QStringLiteral(".new");
+            const QString why = fileInTheWay ? QStringLiteral("exists and is not a folder") : QStringLiteral("is no longer empty");
+            QVERIFY2(er.error().message.contains(why), qPrintable(er.error().toLogString()));
+            QVERIFY2(er.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(er.error().toLogString()));
+            QCOMPARE(pfstest::readAll(kept + QStringLiteral("/data/level.bin")), QByteArray("level data"));
+            QCOMPARE(pfstest::readAll(fileInTheWay ? out : out + QStringLiteral("/theirs.txt")), QByteArray("theirs"));
+            QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        }
     }
 
     // A tiny image whose PFSC header declares a 16 GiB block offset table

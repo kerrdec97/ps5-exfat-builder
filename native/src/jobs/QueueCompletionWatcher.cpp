@@ -9,19 +9,36 @@ QueueCompletionWatcher::QueueCompletionWatcher(JobQueue& queue, SettingsStore& s
         const auto rec = m_queue.record(id);
         if (!rec)
             return;
-        if (!m_runIds.contains(id))
-            m_runIds << id;
+        // Update checks and problem reports run beside the queue (even while
+        // it is paused): they are not part of the user's run, and one of
+        // them ending alone ends no run (GitHub #96: the check a few seconds
+        // after start started the countdown at every start).
+        if (rec->runsWhileHeld)
+            return;
+        // Ran in this session: the queue started it (a restored job never
+        // finishes by itself), now or in an attempt before an automatic retry.
+        const bool ran = rec->started.isValid() || rec->attempt > 1;
         switch (rec->state) {
-        case JobState::Succeeded: ++m_succeeded; break;
+        case JobState::Succeeded:
+            if (!ran)
+                return;
+            ++m_succeeded;
+            break;
         case JobState::Cancelled:
             ++m_cancelled;
-            if (rec->started.isValid())
+            if (ran)
                 ++m_cancelledAfterStart; // it had begun: for the after-queue action that is not a clean run
             break;
         case JobState::Failed:
-        case JobState::Interrupted: ++m_failed; break;
-        default: break;
+        case JobState::Interrupted:
+            if (!ran)
+                return;
+            ++m_failed;
+            break;
+        default: return;
         }
+        if (!m_runIds.contains(id))
+            m_runIds << id;
     });
     connect(&m_queue, &JobQueue::idle, this, &QueueCompletionWatcher::onIdle);
 }

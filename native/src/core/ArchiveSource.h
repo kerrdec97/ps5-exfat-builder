@@ -53,7 +53,8 @@ struct ZipGame {
     bool hasEboot = false;
     bool hasParam = false;
     QByteArray paramJson;    // sce_sys/param.json, when present (< 16 MiB) and cheap to read
-    QStringList otherGames;  // further game folders found in the archive
+    QStringList otherGames;  // further game folders found in the archive (the first 10)
+    qint64 moreGames = 0;    // further game folders beyond those otherGames names
     qint64 links = 0;        // 7z, RAR: symbolic and hard links in the game; they are not unpacked
 };
 using ArchiveGame = ZipGame;

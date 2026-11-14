@@ -145,11 +145,29 @@ bool ConsoleToolTab::runLocal(LocalWork<T> work, Done<T> done)
     return true;
 }
 
+// PS5 connect has one gradient button per view (DESIGN_V5, principle 6):
+// while no console is connected, the console card's Connect; once one is,
+// the open tool's own main action. A tool marks that button with
+// setToolPrimary() (also when its state changes, e.g. Connect / Disconnect);
+// it is drawn Primary only while the page it sits on has no Connect to offer.
+// Outside the page (a tab on its own) the mark is the variant.
+void setToolPrimary(QPushButton* button, bool primary = true);
+// The page: whether its console card offers Connect, and the marked buttons
+// under `root` drawn accordingly.
+void setConnectOffered(QWidget* root, bool offered);
+
 // Shared look for the tabs' tables (header, row height, no grid, whole-row
 // selection, read-only) and their cells.
 void styleToolTable(QTableWidget* table, int minimumRows);
 QTableWidgetItem* toolItem(const QString& text, bool mono = false, const QColor& color = theme::color::fg_1);
 // A badge on the left of a cell; the cell's item holds the text in Qt::UserRole.
 void setBadgeCell(QTableWidget* table, int row, int column, const QString& text, ui::Tone tone, const QString& icon = {});
+// What a cell keeps around a widget placed in it: the item padding of the
+// style sheet (the delegate puts cell widgets in the item's text rectangle).
+int cellPadding(QTableWidget* table);
+// A column of setBadgeCell() badges as wide as its widest badge in the
+// language shown (with the tone's glyph, the badge's margins and the cell's
+// padding) and its title, so no state is cut ("Größe abweichend").
+int badgeColumnWidth(QTableWidget* table, int column, const QStringList& badges);
 
 } // namespace fw::pages

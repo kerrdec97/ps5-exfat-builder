@@ -13,6 +13,7 @@
 #include "connect/ps5/Y2jb.h"
 #include "core/FileUtil.h"
 #include "core/Settings.h"
+#include "core/Tr.h"
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -73,7 +74,17 @@ QJsonArray toJsonArray(const QStringList& l)
     return QJsonArray::fromStringList(l);
 }
 
-void fillTransferOutcome(JobOutcome& o, const TransferReport& r)
+// Partial files as the user knows them: console paths as they are, this PC's
+// with its own separators.
+QString shownPartials(const QStringList& paths, bool local)
+{
+    QStringList out;
+    for (const QString& p : paths)
+        out << (local ? QDir::toNativeSeparators(p) : p);
+    return out.join(QStringLiteral(", "));
+}
+
+void fillTransferOutcome(JobOutcome& o, const TransferReport& r, bool localFiles = false)
 {
     o.details.insert(QStringLiteral("files"), r.files);
     o.details.insert(QStringLiteral("transferred"), r.transferred);
@@ -83,10 +94,13 @@ void fillTransferOutcome(JobOutcome& o, const TransferReport& r)
     o.details.insert(QStringLiteral("errors"), toJsonArray(r.errors));
     o.details.insert(QStringLiteral("removedPartials"), toJsonArray(r.removedPartials));
     o.details.insert(QStringLiteral("leftoverPartials"), toJsonArray(r.leftoverPartials));
+    o.details.insert(QStringLiteral("keptPartials"), toJsonArray(r.keptPartials));
     o.outputs = r.outputs;
     o.warnings = r.warnings;
     for (const QString& p : r.leftoverPartials)
         o.warnings << QStringLiteral("A partial file may remain on the PS5: %1").arg(p);
+    for (const QString& p : r.keptPartials)
+        o.warnings << QStringLiteral("Kept the partial file so the transfer can resume: %1").arg(shownPartials({p}, localFiles));
     if (r.failed > 0) {
         o.verification = Verification::Failed;
         o.verificationDetail = QStringLiteral("%1 of %2 file(s) failed: %3").arg(r.failed).arg(r.files).arg(r.errors.join(QStringLiteral("; ")));
@@ -121,13 +135,15 @@ Error nothingPlanned(const QStringList& skipped, const QString& notDone)
     return Error(ErrorCode::InvalidArgument, QStringLiteral("%1: %2").arg(notDone, list));
 }
 
-Error cancelledWithCleanup(const TransferReport& r)
+Error cancelledWithCleanup(const TransferReport& r, bool localFiles = false)
 {
     QString msg = QStringLiteral("Cancelled after %1 of %2 file(s).").arg(r.transferred).arg(r.files);
     if (!r.removedPartials.isEmpty())
         msg += QStringLiteral(" Removed the partial file(s): %1.").arg(r.removedPartials.join(QStringLiteral(", ")));
     if (!r.leftoverPartials.isEmpty())
         msg += QStringLiteral(" Could not remove: %1.").arg(r.leftoverPartials.join(QStringLiteral(", ")));
+    if (!r.keptPartials.isEmpty())
+        msg += QStringLiteral(" Kept the partial file(s) so the transfer can resume: %1.").arg(shownPartials(r.keptPartials, localFiles));
     return Error(ErrorCode::Cancelled, msg);
 }
 
@@ -284,9 +300,9 @@ public:
         if (!rep.ok())
             return rep.takeError();
         if (rep->cancelled || ctx.token.isCancelled())
-            return cancelledWithCleanup(rep.value());
+            return cancelledWithCleanup(rep.value(), true);
         JobOutcome o;
-        fillTransferOutcome(o, rep.value());
+        fillTransferOutcome(o, rep.value(), true);
         notePlanSkips(o, plan.skipped, QStringLiteral("Not downloaded"));
         o.details.insert(QStringLiteral("skippedNames"), toJsonArray(plan.skipped));
         o.summary = QStringLiteral("%1 file(s) downloaded to %2").arg(rep->transferred).arg(QDir::toNativeSeparators(localDir));
@@ -924,8 +940,8 @@ DependencyInfo probeSqlite(const SettingsValues&)
     i.purpose = QStringLiteral("Y2JB update blocking edits app.db and appinfo.db.");
     if (!QSqlDatabase::isDriverAvailable(QStringLiteral("QSQLITE"))) {
         i.status = DependencyStatus::Missing;
-        i.detail = QStringLiteral("The Qt SQL plugin qsqlite was not found.");
-        i.howToFix = QStringLiteral("Reinstall the app; the sqldrivers folder next to it is missing.");
+        i.detail = FW_TR("The Qt SQL plugin qsqlite was not found.");
+        i.howToFix = FW_TR("Reinstall the app; the sqldrivers folder next to it is missing.");
         return i;
     }
     const QString name = QStringLiteral("fw-probe-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -943,8 +959,8 @@ DependencyInfo probeSqlite(const SettingsValues&)
     }
     QSqlDatabase::removeDatabase(name);
     i.status = json ? DependencyStatus::Ready : DependencyStatus::Outdated;
-    i.detail = json ? QStringLiteral("SQLite with JSON functions") : QStringLiteral("SQLite has no JSON functions; app.db cannot be patched.");
-    i.howToFix = json ? QString() : QStringLiteral("Use a build whose Qt SQLite includes JSON1 (SQLite 3.38 or later).");
+    i.detail = json ? FW_TR("SQLite with JSON functions") : FW_TR("SQLite has no JSON functions; app.db cannot be patched.");
+    i.howToFix = json ? QString() : FW_TR("Use a build whose Qt SQLite includes JSON1 (SQLite 3.38 or later).");
     return i;
 }
 

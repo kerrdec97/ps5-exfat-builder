@@ -15,6 +15,9 @@
 #include "app/pages/ps5/ConsoleHero.h"
 #include "app/pages/ps5/ConsoleToolTab.h"
 #include "app/pages/ps5/DiagnosticsTab.h"
+#include "app/pages/ps5/FakelibTab.h"
+#include "app/pages/ps5/ManagerTab.h"
+#include "app/pages/ps5/ShadowMountTab.h"
 #include "app/pages/ps5/TransferPanel.h"
 #include "app/services/AppStores.h"
 #include "app/services/ConsoleSession.h"
@@ -22,18 +25,26 @@
 #include "app/ui/Sheet.h"
 #include "app/ui/Shell.h"
 #include "app/ui/Theme.h"
+#include "app/ui/Widgets.h"
 #include "ConsoleTestUtil.h"
+#include "connect/ps5/ConsoleGames.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/ps5/Module.h"
+#include "core/FileUtil.h"
 #include "core/Log.h"
+#include "core/Tr.h"
 #include "support/TestSupport.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QHeaderView>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -42,7 +53,10 @@
 #include <QDropEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScopeGuard>
+#include <QSet>
 #include <QSettings>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QTcpServer>
 #include <QTemporaryDir>
@@ -50,7 +64,9 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
+#include <QVBoxLayout>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -312,6 +328,65 @@ private slots:
         QVERIFY(!states.contains(ui::ConsoleSession::ConnectionState::Failed));
     }
 
+    // An idle connection gets a NOOP now and then; never while a request uses
+    // the connection, and none after Disconnect.
+    void idleSessionSendsNoopOnlyBetweenRequests()
+    {
+        const QString root = fresh(QStringLiteral("noop"));
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/data/slow")));
+        FakeFtpServer::Options o;
+        o.root = root;
+        o.lateListReplyMs = 1500; // the listing holds the connection for 1.5 s
+        FakeFtpServer srv(o);
+        ui::ConsoleSession::setKeepAliveIntervalForTests(150);
+        auto restore = qScopeGuard([] { ui::ConsoleSession::setKeepAliveIntervalForTests(0); });
+        auto noops = [&srv] {
+            int n = 0;
+            for (const QString& c : srv.commands())
+                n += c.compare(QLatin1String("NOOP"), Qt::CaseInsensitive) == 0 ? 1 : 0;
+            return n;
+        };
+        ui::ConsoleSession session;
+        session.connectTo(QStringLiteral("127.0.0.1"), srv.port(), 5000, true);
+        QTRY_VERIFY_WITH_TIMEOUT(session.isConnected(), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(noops() >= 2, 10000); // idle: kept alive
+
+        // While the listing waits for its late reply, no NOOP goes out.
+        std::atomic<int> atListed{-1};
+        int beforeList = -1;
+        connect(&session, &ui::ConsoleSession::listed, &session, [&](const ui::RemoteListing&) { atListed = noops(); },
+                Qt::DirectConnection);
+        beforeList = noops();
+        session.list(QStringLiteral("/data/slow"));
+        QTRY_VERIFY_WITH_TIMEOUT(atListed.load() >= 0, 10000);
+        // At most one NOOP can have crossed with the LIST request being posted.
+        QVERIFY2(atListed.load() <= beforeList + 1, qPrintable(srv.commands().join(QStringLiteral(" | "))));
+        QVERIFY(srv.sawCommand(QStringLiteral("LIST")) || srv.sawCommand(QStringLiteral("MLSD")));
+        QTRY_VERIFY_WITH_TIMEOUT(noops() > atListed.load(), 10000); // idle again: kept alive again
+
+        session.disconnect();
+        QTRY_COMPARE_WITH_TIMEOUT(session.state(), ui::ConsoleSession::ConnectionState::Offline, 10000);
+        const int afterDisconnect = noops();
+        QTest::qWait(600);
+        QCOMPARE(noops(), afterDisconnect);
+    }
+
+    // A keep-alive that finds the console gone ends the session as Failed,
+    // without waiting for the next click.
+    void keepAliveNoticesALostConsole()
+    {
+        FakeFtpServer::Options o;
+        o.root = fresh(QStringLiteral("noop-gone"));
+        auto srv = std::make_unique<FakeFtpServer>(o);
+        ui::ConsoleSession::setKeepAliveIntervalForTests(150);
+        auto restore = qScopeGuard([] { ui::ConsoleSession::setKeepAliveIntervalForTests(0); });
+        ui::ConsoleSession session;
+        session.connectTo(QStringLiteral("127.0.0.1"), srv->port(), 5000, true);
+        QTRY_VERIFY_WITH_TIMEOUT(session.isConnected(), 10000);
+        srv.reset(); // the console went to rest mode
+        QTRY_COMPARE_WITH_TIMEOUT(session.state(), ui::ConsoleSession::ConnectionState::Failed, 15000);
+    }
+
     // Rename never lands on a name that is taken: the console would replace that file.
     void renameOntoAnExistingNameIsRefused()
     {
@@ -472,6 +547,323 @@ private slots:
         // A list of cancelled transfers is not "All done".
         QTRY_VERIFY_WITH_TIMEOUT(page.transfers()->activeCount() == 0, 5000);
         QCOMPARE(page.transfers()->summaryText(), QStringLiteral("1 not finished"));
+    }
+
+    // Several items sent at once run in the order they were given, also when
+    // the queue is held with nothing running (the first starts, not the last).
+    void severalUploadsRunInTheOrderGiven()
+    {
+        const QString root = fresh(QStringLiteral("order"));
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/data/etaHEN/games")));
+        FakeFtpServer::Options o;
+        o.root = root;
+        o.throttleBytesPerSec = 32 * 1024;
+        FakeFtpServer srv(o);
+        pointSettingsAt(srv.port(), QStringLiteral("/data/etaHEN/games"));
+        const QString local = fresh(QStringLiteral("order-up"));
+        QStringList files;
+        for (const char* name : {"first.bin", "second.bin", "third.bin"}) {
+            files << local + u'/' + QLatin1String(name);
+            QVERIFY(writeBytes(files.last(), QByteArray(1024 * 1024, 'o')));
+        }
+        ui::PayloadStore store;
+        JobQueueModel model(m_ctx->queue());
+        pages::Ps5ConnectPage page(*m_ctx, model, store);
+        m_ctx->queue().holdQueue(true);
+        const auto release = qScopeGuard([this] { m_ctx->queue().holdQueue(false); });
+        page.uploadFiles(files, QStringLiteral("/data/etaHEN/games"));
+        QStringList order;
+        for (const JobRecord& r : m_ctx->queue().records())
+            if (r.kind == ps5::jobkinds::kUpload)
+                order << r.parameters.value(QStringLiteral("sources")).toArray().first().toString();
+        QCOMPARE(order, files);
+        // The first one is the one that runs; the others wait for it, in turn.
+        QString running;
+        QVERIFY(QTest::qWaitFor([&] {
+            for (const JobRecord& r : m_ctx->queue().records())
+                if (r.kind == ps5::jobkinds::kUpload && r.state == JobState::Running)
+                    running = r.parameters.value(QStringLiteral("sources")).toArray().first().toString();
+            return !running.isEmpty();
+        }, 15000));
+        QCOMPARE(running, files.first());
+    }
+
+    // PS5 connect has one gradient button in view: the console card's Connect
+    // while no console is connected, then the open tool's main action. The
+    // card names its two fields; every icon-only button says what it does.
+    void oneGradientButtonPerView()
+    {
+        ui::PayloadStore store;
+        JobQueueModel model(m_ctx->queue());
+        pages::Ps5ConnectPage page(*m_ctx, model, store);
+        page.resize(1300, 900);
+        page.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&page));
+        const auto shownPrimaries = [&page] {
+            QStringList out;
+            for (auto* b : page.findChildren<QPushButton*>())
+                if (b->isVisibleTo(&page) && b->property("variant").toString() == QLatin1String("primary"))
+                    out << b->text();
+            return out;
+        };
+        const QStringList tools{QStringLiteral("ftp"),        QStringLiteral("manager"), QStringLiteral("payloads"),   QStringLiteral("klog"),
+                                QStringLiteral("smplog"),     QStringLiteral("crashdumps"), QStringLiteral("mount"),  QStringLiteral("fakelib"),
+                                QStringLiteral("autoloader"), QStringLiteral("ampr"),     QStringLiteral("y2jb"),       QStringLiteral("install"),
+                                QStringLiteral("diagnostics")};
+        for (const QString& tool : tools) {
+            page.navigateWith({{QStringLiteral("tab"), tool}});
+            QCOMPARE(page.currentTool(), tool);
+            QVERIFY2(shownPrimaries() == QStringList{QStringLiteral("Connect")}, qPrintable(tool + u':' + shownPrimaries().join(u',')));
+        }
+        // A console connected (the screenshot's example): the card offers
+        // Disconnect, and each tool's own main action is the gradient one.
+        page.applyDemoState(QStringLiteral("ftp"));
+        QCOMPARE(shownPrimaries(), QStringList{QStringLiteral("Upload files…")});
+        const QHash<QString, QString> main{{QStringLiteral("manager"), QStringLiteral("Refresh")},
+                                           {QStringLiteral("klog"), QStringLiteral("Connect")},
+                                           {QStringLiteral("crashdumps"), QStringLiteral("Start watching")},
+                                           {QStringLiteral("ampr"), QStringLiteral("Generate and upload")},
+                                           {QStringLiteral("diagnostics"), QStringLiteral("Run diagnostics")}};
+        for (auto it = main.cbegin(); it != main.cend(); ++it) {
+            page.navigateWith({{QStringLiteral("tab"), it.key()}});
+            QVERIFY2(shownPrimaries() == QStringList{it.value()}, qPrintable(it.key() + u':' + shownPrimaries().join(u',')));
+        }
+        page.clearDemoState();
+
+        // The address and the port are named above their fields.
+        const auto buddyOf = [&page](QWidget* field) -> QString {
+            for (auto* l : page.findChildren<QLabel*>())
+                if (l->buddy() == field)
+                    return l->text();
+            return {};
+        };
+        QCOMPARE(buddyOf(page.hero()->hostEdit()), QStringLiteral("Address"));
+        QCOMPARE(buddyOf(page.hero()->portEdit()), QStringLiteral("Port"));
+        // Icon-only buttons carry their name and a tooltip.
+        for (auto* b : page.findChildren<ui::IconButton*>())
+            QVERIFY2(!b->accessibleName().isEmpty() && !b->toolTip().isEmpty(), qPrintable(b->objectName()));
+    }
+
+    // The screenshot demos of what is read from a console show a connected
+    // console on the card (the header chip and the status bar follow the
+    // card), its payload chip in the live chip's words; afterwards the card
+    // is as the session is. A tool for local files leaves the card alone.
+    void consoleDemosShowAConnectedConsole()
+    {
+        ui::PayloadStore store;
+        JobQueueModel model(m_ctx->queue());
+        pages::Ps5ConnectPage page(*m_ctx, model, store);
+        page.resize(1300, 900);
+        page.show();
+        using State = pages::ConsoleHero::State;
+        for (const QString& demo : {QStringLiteral("manager"), QStringLiteral("fakelib"), QStringLiteral("ampr"), QStringLiteral("smplog"),
+                                    QStringLiteral("crashdumps"), QStringLiteral("install"), QStringLiteral("diagnostics"), QStringLiteral("mount")}) {
+            page.applyDemoState(demo);
+            QVERIFY2(page.hero()->state() == State::Connected, qPrintable(demo));
+            QCOMPARE(page.hero()->chip(QStringLiteral("payload"))->detail(), QStringLiteral("9021 · sent"));
+            page.clearDemoState();
+            QVERIFY2(page.hero()->state() != State::Connected, qPrintable(demo));
+        }
+        page.applyDemoState(QStringLiteral("autoloader"));
+        QVERIFY(page.hero()->state() != State::Connected);
+        page.clearDemoState();
+    }
+
+    // Beside the address fields the console card's line is short: a sentence
+    // that does not fit (a long language) goes on in a second line instead of
+    // being cut. On a narrow card it has the whole width and one line.
+    void heroLineGoesOnInASecondLine()
+    {
+        // In a page, as in the app (a window of its own would not shrink below its layout).
+        QWidget page;
+        auto* column = new QVBoxLayout(&page);
+        column->setContentsMargins(0, 0, 0, 0);
+        auto* heroWidget = new pages::ConsoleHero(*m_ctx, &page);
+        pages::ConsoleHero& hero = *heroWidget;
+        column->addWidget(heroWidget);
+        column->addStretch(1);
+        page.resize(1150, 300);
+        hero.setSubtitle(QStringLiteral("x"));
+        page.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&page));
+        QCoreApplication::processEvents();
+        QCOMPARE(hero.width(), 1150);
+        ui::ElideLabel* line = nullptr;
+        for (auto* l : hero.findChildren<ui::ElideLabel*>())
+            if (l->fullText() == QLatin1String("x"))
+                line = l;
+        QVERIFY(line);
+        const int width = line->width();
+        QVERIFY(width > 100);
+        // About one and a quarter lines.
+        QString text;
+        while (QFontMetrics(line->font()).horizontalAdvance(text) < width * 5 / 4)
+            text += QStringLiteral("Netz ");
+        text += QStringLiteral("suchen.");
+        hero.setSubtitle(text);
+        QCoreApplication::processEvents();
+        QCoreApplication::processEvents();
+        const QString why = QStringLiteral("%1 px (was %2): %3").arg(line->width()).arg(width).arg(line->text());
+        QVERIFY2(line->text().count(u'\n') == 1, qPrintable(why));
+        QVERIFY2(!line->text().contains(QChar(0x2026)), qPrintable(why));
+        QCOMPARE(hero.subtitle(), text);
+        page.resize(900, 300); // narrow: the fields go below
+        QCoreApplication::processEvents();
+        QCoreApplication::processEvents();
+        QCOMPARE(hero.width(), 900);
+        QVERIFY2(!line->text().contains(u'\n'), qPrintable(line->text()));
+    }
+
+    // Manager: a state is whole in its badge in a long language too ("Größe
+    // abweichend" lost its "d"): the status columns are as wide as their
+    // widest badge, the tone's glyph and the cell's margins included.
+    void managerStatesAreWholeInALongLanguage()
+    {
+        const QString res = fresh(QStringLiteral("lang"));
+        const QString longMismatch = QStringLiteral("Größe weicht stark ab");
+        const QString longMissing = QStringLiteral("Fehlt auf der PS5-Konsole");
+        const QString longDisabled = QStringLiteral("Vorübergehend deaktiviert");
+        const QJsonObject de{{QStringLiteral("code"), QStringLiteral("de")},
+                             {QStringLiteral("name"), QStringLiteral("Deutsch")},
+                             {QStringLiteral("englishName"), QStringLiteral("German")},
+                             {QStringLiteral("strings"), QJsonObject{{QStringLiteral("Size mismatch"), longMismatch},
+                                                                     {QStringLiteral("Missing on the PS5"), longMissing},
+                                                                     {QStringLiteral("Disabled"), longDisabled}}}};
+        QVERIFY(writeBytes(res + QStringLiteral("/de.json"), QJsonDocument(de).toJson()));
+        i18n::configure(res, fresh(QStringLiteral("user-lang")));
+        QVERIFY(i18n::load(QStringLiteral("de")));
+        const auto english = qScopeGuard([] {
+            i18n::load(QStringLiteral("en"));
+            i18n::configure({}, {});
+        });
+        QCOMPARE(ps5::gameStatusLabel(ps5::GameStatus::SizeMismatch), longMismatch);
+        pages::Ps5ManagerTab tab(*m_ctx, fakeConsole(closedPort()));
+        QTableWidget *games = nullptr, *diffs = nullptr;
+        for (auto* t : tab.findChildren<QTableWidget*>()) {
+            if (t->accessibleName() == QLatin1String("Games"))
+                games = t;
+            if (t->accessibleName() == QLatin1String("Differences"))
+                diffs = t;
+        }
+        QVERIFY(games && diffs);
+        const int cell = 2 * theme::space::sm; // setBadgeCell's margins
+        QVERIFY2(games->columnWidth(1) >= ui::badgeWidth(longMismatch, true) + cell, qPrintable(QString::number(games->columnWidth(1))));
+        QVERIFY2(diffs->columnWidth(0) >= ui::badgeWidth(longMissing, true) + cell, qPrintable(QString::number(diffs->columnWidth(0))));
+        // The Fakelib tab's state column too (the cell's own padding included).
+        pages::FakelibTab fakelib(*m_ctx, fakeConsole(closedPort()));
+        QTableWidget* overlays = nullptr;
+        for (auto* t : fakelib.findChildren<QTableWidget*>())
+            if (t->accessibleName() == QLatin1String("Fakelib overlays"))
+                overlays = t;
+        QVERIFY(overlays);
+        QVERIFY2(overlays->columnWidth(0) >= ui::badgeWidth(longDisabled, true) + cell + pages::cellPadding(overlays),
+                 qPrintable(QString::number(overlays->columnWidth(0))));
+        // As laid out (the cell's own padding too): no badge of the list is squeezed.
+        tab.resize(1300, 1600);
+        tab.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&tab));
+        tab.applyDemo();
+        QCoreApplication::processEvents();
+        int badges = 0;
+        for (auto* b : games->viewport()->findChildren<ui::Badge*>()) {
+            if (!b->isVisibleTo(games))
+                continue;
+            ++badges;
+            QVERIFY2(b->width() >= b->sizeHint().width(), qPrintable(QStringLiteral("%1: %2 of %3").arg(b->text()).arg(b->width()).arg(b->sizeHint().width())));
+        }
+        QVERIFY(badges >= 4);
+    }
+
+    // ShadowMount+ settings: every row's control ends on one line, whether the
+    // "back to the default" button beside it shows or not; a number's unit is
+    // inside its field, as in Settings.
+    void shadowMountControlsEndOnOneLine()
+    {
+        pages::ShadowMountTab tab(*m_ctx, fakeConsole(closedPort()));
+        tab.resize(1100, 3000);
+        tab.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&tab));
+        tab.applyDemo(); // an example config: some keys differ from their default
+        QCoreApplication::processEvents();
+        int resetShown = 0, resetHidden = 0;
+        for (auto* b : tab.findChildren<ui::IconButton*>())
+            if (b->accessibleName() == QLatin1String("Back to the default (removes the line)") && b->parentWidget()->isVisibleTo(&tab))
+                ++(b->isVisibleTo(&tab) ? resetShown : resetHidden);
+        QVERIFY2(resetShown > 0 && resetHidden > 0, qPrintable(QStringLiteral("%1 shown, %2 hidden").arg(resetShown).arg(resetHidden)));
+        QSet<int> ends;
+        QStringList where;
+        for (auto* w : tab.findChildren<QWidget*>()) {
+            const QString row = w->parentWidget() ? w->parentWidget()->objectName() : QString();
+            if (!row.startsWith(QLatin1String("smp-")) || row.startsWith(QLatin1String("smp-group-")) || !w->isVisibleTo(&tab))
+                continue;
+            if (!qobject_cast<ui::Switch*>(w) && !qobject_cast<QSpinBox*>(w) && !qobject_cast<QComboBox*>(w))
+                continue;
+            const int end = w->mapTo(&tab, QPoint(w->width(), 0)).x();
+            ends.insert(end);
+            where << QStringLiteral("%1:%2").arg(row).arg(end);
+        }
+        QVERIFY(ends.size() >= 1);
+        QVERIFY2(ends.size() == 1, qPrintable(where.join(u' ')));
+        bool unitInside = false;
+        for (auto* spin : tab.findChildren<QSpinBox*>())
+            if (auto* edit = spin->findChild<QLineEdit*>(); edit && ui::inputSuffix(edit) == QLatin1String("s"))
+                unitInside = spin->suffix().isEmpty();
+        QVERIFY(unitInside);
+    }
+
+    // Crash dumps: "Watch for" is a choice with its chevron; what is chosen
+    // goes to the job in minutes ("Until stopped" is 0).
+    void crashDumpsWatchForIsAChoice()
+    {
+        FakeFtpServer::Options o;
+        o.root = fresh(QStringLiteral("crash"));
+        FakeFtpServer srv(o);
+        pages::CrashDumpsTab crash(*m_ctx, fakeConsole(srv.port()));
+        auto* choice = crash.findChild<QComboBox*>();
+        QVERIFY(choice);
+        QCOMPARE(choice->itemText(0), QStringLiteral("Until stopped"));
+        QCOMPARE(choice->itemData(0).toInt(), 0);
+        const int quarter = choice->findData(15);
+        QVERIFY(quarter > 0);
+        QCOMPARE(choice->itemText(quarter), QStringLiteral("15 min"));
+        QCOMPARE(choice->itemData(choice->count() - 1).toInt(), 24 * 60);
+        m_ctx->queue().holdQueue(true);
+        const auto release = qScopeGuard([this] { m_ctx->queue().holdQueue(false); });
+        choice->setCurrentIndex(quarter);
+        crash.start();
+        QVERIFY(crash.isWatching());
+        const auto rec = m_ctx->queue().record(crash.jobId());
+        QVERIFY(rec);
+        QCOMPARE(rec->parameters.value(QStringLiteral("minutes")).toInt(), 15);
+        endJob(crash.jobId()); // it started at once (startNow), before the stand-in console goes
+    }
+
+    // A transfer row's time left is the whole transfer's, as everywhere else,
+    // not the current stage's; its percentage is the one every view shows.
+    void transferRowShowsTheJobsTimeLeft()
+    {
+        JobRecord r;
+        r.id = QStringLiteral("t1");
+        r.kind = ps5::jobkinds::kUpload;
+        r.title = QStringLiteral("Upload");
+        r.state = JobState::Running;
+        r.progress.phaseNames = {QStringLiteral("Checking"), QStringLiteral("Sending")};
+        r.progress.phaseCount = 2;
+        r.progress.phaseIndex = 0;
+        r.progress.unitIsBytes = true;
+        r.progress.total = 4LL << 30;
+        r.progress.done = 1LL << 30;
+        r.progress.overallFraction = 0.25;
+        r.progress.etaMs = 10'000;     // this stage
+        r.progress.jobEtaMs = 600'000; // the whole transfer
+        pages::TransferRow row;
+        row.setRecord(r);
+        QVERIFY2(row.statsText().contains(formatTimeLeft(600'000)), qPrintable(row.statsText()));
+        QVERIFY2(!row.statsText().contains(formatTimeLeft(10'000)), qPrintable(row.statsText()));
+        // Not known yet: nothing rather than the stage's.
+        r.progress.jobEtaMs = -1;
+        row.setRecord(r);
+        QVERIFY2(!row.statsText().contains(formatTimeLeft(10'000)), qPrintable(row.statsText()));
     }
 
     // Two threads logging at once can deliver their records in either order; none is lost.

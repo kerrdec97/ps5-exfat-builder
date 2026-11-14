@@ -1,10 +1,13 @@
 // Queue jobs of the PFS engine (native Lazy_MkPFS port, GPL-3.0-or-later).
 //
-// Safety rules (audit C1/H2/H6/M1/M2): a build is written to <output>.part and
+// Safety rules (audit C1/H2/H6/M1/M2): a build is written to <output>.fw.part and
 // verified before it gets its final name; any engine error or verification
 // failure fails the job and removes the partial image; an existing output is
 // only replaced when the job asks for it (and is restored if the rename
 // fails); the source image is deleted only after full verification passed.
+// A cancel during verification saves the finished image as with verification
+// turned off (not verified), and a finished image that cannot take its name
+// is kept next to it as "<name> (new).<ext>".
 
 #include "engines/pfs/PfsJobs.h"
 #include "core/ArchiveSource.h"
@@ -121,6 +124,11 @@ QStringList PfsBuildJob::phases() const
     return {QStringLiteral("Scanning"), QStringLiteral("Compressing and writing"), QStringLiteral("Verifying")};
 }
 
+QList<double> PfsBuildJob::phaseWeights(const SettingsValues& settings) const
+{
+    return verifyDepthFrom(settings) ? phaseWeights() : QList<double>{0.05, 0.95, 0};
+}
+
 OutputFormat PfsBuildJob::format() const
 {
     const QString f = str(m_params, "format").toLower();
@@ -190,9 +198,10 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
         FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, freeSpaceMarginFrom(ctx.settings)));
         ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
         FW_TRY(validate(ctx.settings));
-        // Unpacking reports as a phase of its own, which replaced the job's.
+        // The unpack was a step of the first stage, which goes on (the stages
+        // and their weights are declared again, as they were).
         if (ctx.progress)
-            ctx.progress->setPhases(phases(), phaseWeights());
+            ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
     }
     ProgressReporter* pr = ctx.progress;
     const qint64 ts = m_params.value(QStringLiteral("timestamp")).toInteger(0);
@@ -232,6 +241,8 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
             ctx.log.info(QStringLiteral("Kept %1 empty folder(s) with .pfskeep markers").arg(p.emptyFolderMarkers));
         if (const QString line = amprActionLogLine(p.amprAction); !line.isEmpty())
             ctx.log.info(line);
+        if (const QString line = amprLeftOutLogLine(p.amprLeftOut); !line.isEmpty())
+            ctx.log.warn(line);
     } else {
         in.file = m_source;
         in.fileName = innerName().toLatin1();
@@ -244,6 +255,9 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
     if (!QDir().mkpath(outDir))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(outDir)));
     FW_TRY_ASSIGN(const qint64 worstCase, estimateImageSize(in, fmt, opts));
+    // Made before the free-space check: it removes what an interrupted build
+    // of this image left, whose space the check must count as free.
+    PartFile part(m_output);
     FW_TRY(ensureFreeSpace(outDir, worstCase, freeSpaceMarginFrom(ctx.settings)));
 
     // ---- Compressing and writing ----
@@ -256,12 +270,12 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
                       .arg(opts.layout.blockSize)
                       .arg(opts.layout.caseInsensitive)
                       .arg(now));
-    PartFile part(m_output);
     BuildHooks hooks;
     if (pr) {
         hooks.advance = [pr](qint64 n) { pr->advance(n); };
         hooks.item = [pr](const QString& s) { pr->setCurrentItem(s); };
     }
+    // writeImage() flushes the image to the drive before it closes it.
     FW_TRY_ASSIGN(const BuildStats st, writeImage(in, fmt, opts, part.partPath(), ctx.token, hooks, ctx.log));
     ctx.log.info(QStringLiteral("Image written: %1 in %2 s (%3)")
                      .arg(formatBytes(st.imageBytes))
@@ -298,33 +312,50 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
             pr->beginPhase(2, work.ok() ? *work : 0);
         }
         auto vr = verifyImage(part.partPath(), ex, *depth, ctx.token, hooksFor(pr));
-        if (!vr.ok()) {
-            if (vr.error().isCancelled())
-                return vr.takeError();
+        if (!vr.ok() && ctx.token.isShutdown())
+            return vr.takeError(); // the app closes: the image is discarded, the job comes back as interrupted
+        if (!vr.ok() && ctx.token.isCancelled()) {
+            // Cancel while the finished image is verified (GitHub #97): it is
+            // saved as with verification turned off, and not called verified.
+            // Not when the app is closing: the .part goes and an image it was
+            // to replace stays as it is.
+            if (!ctx.token.keepFinishedWork())
+                return Error::cancelled();
+            outcome.verification = Verification::Skipped;
+            outcome.verificationDetail = QStringLiteral("Verification was cancelled, so the image is not verified.");
+            outcome.warnings << outcome.verificationDetail;
+            outcome.details.insert(QStringLiteral("verificationCancelled"), true);
+            ctx.log.warn(outcome.verificationDetail);
+        } else if (!vr.ok()) {
             outcome.verification = Verification::Failed;
             outcome.verificationDetail = vr.error().message;
             ctx.log.error(QStringLiteral("Verification failed: %1").arg(vr.error().toLogString()));
             outcome.summary = QStringLiteral("Verification failed; the image was removed.");
             return outcome; // the .part is removed; nothing keeps the final name
+        } else {
+            for (const QString& w : vr->warnings)
+                ctx.log.warn(w);
+            if (!vr->passed) {
+                outcome.verification = Verification::Failed;
+                outcome.verificationDetail = verifyDetail(*vr);
+                for (const QString& p : vr->problems)
+                    ctx.log.error(p);
+                outcome.summary = QStringLiteral("Verification failed; the image was removed.");
+                return outcome;
+            }
+            outcome.verification = Verification::Passed;
+            outcome.verificationDetail = vr->summary;
+            outcome.details.insert(QStringLiteral("verifiedFiles"), vr->filesChecked);
+            outcome.details.insert(QStringLiteral("paddedFiles"), vr->paddedFiles);
+            ctx.log.info(QStringLiteral("Verified: %1").arg(vr->summary));
         }
-        for (const QString& w : vr->warnings)
-            ctx.log.warn(w);
-        if (!vr->passed) {
-            outcome.verification = Verification::Failed;
-            outcome.verificationDetail = verifyDetail(*vr);
-            for (const QString& p : vr->problems)
-                ctx.log.error(p);
-            outcome.summary = QStringLiteral("Verification failed; the image was removed.");
-            return outcome;
-        }
-        outcome.verification = Verification::Passed;
-        outcome.verificationDetail = vr->summary;
-        outcome.details.insert(QStringLiteral("verifiedFiles"), vr->filesChecked);
-        outcome.details.insert(QStringLiteral("paddedFiles"), vr->paddedFiles);
-        ctx.log.info(QStringLiteral("Verified: %1").arg(vr->summary));
     }
 
-    FW_TRY(part.commit(m_params.value(QStringLiteral("replaceExisting")).toBool()));
+    // A finished image is not thrown away when the file it replaces is in
+    // use: it is kept next to it under a free name, and the error says where.
+    FW_TRY(commitOrKeep(part, m_params.value(QStringLiteral("replaceExisting")).toBool(),
+                        outcome.verification == Verification::Passed ? QStringLiteral("The image was built and verified")
+                                                                     : QStringLiteral("The image was built")));
     outcome.outputs << m_output;
 
     // ---- delete the source image (convert) ----

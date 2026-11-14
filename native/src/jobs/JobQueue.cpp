@@ -28,6 +28,7 @@ struct JobQueue::Entry {
     std::unique_ptr<ProgressReporter> reporter;
     QStringList busy;                  // busyPaths() taken when the job starts
     bool startDespiteHold = false;     // startNow(): may start while the queue is held
+    bool retried = false;              // an Interrupted record that retry() ran again: not saved any more
 };
 
 namespace {
@@ -93,6 +94,7 @@ Result<QString> JobQueue::enqueue(std::unique_ptr<Job> job)
     e->rec.phases = job->phases();
     e->rec.parameters = job->parameters();
     e->rec.overrides = job->settingsOverrides;
+    e->rec.runsWhileHeld = job->runsWhileHeld();
     e->rec.added = QDateTime::currentDateTime();
     e->rec.progress.phase = QStringLiteral("Waiting");
     e->rec.progress.indeterminate = true;
@@ -173,21 +175,32 @@ void JobQueue::resumeJob(const QString& id)
 
 void JobQueue::startNow(const QString& id)
 {
-    auto e = find(id);
-    if (!e)
-        return;
+    startNow(QStringList{id});
+}
+
+void JobQueue::startNow(const QStringList& ids)
+{
     {
         std::lock_guard lock(m_mutex);
-        if (e->rec.state != JobState::Queued)
-            return;
-        e->startDespiteHold = true;
-        e->rec.notBefore = QDateTime();
-        // Ahead of every other waiting job, behind the running and finished ones.
-        auto it = std::find(m_entries.begin(), m_entries.end(), e);
-        if (it != m_entries.end())
+        std::vector<std::shared_ptr<Entry>> moved;
+        for (const QString& id : ids) {
+            auto it = std::find_if(m_entries.begin(), m_entries.end(), [&](const auto& x) { return x->rec.id == id; });
+            if (it == m_entries.end() || (*it)->rec.state != JobState::Queued)
+                continue;
+            auto e = *it;
+            e->startDespiteHold = true;
+            e->rec.notBefore = QDateTime();
+            moved.push_back(e);
             m_entries.erase(it);
+        }
+        if (moved.empty())
+            return;
+        // Ahead of every other waiting job, behind the running and finished
+        // ones, in the order given. All are in place before any of them
+        // starts: started one by one, the first would run at once and the
+        // others be put ahead of each other.
         auto firstQueued = std::find_if(m_entries.begin(), m_entries.end(), [](const auto& x) { return x->rec.state == JobState::Queued; });
-        m_entries.insert(firstQueued, e);
+        m_entries.insert(firstQueued, moved.begin(), moved.end());
     }
     emit orderChanged();
     (void)saveQueue();
@@ -244,12 +257,33 @@ void JobQueue::cancelAll()
 
 Result<QString> JobQueue::retry(const QString& id)
 {
-    auto rec = record(id);
+    auto e = find(id);
+    std::optional<JobRecord> rec;
+    if (e) {
+        std::lock_guard lock(m_mutex);
+        rec = e->rec;
+    }
     if (!rec)
         return Error(ErrorCode::NotFound, QStringLiteral("That job is no longer in the queue."));
     if (!isTerminal(rec->state))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Only finished jobs can be retried."));
-    return enqueue(rec->kind, rec->parameters, rec->overrides);
+    // An interrupted job from an earlier session is kept in queue.json until
+    // it is dealt with: once retried, it is not restored again at the next
+    // start (the retry is the job now). The row stays for this session.
+    const bool interrupted = rec->state == JobState::Interrupted;
+    if (interrupted) {
+        std::lock_guard lock(m_mutex);
+        e->retried = true;
+    }
+    auto again = enqueue(rec->kind, rec->parameters, rec->overrides); // saves the queue
+    if (!again.ok() && interrupted) {
+        {
+            std::lock_guard lock(m_mutex);
+            e->retried = false;
+        }
+        (void)saveQueue();
+    }
+    return again;
 }
 
 bool JobQueue::remove(const QString& id)
@@ -343,6 +377,42 @@ int JobQueue::runningCount() const
     return int(std::count_if(m_entries.begin(), m_entries.end(), [](const auto& e) { return e->rec.isActive(); }));
 }
 
+bool JobQueue::isPathInUse(const QString& path) const
+{
+    if (path.isEmpty())
+        return false;
+#ifdef Q_OS_WIN
+    constexpr Qt::CaseSensitivity cs = Qt::CaseInsensitive;
+#else
+    constexpr Qt::CaseSensitivity cs = Qt::CaseSensitive;
+#endif
+    const auto clean = [](const QString& s) { return QDir::cleanPath(QFileInfo(s).absoluteFilePath()); };
+    const QString p = clean(path);
+    std::lock_guard lock(m_mutex);
+    for (const auto& e : m_entries) {
+        if (!e->rec.isActive())
+            continue;
+        // The folder a job saves into (an FPKG or DLC "Save to" folder, an
+        // extract destination) does not make the files already in it the
+        // job's: only the path itself, a folder the job reads, or one holding
+        // what the job uses counts.
+        QStringList outputs;
+        for (const char* k : {"output", "destination"})
+            if (const QString v = e->rec.parameters.value(QLatin1String(k)).toString(); !v.isEmpty())
+                outputs << clean(v);
+        for (const QString& b : e->busy) {
+            const QString busy = QDir::cleanPath(b);
+            if (!busyPathsOverlap({busy}, {p}))
+                continue;
+            const bool insideBusy = p.size() > busy.size() && p.startsWith(busy, cs)
+                                    && (busy.endsWith(u'/') || p.at(busy.size()) == u'/');
+            if (!insideBusy || !outputs.contains(busy, cs))
+                return true;
+        }
+    }
+    return false;
+}
+
 int JobQueue::pendingCount() const
 {
     std::lock_guard lock(m_mutex);
@@ -429,10 +499,11 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
                 }, Qt::QueuedConnection);
         },
         100);
-    e->reporter->setPhases(e->rec.phases, e->job ? e->job->phaseWeights() : QList<double>{});
+    SettingsValues settings = m_settings.snapshot(e->rec.overrides);
+    // The shares for the settings the job runs with, so they never change under the bar.
+    e->reporter->setPhases(e->rec.phases, e->job ? e->job->phaseWeights(settings) : QList<double>{});
 
     std::unique_ptr<Job> job = std::move(e->job);
-    SettingsValues settings = m_settings.snapshot(e->rec.overrides);
     CancellationToken token = e->cancel.token();
     ProgressReporter* reporter = e->reporter.get();
     const QString title = e->rec.title;
@@ -467,7 +538,10 @@ void JobQueue::startEntry(const std::shared_ptr<Entry>& e)
             } catch (...) {
                 result = Error(ErrorCode::Internal, QStringLiteral("The job stopped because of an internal error."));
             }
-            if (!result.ok() && token.isCancelled() && !result.error().isCancelled())
+            // What goes wrong after a cancel is part of it, except once the job
+            // has kept its finished work (keepFinishedWork()): then an error is
+            // the job's own (the work could not take its name) and says where it is.
+            if (!result.ok() && token.isCancelled() && !token.finishedWorkKept() && !result.error().isCancelled())
                 result = Error::cancelled();
             if (settings.boolean(QStringLiteral("advanced.keepJobTempFolders")))
                 temp.keep();
@@ -573,7 +647,10 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
                 e->rec.state = JobState::Succeeded;
             }
             e->rec.outcome = o;
-            e->rec.progress.overallFraction = 1.0;
+            // 100 % only for a job that succeeded: a failed verification
+            // keeps the bar where the job left it.
+            if (e->rec.state == JobState::Succeeded)
+                e->rec.progress.overallFraction = 1.0;
         } else {
             e->rec.state = result.error().isCancelled() ? JobState::Cancelled : JobState::Failed;
             e->rec.error = result.error();
@@ -609,7 +686,7 @@ Status JobQueue::saveQueue() const
         std::lock_guard lock(m_mutex);
         for (const auto& e : m_entries) {
             // Interrupted records stay until the user retries or removes them.
-            if (isTerminal(e->rec.state) && e->rec.state != JobState::Interrupted)
+            if (isTerminal(e->rec.state) && (e->rec.state != JobState::Interrupted || e->retried))
                 continue;
             QJsonObject o;
             o.insert(QStringLiteral("kind"), e->rec.kind);
@@ -644,9 +721,9 @@ Status JobQueue::restoreQueue()
     f.close();
     const QJsonValue saved = doc.object().value(QStringLiteral("jobs"));
     if (parseError.error != QJsonParseError::NoError || !doc.isObject() || (!saved.isArray() && !saved.isUndefined())) {
-        // Set aside: the next save would otherwise replace it with an empty queue.
-        const QString aside = m_persistPath + QStringLiteral(".damaged");
-        QFile::remove(aside);
+        // Set aside: the next save would otherwise replace it with an empty
+        // queue. Under a free name: one set aside before is never replaced.
+        const QString aside = uniquePath(m_persistPath + QStringLiteral(".damaged"));
         const bool moved = QFile::rename(m_persistPath, aside);
         return Error(ErrorCode::CorruptData,
                      moved ? QStringLiteral("The saved queue was damaged and has been set aside as %1. The queue starts empty.")
@@ -773,9 +850,11 @@ bool JobQueue::shutdown(int msecs)
     power::setKeepAwake(false);
     {
         std::lock_guard lock(m_mutex);
+        // Also reaches a job that the user cancelled and that is finishing what
+        // it keeps: closing the app keeps nothing unfinished (CancellationSource::shutdown()).
         for (const auto& e : m_entries)
             if (!isTerminal(e->rec.state)) {
-                e->cancel.cancel(QStringLiteral("shutdown"));
+                e->cancel.shutdown();
                 e->cancel.resume();
             }
     }

@@ -19,8 +19,12 @@ class DependencyRow : public QWidget {
     Q_OBJECT
 public:
     explicit DependencyRow(const QString& id, const QString& name, QWidget* parent = nullptr);
-    void setInfo(const DependencyInfo& info);
+    // `pathChosen`: the setting that holds the tool's path (info.settingKey)
+    // has a value. A missing optional tool the user supplies is "Not set"
+    // (neutral) until a path is chosen; a chosen one that is missing is an error.
+    void setInfo(const DependencyInfo& info, bool pathChosen = false);
     void setChecking();
+    Badge* badge() const { return m_badge; } // tests
     QString id() const { return m_id; }
     void setDivider(bool on);
 signals:

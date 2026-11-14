@@ -1,6 +1,7 @@
 #include "app/pages/ps5/ConsoleExtras.h"
 
 #include "app/AppContext.h"
+#include "app/models/JobQueueModel.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Components.h"
 #include "connect/ps5/Module.h"
@@ -11,12 +12,12 @@
 #include "core/Tr.h"
 #include "jobs/JobQueue.h"
 
+#include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QJsonObject>
 #include <QPlainTextEdit>
-#include <QSpinBox>
 #include <QStandardPaths>
 
 namespace fw::pages {
@@ -44,6 +45,7 @@ SmpLogTab::SmpLogTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     h->addWidget(m_badge);
     h->addStretch(1);
     m_refresh = button(FW_TR("Load"), ButtonVariant::Primary, QStringLiteral("refresh"), card);
+    setToolPrimary(m_refresh);
     auto* save = button(FW_TR("Save…"), ButtonVariant::Secondary, QStringLiteral("save"), card);
     h->addWidget(save);
     h->addWidget(m_refresh);
@@ -195,11 +197,15 @@ CrashDumpsTab::CrashDumpsTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     m_folder->setPlaceholder(QDir::toNativeSeparators(QDir(desktop.isEmpty() ? QDir::homePath() : desktop).filePath(QStringLiteral("PS5 Logs"))));
     m_folder->setDialogTitle(FW_TR("Save crash dumps to"));
     gh->addWidget(field(FW_TR("Save to"), m_folder, {}, grid), 1);
-    m_minutes = new QSpinBox(grid);
-    m_minutes->setRange(0, 24 * 60);
-    m_minutes->setSpecialValueText(FW_TR("Until stopped"));
-    m_minutes->setSuffix(QStringLiteral(" min"));
-    m_minutes->setFixedWidth(150);
+    // A choice, drawn as one (with its chevron): a bare number field read as text.
+    m_minutes = dropdown(grid);
+    m_minutes->addItem(FW_TR("Until stopped"), 0);
+    for (const int m : {5, 15, 30})
+        m_minutes->addItem(FW_TR("%1 min").arg(m), m);
+    for (const int h : {1, 2, 4, 8, 24})
+        m_minutes->addItem(FW_TR("%1 h").arg(h), h * 60);
+    m_minutes->setAccessibleName(FW_TR("Watch for"));
+    m_minutes->setMinimumWidth(150);
     gh->addWidget(field(FW_TR("Watch for"), m_minutes, {}, grid));
     card->body()->addWidget(grid);
     auto* row = new QWidget(card);
@@ -209,6 +215,7 @@ CrashDumpsTab::CrashDumpsTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     m_stop = button(FW_TR("Stop"), ButtonVariant::Secondary, QStringLiteral("stop"), row);
     m_stop->hide();
     m_start = button(FW_TR("Start watching"), ButtonVariant::Primary, QStringLiteral("play"), row);
+    setToolPrimary(m_start);
     m_start->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kCrashDumps));
     rh->addWidget(m_stop);
     rh->addWidget(m_start);
@@ -248,7 +255,7 @@ void CrashDumpsTab::start()
         m_status->set(FW_TR("Enter the console's IP address at the top of the page first."), Tone::Warn);
         return;
     }
-    auto id = jobs::submitCrashDumpCapture(m_ctx, ep.host, int(ep.ftpPort), m_minutes->value(), m_folder->path().trimmed());
+    auto id = jobs::submitCrashDumpCapture(m_ctx, ep.host, int(ep.ftpPort), m_minutes->currentData().toInt(), m_folder->path().trimmed());
     if (!id.ok()) {
         m_status->set(id.error().message, Tone::Err);
         return;
@@ -270,7 +277,7 @@ void CrashDumpsTab::onJob(const QString& id)
         if (r->state == JobState::Queued)
             m_status->set(FW_TR("Waiting for the job that is running. Watching starts after it."), Tone::Info);
         else if (!r->progress.currentItem.isEmpty())
-            m_status->set(r->progress.currentItem, Tone::Info);
+            m_status->set(currentItemText(r->progress.currentItem), Tone::Info);
         else
             m_status->set(FW_TR("Watching. Reproduce the crash on the console now."), Tone::Info);
         return;
@@ -328,6 +335,7 @@ InstallTab::InstallTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     rh->addWidget(m_status, 1);
     auto* test = button(FW_TR("Test installer"), ButtonVariant::Secondary, QStringLiteral("plug"), row);
     m_install = button(FW_TR("Install on PS5"), ButtonVariant::Primary, QStringLiteral("upload"), row);
+    setToolPrimary(m_install);
     m_install->setEnabled(false);
     rh->addWidget(test);
     rh->addWidget(m_install);
@@ -405,7 +413,7 @@ void InstallTab::applyDemo()
     m_name->setText(QStringLiteral("UP9000-PPSA01342_00-ASTROBOT00000000.pkg"));
     m_meta->setText(QStringLiteral("8.42 GB · D:\\Packages"));
     m_install->setEnabled(true);
-    m_status->set(QStringLiteral("The installer answers on port 12800. (example)"), Tone::Ok);
+    m_status->set(FW_TR("The installer answers on port %1.").arg(12800), Tone::Ok); // the live check's words
 }
 
 void InstallTab::clearDemo()

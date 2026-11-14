@@ -264,6 +264,11 @@ public:
     QString title() const override { return QStringLiteral("Download version %1").arg(m_rel.version); }
     QStringList phases() const override { return {QStringLiteral("Checksums"), QStringLiteral("Downloading"), QStringLiteral("Verifying")}; }
     QJsonObject parameters() const override { return m_p; }
+    // The update cache folder: two downloads never write it at once.
+    QStringList busyPaths() const override
+    {
+        return {QDir::cleanPath(QDir(Paths::cacheDir()).filePath(QStringLiteral("updates")))};
+    }
 
     Status validate(const SettingsValues&) const override
     {
@@ -304,10 +309,19 @@ public:
         const QString dir = QDir(Paths::cacheDir()).filePath(QStringLiteral("updates"));
         QDir().mkpath(dir);
         const QString finalPath = QDir(dir).filePath(m_rel.assetName);
+        // The folder is the app's own and only one download runs at a time
+        // (busyPaths()), so a partial file in it is what an interrupted
+        // download left (a crash, a power cut, the app being ended): it goes
+        // before PartFile, which would leave a "<name>.part" alone for good.
+        for (const QString& stale : {finalPath + QStringLiteral(".part"), finalPath + QStringLiteral(".fw.part")}) {
+            const QFileInfo fi(stale);
+            if ((fi.isFile() || fi.isSymLink()) && !QFile::remove(stale))
+                ctx.log.warn(QStringLiteral("Could not remove %1, an interrupted update download.").arg(QDir::toNativeSeparators(stale)));
+        }
         FW_TRY(ensureFreeSpace(dir, std::max<qint64>(m_rel.installerSize, kMinInstallerBytes)));
         PartFile part(finalPath);
         QFile out(part.partPath());
-        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly))
             return Error(ErrorCode::IoError, QStringLiteral("Could not save the update."), out.errorString());
         // Never more than the release announces, so a wrong answer cannot fill the drive.
         const qint64 limit = m_rel.installerSize > 0 ? m_rel.installerSize : kMaxDownloadBytes;

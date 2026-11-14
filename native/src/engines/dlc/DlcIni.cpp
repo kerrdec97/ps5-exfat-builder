@@ -847,26 +847,28 @@ Status writeNewFile(const QString& path, const QByteArray& data)
     const QString name = QFileInfo(path).fileName();
     if (path.isEmpty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("No output file name was given."));
+    const auto exists = [&] {
+        return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists. Existing outputs are never overwritten.").arg(name),
+                     path);
+    };
     if (QFileInfo::exists(path))
-        return Error(ErrorCode::AlreadyExists,
-                     QStringLiteral("%1 already exists. Existing outputs are never overwritten.").arg(name), path);
-    QFile f(toLongPath(path));
-    if (!f.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-        if (QFileInfo::exists(path))
-            return Error(ErrorCode::AlreadyExists,
-                         QStringLiteral("%1 already exists. Existing outputs are never overwritten.").arg(name), path);
+        return exists();
+    // Written under a .part name and renamed when complete: a crash or a full
+    // drive never leaves a short file under the output's name.
+    PartFile part(path);
+    QFile f(toLongPath(part.partPath()));
+    if (!f.open(QIODevice::WriteOnly | QIODevice::NewOnly))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(name), f.errorString());
-    }
     Status st = f.write(data) == data.size()
         ? flushToDisk(f, name)
         : Status(Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(name), f.errorString()));
     f.close();
     if (st.ok() && f.error() != QFileDevice::NoError)
         st = Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(name), f.errorString());
-    if (!st.ok()) {
-        QFile::remove(toLongPath(path));
-        return st;
-    }
+    if (!st.ok())
+        return st; // the .part goes with `part`
+    if (Status c = part.commit(false); !c.ok())
+        return c.error().code == ErrorCode::AlreadyExists ? Status(exists()) : c;
     return success();
 }
 

@@ -252,29 +252,38 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
     std::sort(plan.files.begin(), plan.files.end(),
               [](const SourceFile& a, const SourceFile& b) { return lessCaseInsensitive(a.relPath, b.relPath); });
 
+    // The dump's own index: the exact name first (a folder that tells letter
+    // case apart may hold both).
+    auto existing = std::find_if(plan.files.begin(), plan.files.end(),
+                                 [](const SourceFile& f) { return f.relPath == "ampr_emu.index"; });
+    if (existing == plan.files.end())
+        existing = std::find_if(plan.files.begin(), plan.files.end(),
+                                [](const SourceFile& f) { return samePath(f.relPath, "ampr_emu.index"); });
+    const bool hasLibrary = std::any_of(plan.files.begin(), plan.files.end(), [](const SourceFile& f) {
+        return samePath(f.relPath, "fakelib/libSceAmpr.sprx");
+    });
+    bool ownIndexKept = existing != plan.files.end();
     if (options.ampr != AmprMode::Off) {
-        auto existing = std::find_if(plan.files.begin(), plan.files.end(),
-                                     [](const SourceFile& f) { return samePath(f.relPath, "ampr_emu.index"); });
         AmprIndexState state;
-        state.hasLibrary = std::any_of(plan.files.begin(), plan.files.end(), [](const SourceFile& f) {
-            return samePath(f.relPath, "fakelib/libSceAmpr.sprx");
-        });
+        state.hasLibrary = hasLibrary;
         state.hasIndex = existing != plan.files.end();
         state.indexSize = state.hasIndex ? existing->size : 0;
         state.hasAssetPacks = std::any_of(plan.files.begin(), plan.files.end(), [](const SourceFile& f) {
             return !f.relPath.contains('/') && isAmprPackIndexName(QString::fromLatin1(f.relPath));
         });
-        const auto fresh = [&plan] {
-            std::vector<AmprRow> rows;
-            rows.reserve(plan.files.size());
-            for (const SourceFile& f : plan.files) {
-                const QByteArray indexed = QByteArrayLiteral("/app0/") + f.relPath;
-                const QByteArray low = asciiLower(indexed);
-                if (low == "/app0/ampr_emu.index" || low == "/app0/ampr_emu.index.tmp")
-                    continue;
-                rows.push_back({f.size, f.mtime, indexed});
-            }
-            return buildAmprIndex(rows);
+        // The rows the AMPR index tool and the exFAT and FFPKG builds write for
+        // the game's files (amprToolRows): the .pfskeep markers are this
+        // image's, not the game's, and stay out, as the emulator's own files do.
+        QStringList leftOut;
+        const auto fresh = [&plan, &leftOut] {
+            std::vector<AmprFile> files;
+            files.reserve(plan.files.size());
+            for (const SourceFile& f : plan.files)
+                if (!f.generated)
+                    files.push_back({f.relPath, f.size, f.mtime});
+            AmprToolRows rows = amprToolRows(std::move(files));
+            leftOut = rows.skippedRuntime;
+            return buildAmprIndex(rows.rows);
         };
         const auto dumpIndex = [&]() -> Result<QByteArray> {
             QFile f(existing->absPath);
@@ -286,6 +295,7 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
         AmprIndexDecision decision = decideAmprIndex(options.ampr, state, fresh, dumpIndex);
         plan.amprAction = decision.action;
         if (amprActionChangesImage(decision.action)) {
+            ownIndexKept = false;
             if (existing != plan.files.end())
                 plan.files.erase(existing);
             SourceFile idx;
@@ -296,10 +306,18 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
             idx.mtime = options.time;
             plan.files.push_back(std::move(idx));
             plan.amprGenerated = true;
+            plan.amprLeftOut = leftOut;
             std::sort(plan.files.begin(), plan.files.end(), [](const SourceFile& a, const SourceFile& b) {
                 return lessCaseInsensitive(a.relPath, b.relPath);
             });
         }
+    }
+    if (ownIndexKept && hasLibrary && existing->relPath != "ampr_emu.index") {
+        // The dump's own index, kept (with "off" too, as a conversion builds),
+        // under the one name the runtime opens (/app0/ampr_emu.index): a dump
+        // on Windows may spell it in other letters, which an image marked
+        // case-sensitive would not find. Only the letters' case changes.
+        existing->relPath = QByteArrayLiteral("ampr_emu.index"); // the same place in the sorted list
     }
 
     for (const SourceFile& f : plan.files)

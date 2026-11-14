@@ -5,6 +5,7 @@
 #include <QThread>
 
 #include "core/FileUtil.h"
+#include "core/Log.h"
 #include "core/Tr.h"
 
 #include <algorithm>
@@ -510,7 +511,18 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("logs_dir"), keys::kLogFolder);
     // adv_threads is not mapped: it was the robocopy copy-thread count (1 by
     // default), not the CPU threads of performance.workerThreads.
-    s.addLegacyKey(QStringLiteral("shutdown_action"), keys::kAfterQueueAction);
+    // The old app's "after the queue" action is never taken over: an import
+    // must not leave the computer set to sleep or shut down after every run
+    // without the user choosing it here (GitHub #96). It is only logged.
+    s.addLegacyKey(QStringLiteral("shutdown_action"), keys::kAfterQueueAction, [](const QVariant& v) -> std::optional<QVariant> {
+        const QString action = v.toString().trimmed().toLower();
+        if (!action.isEmpty() && action != u"none")
+            Log(QStringLiteral("settings"))
+                .info(QStringLiteral("The old settings chose \"%1\" after the queue; not taken over. Choose it in Settings › General or on "
+                                     "the Queue page if you want it.")
+                          .arg(action));
+        return std::nullopt;
+    });
     s.addLegacyKey(QStringLiteral("shutdown_delay"), keys::kAfterQueueDelay, [](const QVariant& v) -> std::optional<QVariant> {
         return QVariant(std::clamp<qint64>(v.toLongLong(), 10, 3600));
     });
@@ -520,7 +532,8 @@ void registerModule(ModuleContext& ctx)
     s.addLegacyKey(QStringLiteral("adv_skip_verify"), keys::kVerifyAfterBuild, [](const QVariant& v) -> std::optional<QVariant> {
         return QVariant(!v.toBool());
     });
-    s.addLegacyKey(QStringLiteral("adv_delete_source"), keys::kDeleteSource);
+    // adv_delete_source is the exFAT module's (exfat.deleteSourceAfterVerify):
+    // the old switch applied to exFAT builds only.
     // On meant "SHA-256 of every file" (full); off was the legacy size walk,
     // which is not downgraded: the default (full) stays.
     s.addLegacyKey(QStringLiteral("adv_checksum_verify"), keys::kVerifyMode, [](const QVariant& v) -> std::optional<QVariant> {
@@ -528,8 +541,8 @@ void registerModule(ModuleContext& ctx)
             return QVariant(QStringLiteral("full"));
         return std::nullopt;
     });
-    // The old app had one Chinese and one Portuguese; a language that has no
-    // catalogue here (Arabic) becomes English.
+    // The old app had one Chinese and one Portuguese (Brazilian text); a code
+    // that has no catalogue here ("en_us") becomes English.
     s.addLegacyKey(QStringLiteral("language"), keys::kLanguage, [languageCodes](const QVariant& v) -> std::optional<QVariant> {
         QString code = v.toString().trimmed().toLower();
         if (code == u"zh")

@@ -114,9 +114,11 @@ struct SaveResult {
     bool changed = false;
 };
 // Normalises `text` and writes it atomically (UTF-8, LF). An existing file is
-// first copied to autoload.txt.bak (.bak.2, .bak.3, ...: the next number, a
-// backup is never overwritten). Of these backups the newest kBackupsKept stay;
-// older ones are removed after the save. Unchanged contents are not written again.
+// first copied to autoload.txt.fw.bak (.fw.bak.2, .fw.bak.3, ...: the next
+// number, a backup is never overwritten). Of these backups the newest
+// kBackupsKept stay; older ones are removed after the save. Any other file,
+// such as a plain autoload.txt.bak (the user's, or an older version's), is
+// never removed. Unchanged contents are not written again.
 inline constexpr int kBackupsKept = 3;
 Result<SaveResult> save(const QString& folder, const QString& text);
 

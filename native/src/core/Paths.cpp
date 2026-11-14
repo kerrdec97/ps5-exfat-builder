@@ -183,12 +183,14 @@ bool isJobTempName(const QString& name)
 // What the sweep may delete in `root`. The app's own temp root holds nothing
 // but its folders, so the "fw-" prefix is enough there. Any other folder is
 // the user's (they may keep a "fw-11.00" of their own in it): only a job
-// folder that also carries the app's marker file is the app's.
+// folder that also carries the app's marker file is the app's. Either way a
+// folder whose owner still runs stays: another copy of the app (an installed
+// and a portable one can share a temporary folder) may be working in it.
 bool isSweepable(const QFileInfo& fi, bool ownRoot)
 {
-    if (ownRoot)
-        return fi.fileName().startsWith(QStringLiteral("fw-"));
-    return isJobTempName(fi.fileName()) && TempDir::isOwnedFolder(fi.absoluteFilePath());
+    const bool ours = ownRoot ? fi.fileName().startsWith(QStringLiteral("fw-"))
+                              : isJobTempName(fi.fileName()) && TempDir::isOwnedFolder(fi.absoluteFilePath());
+    return ours && !TempDir::isInUse(fi.absoluteFilePath());
 }
 
 QFileInfoList subfolders(const QString& folder)

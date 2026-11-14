@@ -23,8 +23,12 @@ struct PubToolchain {
     QString binDir;       // folder holding the exe
     QString toolkitRoot;  // parent of toolchain\ or bin\, else binDir
     QString profile;      // patch-manifest.json "profile", if any
-    QStringList problems; // the tool cannot be used
-    QStringList warnings; // it may not work
+    QStringList problems; // the tool cannot be used (English: also the build jobs' error text)
+    QStringList warnings; // it may not work (English)
+    // The same texts in the interface language, for the Settings > Tools row.
+    QStringList shownProblems;
+    QStringList shownWarnings;
+    bool runtimeMissing = false; // the VC++ x64 runtime is missing (one of `problems`)
 
     bool ok() const { return !exe.isEmpty() && problems.isEmpty(); }
     QString summary() const;

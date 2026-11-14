@@ -6,6 +6,7 @@
 #include "FpkgTestUtil.h"
 
 #include "core/FsLinks.h"
+#include "core/Tr.h"
 #include "engines/fpkg/AsciiAliases.h"
 #include "engines/fpkg/ContentNaming.h"
 #include "engines/fpkg/DumpRules.h"
@@ -21,8 +22,11 @@
 #include "engines/fpkg/Toolchain.h"
 
 #include <QCryptographicHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QRandomGenerator>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
@@ -385,6 +389,13 @@ private slots:
                                           QStringLiteral("The file/directory must not exist. (eboot.bin.auth_info)")}));
         QCOMPARE(b.expected, 3);
         QVERIFY(sortImgVerifyErrors({}).problems.isEmpty());
+
+        // A package that carries a real SDK version (fix15): the SDK version
+        // messages are problems, the fake-signed executables stay usual.
+        const ImgVerifyFindings c = sortImgVerifyErrors(onlyUsual, false);
+        QCOMPARE(c.problems, (QStringList{QStringLiteral("SDK version must be 6.00.00.00-00.00.00.0.0."),
+                                          QStringLiteral("Required System Software version < Required SDK version.")}));
+        QCOMPARE(c.expected, 3);
     }
 
     // ---- dump rules and scanner -----------------------------------------------------------
@@ -933,6 +944,32 @@ private slots:
             QCOMPARE(ok->stem, kCid + QStringLiteral("-A0102-V0102"));
             QVERIFY(ok->paramBytes.contains("\"titleName\": \"Renamed\""));
             QVERIFY(ok->paramBytes.contains("\"contentVersion\": \"01.002.000\""));
+            const auto titleWarning = [](const BuildPlan& b) {
+                return std::any_of(b.warnings.begin(), b.warnings.end(),
+                                   [](const QString& w) { return w.contains(QStringLiteral("The title was changed")); });
+            };
+            QVERIFY(!titleWarning(*ok)); // no other language
+
+            // Other languages keep their own name (GitHub #94): said once, only for a changed title.
+            QVERIFY(put(e, QStringLiteral("sce_sys/param.json"),
+                        QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"01.000.000\",\"applicationCategoryType\":0,"
+                                       "\"localizedParameters\":{\"defaultLanguage\":\"en-US\",\"en-US\":{\"titleName\":\"Game\"},"
+                                       "\"de-DE\":{\"titleName\":\"Spiel\"},\"fr-FR\":{\"titleName\":\"Renamed\"}}}")
+                            .arg(kCid).toUtf8()));
+            po = {};
+            po.title = QStringLiteral("Renamed");
+            auto renamed = plan(e, {}, po);
+            QVERIFY(renamed.ok());
+            QCOMPARE(renamed->param.path(QStringLiteral("localizedParameters.en-US.titleName")).toString(), QStringLiteral("Renamed"));
+            QCOMPARE(renamed->param.path(QStringLiteral("localizedParameters.de-DE.titleName")).toString(), QStringLiteral("Spiel"));
+            QVERIFY(titleWarning(*renamed));
+            QVERIFY(std::any_of(renamed->warnings.begin(), renamed->warnings.end(), [](const QString& w) {
+                return w.contains(QStringLiteral("en-US")) && w.contains(QStringLiteral("1 other language(s) keep their own name (de-DE)"));
+            }));
+            po.title = QStringLiteral("Game"); // the title the page read: nothing changed, nothing said
+            auto same = plan(e, {}, po);
+            QVERIFY(same.ok());
+            QVERIFY(!titleWarning(*same));
         }
         {
             // DLC emulator off: dlc_emu.ini left out, but an empty addcont0 is still an empty folder.
@@ -952,6 +989,15 @@ private slots:
             QVERIFY(missing.ok());
             QVERIFY(std::any_of(missing->warnings.begin(), missing->warnings.end(),
                                 [](const QString& w) { return w.contains(QStringLiteral("addcont7")); }));
+            // DLC data in the mount folder goes into the package; the log says so (GitHub #95).
+            put(d, QStringLiteral("addcont7/data/dlc.pak"), "dlc");
+            auto withData = plan(d);
+            QVERIFY(withData.ok());
+            QVERIFY(withData->scan.findFile(QStringLiteral("addcont7/data/dlc.pak")));
+            QVERIFY(!withData->emptyDirs.contains(QStringLiteral("addcont7")));
+            QVERIFY(std::any_of(withData->log.begin(), withData->log.end(), [](const QString& l) {
+                return l.contains(QStringLiteral("UP0000-PPSA01234_00-GOLDENDLC0000001 mounts addcont7 (1 file(s)"));
+            }));
         }
         {
             // Size class off and on.
@@ -1244,6 +1290,20 @@ private slots:
         QVERIFY(!readNpbindIds(tampered).ok());
         QVERIFY(!readNpbindIds(makeNpbind({"NOTANID"})).ok());
         QVERIFY(!readNpbindIds(npbind.left(0x200)).ok());
+        // A crafted table (with a valid SHA-1) whose entry count times entry
+        // size overflows 64 bits must be refused, not walked past the file's end.
+        const auto crafted = [&](quint32 entrySize, quint32 count) {
+            QByteArray c = npbind;
+            qToBigEndian<quint32>(entrySize, c.data() + 0x14);
+            qToBigEndian<quint32>(count, c.data() + 0x1C);
+            c.replace(0x80, 4, QByteArray("\x00\x20\x00\x10", 4)); // a TLV that is not an id, 0x10 bytes long
+            c.replace(0x200, 20, QCryptographicHash::hash(c.left(0x200), QCryptographicHash::Sha1));
+            return c;
+        };
+        QVERIFY(!readNpbindIds(crafted(0xFFFFFFFFu, 0xFFFFFFFFu)).ok());
+        QVERIFY(!readNpbindIds(crafted(0x80000000u, 0x80000000u)).ok());
+        QVERIFY(!readNpbindIds(crafted(0x181, 1)).ok());
+        QVERIFY(readNpbindIds(crafted(0x180, 0)).ok()); // an empty list is valid
 
         // In a build plan: a stale digest is corrected, a missing or foreign archive is replaced.
         Env env;
@@ -1318,6 +1378,16 @@ private slots:
         QCOMPARE(l.scenarios->at(0).chunks, (std::vector<int>{0, 1}));
         QVERIFY(playGoPathHash(QStringLiteral("eboot.bin"), seed, key) != playGoPathHash(QStringLiteral("eboot.bin"), seed + 1, key));
         QCOMPARE(playGoPathHash(QStringLiteral("eboot.bin"), kTestPlayGoSeed, kTestPlayGoKey), ps5FlatPathHash(QStringLiteral("eboot.bin")));
+        // Values of the reference toolkit's playgo_path_hash (UTF-8, only a-z upper-cased), also for
+        // non-ASCII paths and the empty path.
+        {
+            const quint64 s = 0x1122334455667788ull, k = 0x99AABBCCDDEEFF00ull;
+            QCOMPARE(playGoPathHash(QStringLiteral("sce_sys/icon0.png"), s, k), 0xa4910ede1a4dd5adull);
+            QCOMPARE(playGoPathHash(QString::fromUtf8("Data/caf\xC3\xA9/\xC3\xA0" "b\xC3\xA7.pak"), s, k), 0xd468033b0041c89full);
+            QCOMPARE(playGoPathHash(QString::fromUtf8("\xE4\xB8\xAD\xE6\x96\x87/\xE3\x83\x87\xE3\x83\xBC\xE3\x82\xBF.bin"), s, k),
+                     0x36134346cee784c7ull);
+            QCOMPARE(playGoPathHash(QString(), s, k), 0xc3dff46cd7de42deull);
+        }
 
         // Swapped files, a chunk that does not exist, unsorted hashes, every file in chunk 0.
         QVERIFY(errorOf(readSourcePlayGoLayout(table, map.hashTable, map.ficm, 3, nullptr)).message.contains(QStringLiteral("misnamed")));
@@ -1420,6 +1490,40 @@ private slots:
                 QCOMPARE(e.kind, EntryKind::GameFile);
         QVERIFY(std::any_of(p->warnings.begin(), p->warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("version trailer")); }));
         QCOMPARE(p->param.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0600000000000000"));
+
+        // "Lower the required firmware" (on by default) never leaves the
+        // required version below sdkVersion: lowered to the firmware of
+        // sdkVersion, then raised to sdkVersion itself.
+        const auto withParam = [&](const QString& versions) {
+            return put(d, QStringLiteral("sce_sys/param.json"),
+                       QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"01.000.000\",\"applicationCategoryType\":0,"
+                                      "%2,\"localizedParameters\":{\"defaultLanguage\":\"en-US\",\"en-US\":{\"titleName\":\"T\"}}}")
+                           .arg(kCid, versions).toUtf8());
+        };
+        const QString req = QStringLiteral("requiredSystemSoftwareVersion");
+        QVERIFY(withParam(QStringLiteral("\"sdkVersion\":\"0x0600000000080001\",\"requiredSystemSoftwareVersion\":\"0x0700000000000000\"")));
+        p = plan();
+        QVERIFY(p.ok());
+        QCOMPARE(p->param.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0600000000080001"));
+        QCOMPARE(p->param.value(req).toString(), QStringLiteral("0x0600000000080001"));
+        QVERIFY(p->paramBytes.contains("\"requiredSystemSoftwareVersion\": \"0x0600000000080001\""));
+        // Off: the required version stays as the dump has it.
+        p = plan({{keys::kLowerRequiredFirmware, false}});
+        QVERIFY(p.ok());
+        QCOMPARE(p->param.value(req).toString(), QStringLiteral("0x0700000000000000"));
+        // sdkVersion 0: the version of eboot.bin, and the required version lowered to it.
+        QVERIFY(withParam(QStringLiteral("\"sdkVersion\":\"0x0000000000000000\",\"requiredSystemSoftwareVersion\":\"0x0700000000000000\"")));
+        p = plan();
+        QVERIFY(p.ok());
+        QCOMPARE(p->param.value(QStringLiteral("sdkVersion")).toString(), QStringLiteral("0x0600000000000000"));
+        QCOMPARE(p->param.value(req).toString(), QStringLiteral("0x0600000000000000"));
+        // Without an executable SDK version the lowering stays as before (nothing to compare with).
+        QVERIFY(put(d, QStringLiteral("eboot.bin"), QByteArray("\x7F" "ELF", 4) + QByteArray(1000, '\0')));
+        QVERIFY(withParam(QStringLiteral("\"sdkVersion\":\"0x0600000000080001\",\"requiredSystemSoftwareVersion\":\"0x0700000000000000\"")));
+        p = plan();
+        QVERIFY(p.ok());
+        QVERIFY(!p->executableSdk);
+        QCOMPARE(p->param.value(req).toString(), QStringLiteral("0x0600000000000000"));
     }
 
     // Writes what this build would hand to Sony's publisher for the folder named by FW_FPKG_COMPARE_DUMP
@@ -1639,7 +1743,8 @@ private slots:
             QStringList notes, kept;
             const Status st = placeOutputs(moves, OutputConflict::Overwrite, notes, &kept, failing(pFull, full));
             QVERIFY(!st.ok());
-            QCOMPARE(errorOf(st).code, ErrorCode::IoError);
+            // Not an I/O error the queue would retry: the new packages are kept.
+            QCOMPARE(errorOf(st).code, ErrorCode::PermissionDenied);
             QCOMPARE(readAll(upd), QByteArray("old update"));
             QCOMPARE(readAll(full), QByteArray("old full"));
             QCOMPARE(kept, (QStringList{keptUpd, keptFull}));
@@ -1968,6 +2073,78 @@ private slots:
         const auto missing = env.deps.probe(QStringLiteral("sony.pubcmd"), env.values({{keys::kPubToolsPath, QDir(root).filePath(QStringLiteral("x"))}}));
         QVERIFY(missing.status != DependencyStatus::Ready);
         QVERIFY(!missing.howToFix.isEmpty());
+    }
+
+    // The Settings > Tools row shows the toolkit's problems and warnings in
+    // the interface language; the build jobs keep the English texts (their
+    // errors are English like every engine message). Whether the VC++ runtime
+    // is missing is a flag, not a word in the text.
+    void pubToolsRowIsInTheInterfaceLanguage()
+    {
+        const QString res = dir(QStringLiteral("tools-language"));
+        const QJsonObject strings{
+            {QStringLiteral("Expected %1, but %2 was chosen."), QStringLiteral("Erwartet: %1, gewählt: %2.")},
+            {QStringLiteral("libScePubTools.dll was not found next to %1; the tool may not start."),
+             QStringLiteral("libScePubTools.dll fehlt neben %1.")},
+            {QStringLiteral("%1 was not found at %2 (%3). Choose your own copy in Settings > Tools."),
+             QStringLiteral("%1 fehlt in %2 (%3).")},
+            {QStringLiteral("Settings > Tools"), QStringLiteral("Einstellungen > Tools")},
+            {QStringLiteral("Choose your own prospero-pub-cmd.exe in Settings > Tools. The app does not include or download Sony "
+                            "software."),
+             QStringLiteral("Wähle deine eigene prospero-pub-cmd.exe in Einstellungen > Tools.")}};
+        QVERIFY(put(res, QStringLiteral("de.json"),
+                    QJsonDocument(QJsonObject{{QStringLiteral("code"), QStringLiteral("de")},
+                                              {QStringLiteral("name"), QStringLiteral("Deutsch")},
+                                              {QStringLiteral("englishName"), QStringLiteral("German")},
+                                              {QStringLiteral("strings"), strings}})
+                        .toJson()));
+        i18n::configure(res, {});
+        const auto english = qScopeGuard([] {
+            i18n::load(QStringLiteral("en"));
+            i18n::configure({}, {});
+        });
+        QVERIFY(i18n::load(QStringLiteral("de")));
+
+        const QString root = dir(QStringLiteral("tk-language"));
+        QVERIFY(put(root, QStringLiteral("toolchain/prospero-pub-cmd.exe"), "exe"));
+        QDir().mkpath(QDir(root).filePath(QStringLiteral("toolchain/ext")));
+        QVERIFY(put(root, QStringLiteral("toolchain/other.exe"), "exe"));
+        Env env;
+        // A warning (no libScePubTools.dll): the tool is ready, the row says why it may not start.
+        const PubToolchain warned = locatePubTools(root, QString());
+        QVERIFY(warned.ok());
+        QVERIFY(!warned.runtimeMissing);
+        QCOMPARE(warned.warnings, QStringList{QStringLiteral("libScePubTools.dll was not found next to prospero-pub-cmd.exe; the tool may not start.")});
+        const auto ready = env.deps.probe(QStringLiteral("sony.pubcmd"), env.values({{keys::kPubToolsPath, root}}));
+        QCOMPARE(ready.status, DependencyStatus::Ready);
+        QCOMPARE(ready.detail, QStringLiteral("libScePubTools.dll fehlt neben prospero-pub-cmd.exe."));
+        // A problem: the job's text stays English, the row is German.
+        const QString other = QDir(root).filePath(QStringLiteral("toolchain/other.exe"));
+        const PubToolchain wrong = locatePubTools(other, QString());
+        QVERIFY(!wrong.ok());
+        QVERIFY(!wrong.runtimeMissing);
+        QCOMPARE(wrong.problems, QStringList{QStringLiteral("Expected prospero-pub-cmd.exe, but other.exe was chosen.")});
+        const auto error = env.deps.probe(QStringLiteral("sony.pubcmd"), env.values({{keys::kPubToolsPath, other}}));
+        QCOMPARE(error.status, DependencyStatus::Error);
+        QCOMPARE(error.detail, QStringLiteral("Erwartet: prospero-pub-cmd.exe, gewählt: other.exe."));
+        QCOMPARE(error.howToFix, QStringLiteral("Wähle deine eigene prospero-pub-cmd.exe in Einstellungen > Tools."));
+        const QString nowhere = QDir(root).filePath(QStringLiteral("nowhere"));
+        const auto missing = env.deps.probe(QStringLiteral("sony.pubcmd"), env.values({{keys::kPubToolsPath, nowhere}}));
+        QCOMPARE(missing.status, DependencyStatus::Missing);
+        // The place is in the interface language too; the job's text keeps it English.
+        const QString nowhereShown = QDir::toNativeSeparators(nowhere);
+        QCOMPARE(missing.detail, QStringLiteral("prospero-pub-cmd.exe fehlt in %1 (Einstellungen > Tools).").arg(nowhereShown));
+        const PubToolchain notThere = locatePubTools(nowhere, QString());
+        QCOMPARE(notThere.problems,
+                 QStringList{QStringLiteral("prospero-pub-cmd.exe was not found at %1 (Settings > Tools). Choose your own copy "
+                                            "in Settings > Tools.")
+                                 .arg(nowhereShown)});
+        // The environment variable is a name, spelt as it is in every language.
+        const PubToolchain fromEnv = locatePubTools(QString(), nowhere);
+        QCOMPARE(fromEnv.shownProblems,
+                 QStringList{QStringLiteral("prospero-pub-cmd.exe fehlt in %1 (%2).").arg(nowhereShown, kPubToolsEnvVar)});
+        QCOMPARE(fromEnv.problems.size(), 1);
+        QVERIFY(fromEnv.problems.first().contains(QStringLiteral("(%1)").arg(kPubToolsEnvVar)));
     }
 
     void sourceStagersAndAppRoot()

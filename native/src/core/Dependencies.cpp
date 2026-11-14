@@ -2,6 +2,7 @@
 
 #include "core/Log.h"
 #include "core/Settings.h"
+#include "core/Tr.h"
 
 #include <exception>
 
@@ -68,7 +69,7 @@ DependencyInfo DependencyRegistry::probe(const QString& id, const SettingsValues
             DependencyInfo info;
             info.id = id;
             info.status = DependencyStatus::Error;
-            info.detail = QStringLiteral("No probe registered.");
+            info.detail = FW_TR("No probe registered.");
             return info;
         }
     }
@@ -80,7 +81,7 @@ DependencyInfo DependencyRegistry::probe(const QString& id, const SettingsValues
         info.detail = QString::fromUtf8(ex.what());
     } catch (...) {
         info.status = DependencyStatus::Error;
-        info.detail = QStringLiteral("The check failed unexpectedly.");
+        info.detail = FW_TR("The check failed unexpectedly.");
     }
     info.id = entry.id;
     if (info.name.isEmpty())
@@ -112,7 +113,7 @@ DependencyInfo DependencyRegistry::last(const QString& id) const
     DependencyInfo info;
     info.id = id;
     info.status = DependencyStatus::Missing;
-    info.detail = QStringLiteral("Not checked yet.");
+    info.detail = FW_TR("Not checked yet.");
     return info;
 }
 

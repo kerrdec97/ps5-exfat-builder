@@ -20,9 +20,11 @@
 #include "ConsoleTestUtil.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QFrame>
 #include <QImage>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -193,7 +195,10 @@ private slots:
                 toast = f;
         QVERIFY(toast);
         QTRY_VERIFY(toast->geometry().right() < m_window->width() / 2);
-        QCOMPARE(toast->x(), int(theme::space::lg));
+        // 16 px clear of the page's scroll bar, which is at the left right to left.
+        QCOMPARE(toast->x(), int(theme::space::lg + theme::size::scrollBar));
+        // Above the status bar, never on it.
+        QVERIFY(toast->geometry().bottom() < m_window->statusBarWidget()->mapTo(m_window.get(), QPoint(0, 0)).y() - theme::space::md);
         m_window->toasts()->clear();
     }
 
@@ -215,6 +220,31 @@ private slots:
             if (w->objectName() == QLatin1String("fwConsole"))
                 ltrLog = w->layoutDirection() == Qt::LeftToRight;
         QVERIFY(ltrLog);
+    }
+
+    // An item view's text is drawn by the stylesheet style, not by the app's
+    // own: "ShadowMount+" is made safe where its items are made, so its sign
+    // stays after the name (the Places list read "+ShadowMount").
+    void ps5ItemsKeepTheSignOfShadowMount()
+    {
+        const QChar lrm(0x200E);
+        m_window->navigate(QStringLiteral("ps5"));
+        auto* places = m_window->findChild<QListWidget*>(QStringLiteral("ps5Places"));
+        QVERIFY(places);
+        QListWidgetItem* smp = nullptr;
+        for (int i = 0; i < places->count(); ++i)
+            if (places->item(i)->data(Qt::UserRole).toString() == QLatin1String("/data/shadowmount"))
+                smp = places->item(i);
+        QVERIFY(smp);
+        QCOMPARE(smp->text(), QStringLiteral("ShadowMount+") + lrm);
+        // The payload targets' list.
+        QString target;
+        for (auto* combo : m_window->page(QStringLiteral("ps5"))->findChildren<QComboBox*>())
+            for (int i = 0; i < combo->count(); ++i)
+                if (combo->itemData(i).toString().startsWith(QLatin1String("shadowmount:")))
+                    target = combo->itemText(i);
+        QVERIFY2(target.contains(QStringLiteral("ShadowMount+") + lrm), qPrintable(target));
+        m_window->navigate(QStringLiteral("home"));
     }
 };
 

@@ -252,7 +252,6 @@ int cmdPack(const std::map<std::wstring, std::wstring>& opt)
 
     std::wstring entryRel = entryArg;
     std::replace(entryRel.begin(), entryRel.end(), L'\\', L'/');
-    const std::string entryU = wideToUtf8(entryRel);
     uint32_t entryIndex = UINT32_MAX;
     for (size_t i = 0; i < files.size(); ++i) {
         if (!isValidRelativePath(files[i].rel))

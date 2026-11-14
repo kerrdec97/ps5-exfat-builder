@@ -2,6 +2,7 @@
 
 #include "core/ProcessRunner.h"
 #include "core/Settings.h"
+#include "core/Tr.h"
 #include "engines/dlc/DlcSettings.h"
 
 #include <QCoreApplication>
@@ -10,6 +11,7 @@
 #include <QRegularExpression>
 
 #include <chrono>
+#include <tuple>
 
 namespace fw::dlc {
 
@@ -25,16 +27,25 @@ QStringList candidates(const QString& raw)
     return {QDir(fi.absoluteFilePath()).filePath(kFpkgCliExeName)};
 }
 
+// `text` (an FW_TR_NOOP literal) filled in with `args`, in English to
+// `problems` (a DLC job's error is English like every engine message) and in
+// the interface language to `shownProblems` (the DLC engine row).
+template <typename... Args>
+void problem(FpkgCli& c, const QString& text, const Args&... args)
+{
+    c.problems << text.arg(args...);
+    c.shownProblems << i18n::translate(text).arg(args...);
+}
+
 FpkgCli validate(const QString& exe)
 {
     FpkgCli c;
     const QFileInfo fi(exe);
     c.exe = fi.absoluteFilePath();
     if (fi.fileName().compare(kFpkgCliExeName, Qt::CaseInsensitive) != 0)
-        c.problems << QStringLiteral("Expected %1, but %2 was chosen.").arg(kFpkgCliExeName, fi.fileName());
+        problem(c, FW_TR_NOOP("Expected %1, but %2 was chosen."), kFpkgCliExeName, fi.fileName());
     else if (fi.size() < 1024 * 1024)
-        c.problems << QStringLiteral("%1 is too small to be the self-contained fpkg-cli program.")
-                          .arg(QDir::toNativeSeparators(c.exe));
+        problem(c, FW_TR_NOOP("%1 is too small to be the self-contained fpkg-cli program."), QDir::toNativeSeparators(c.exe));
     return c;
 }
 
@@ -49,24 +60,29 @@ QString bundledFpkgCliDir()
 
 FpkgCli locateFpkgCli(const QString& configured, const QString& envValue)
 {
-    for (const auto& [base, where] : {std::pair{configured, QStringLiteral("Settings > Tools")},
-                                      std::pair{envValue, kFpkgCliEnvVar}}) {
+    // `where` names the place in English (the job's text), `shownWhere` as the
+    // row shows it: the Settings page in the interface language, the
+    // environment variable as it is spelt.
+    const QString settingsPage = FW_TR_NOOP("Settings > Tools");
+    for (const auto& [base, where, shownWhere] : {std::tuple{configured, settingsPage, i18n::translate(settingsPage)},
+                                                  std::tuple{envValue, kFpkgCliEnvVar, kFpkgCliEnvVar}}) {
         if (base.trimmed().isEmpty())
             continue;
         for (const QString& cand : candidates(base))
             if (QFileInfo(cand).isFile())
                 return validate(cand);
         FpkgCli c;
-        c.problems << QStringLiteral("%1 was not found at %2 (%3). Choose it in Settings > Tools.")
-                          .arg(kFpkgCliExeName, QDir::toNativeSeparators(base.trimmed()), where);
+        const QString text = FW_TR_NOOP("%1 was not found at %2 (%3). Choose your own copy in Settings > Tools.");
+        const QString path = QDir::toNativeSeparators(base.trimmed());
+        c.problems << text.arg(kFpkgCliExeName, path, where);
+        c.shownProblems << i18n::translate(text).arg(kFpkgCliExeName, path, shownWhere);
         return c;
     }
     for (const QString& cand : candidates(bundledFpkgCliDir()))
         if (QFileInfo(cand).isFile())
             return validate(cand);
     FpkgCli c;
-    c.problems << QStringLiteral("The DLC engine (fpkg-cli) is not set. Choose your own %1 in Settings > Tools.")
-                      .arg(kFpkgCliExeName);
+    problem(c, FW_TR_NOOP("The DLC engine (fpkg-cli) is not set. Choose your own %1 in Settings > Tools."), kFpkgCliExeName);
     return c;
 }
 
@@ -173,8 +189,8 @@ DependencyInfo probeFpkgCli(const SettingsValues& settings)
     info.path = cli.exe;
     if (!cli.ok()) {
         info.status = cli.exe.isEmpty() ? DependencyStatus::Missing : DependencyStatus::Error;
-        info.detail = cli.problems.join(u' ');
-        info.howToFix = QStringLiteral("Choose fpkg-cli.exe (from PSVIETHOA FPKG Builder's fpkg-cli folder) in Settings > Tools.");
+        info.detail = cli.shownProblems.join(u' ');
+        info.howToFix = FW_TR("Choose fpkg-cli.exe (from PSVIETHOA FPKG Builder's fpkg-cli folder) in Settings > Tools.");
         return info;
     }
     CancellationSource cancel;
@@ -182,19 +198,19 @@ DependencyInfo probeFpkgCli(const SettingsValues& settings)
     if (!run.ok() || !run->ok()) {
         info.status = DependencyStatus::Error;
         info.detail = run.ok() ? run->failureText() : run.error().message;
-        info.howToFix = QStringLiteral("Check that the whole fpkg-cli folder was copied, then check again.");
+        info.howToFix = FW_TR("Check that the whole fpkg-cli folder was copied, then check again.");
         return info;
     }
     const FpkgCliInfo parsed = parseInfoOutput(run->output);
     info.version = parsed.engineVersion.isEmpty() ? QString() : QStringLiteral("LibProsperoPkg %1").arg(parsed.engineVersion);
     if (parsed.engineVersion.isEmpty() || !parsed.debugKeysReady) {
         info.status = DependencyStatus::Error;
-        info.detail = QStringLiteral("fpkg-cli started but did not report a ready LibProsperoPkg engine and PS5 debug keys.");
-        info.howToFix = QStringLiteral("Use a complete fpkg-cli from PSVIETHOA FPKG Builder 3.0 or later.");
+        info.detail = FW_TR("fpkg-cli started but did not report a ready LibProsperoPkg engine and PS5 debug keys.");
+        info.howToFix = FW_TR("Use a complete fpkg-cli from PSVIETHOA FPKG Builder 3.0 or later.");
         return info;
     }
     info.status = DependencyStatus::Ready;
-    info.detail = QStringLiteral("Found %1 (LibProsperoPkg %2).").arg(QDir::toNativeSeparators(cli.exe), parsed.engineVersion);
+    info.detail = FW_TR("Found %1 (LibProsperoPkg %2).").arg(QDir::toNativeSeparators(cli.exe), parsed.engineVersion);
     return info;
 }
 

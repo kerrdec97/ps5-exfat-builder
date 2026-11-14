@@ -13,6 +13,7 @@
 #include <QLayout>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStyledItemDelegate>
 #include <QToolButton>
 #include <QTimer>
 #include <QWidget>
@@ -20,6 +21,7 @@
 #include <functional>
 
 class QAbstractItemView;
+class QAbstractScrollArea;
 class QBoxLayout;
 class QVBoxLayout;
 class QHBoxLayout;
@@ -64,6 +66,9 @@ public:
     explicit ElideLabel(const QString& text = {}, Qt::TextElideMode mode = Qt::ElideRight, QWidget* parent = nullptr);
     void setFullText(const QString& text);
     QString fullText() const { return m_text; }
+    // More than one line: the text wraps where it may and only the last line
+    // is cut ("…" at its end). Default 1.
+    void setMaxLines(int lines);
     QSize minimumSizeHint() const override;
 
 protected:
@@ -76,6 +81,7 @@ private:
     QString m_autoName; // the accessible name this label gave itself
     QString m_autoTip;  // the tooltip this label gave itself (the whole text while it is cut)
     Qt::TextElideMode m_mode;
+    int m_maxLines = 1;
 };
 
 // A link-styled label ("Use default", "Open queue"). Emits activated().
@@ -176,6 +182,27 @@ int naturalText(const QWidget* w, Qt::Alignment align, const QString& text);
 // column itself stays where the view's direction puts it, and its alignment
 // is mirrored with the view.
 void keepColumnLeftToRight(QAbstractItemView* view, int column);
+// `text` as it is drawn in a right-to-left paragraph: a sign at the end of a
+// Latin name ("ShadowMount+", "C#") would take the direction of the text
+// around it and be drawn in front of the name ("+ShadowMount"); a
+// left-to-right mark after it keeps it with the name. Labels, buttons, item
+// views (ItemDelegate) and the texts this library paints apply it themselves.
+QString bidiSafe(const QString& text);
+// The delegate of the app's item views. The style sheet draws an item's text
+// itself (its ::item rules give items a border) and never through FwStyle,
+// so a right-to-left view's text is prepared here, read as a label reads it:
+// text without right-to-left letters reads left to right as a whole (a
+// sentence keeps its full stop at its end, a path its last backslash, a name
+// its sign), other text gets bidiSafe(). FwStyle gives one to every view
+// that has Qt's own delegate; the app's delegates that draw an item through
+// QStyledItemDelegate derive from it.
+class ItemDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+protected:
+    void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override;
+};
 
 // ---- cover placeholder ----------------------------------------------------------
 // The cover of a game that has no cover art, the same wherever it is listed:
@@ -240,19 +267,27 @@ public:
     void setTone(Tone tone);
     void setIconName(const QString& icon); // overrides the tone's default glyph (empty = none)
     void setCount(bool count);             // 18 px count variant
+    // A text longer than this is cut in its middle, with the whole text as the
+    // tooltip (32 characters; 0: never). The header's status chips say more.
+    void setMaxLength(int chars);
     QString text() const { return m_text; }
     Tone tone() const { return m_tone; }
     QSize sizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
+    void showEvent(QShowEvent* e) override;
 
 private:
+    void updateCut(); // tooltip and mouse events while the text is cut
+    QString shortText() const; // the text cut to the maximum length
     QString m_text;
     Tone m_tone = Tone::Neutral;
     QString m_icon;
     bool m_iconSet = false;
     bool m_count = false;
+    int m_maxChars = 32;
 };
 QString defaultBadgeIcon(Tone tone);
 QColor toneMark(Tone tone);  // glyph / fill colour
@@ -514,9 +549,28 @@ private:
 };
 
 // ---- inputs --------------------------------------------------------------------------
+// `mono`: the value is a path, an ID or an address, set in the mono font and
+// read left to right; a placeholder that is a sentence stays in the body font
+// (one that shows a value, "192.168.1.40", is set like the value).
 QLineEdit* textInput(const QString& placeholder = {}, bool mono = false, QWidget* parent = nullptr);
 void setInputError(QLineEdit* edit, bool error);
+// A unit inside the end of a field, after the value ("GB", "s", "files"), in
+// fg_4: the field keeps its width whatever the unit, so a column of fields
+// ends on one line. "" removes it.
+void setInputSuffix(QLineEdit* edit, const QString& suffix);
+QString inputSuffix(const QLineEdit* edit);
+// What the value of a right-aligned number field means, inside its start in
+// fg_4 while it does not have the focus ("Automatic" beside a 0). "" removes it.
+void setInputNote(QLineEdit* edit, const QString& note);
+QString inputNote(const QLineEdit* edit);
+// A text field that shows only part of its text (it is wider than the field)
+// ends in "…" while it does not have the focus, and its tooltip is the whole
+// text (both are done for every QLineEdit by the application guard).
+bool isTextCut(const QLineEdit* edit);
 QComboBox* dropdown(QWidget* parent = nullptr);
+// Item data role of a dropdown item: the short text the closed dropdown shows
+// when the item's whole text ("Title ID · PPSA01325 …") does not fit.
+inline constexpr int kShortTextRole = Qt::UserRole + 0x5f5;
 
 // A path input with Browse… (§4.7); accepts drops.
 class PathField : public QWidget {
@@ -632,6 +686,12 @@ private:
     QList<QLayoutItem*> m_items;
     int m_h, m_v;
 };
+
+// ---- scroll areas ----------------------------------------------------------------------
+// The vertical scroll bar's room is kept whether there is anything to scroll
+// or not (the handle shows only when there is): what the area holds, and a
+// header aligned with it, do not move sideways when the bar comes and goes.
+void reserveScrollBarSpace(QAbstractScrollArea* area);
 
 // ---- misc --------------------------------------------------------------------------------
 QString thinPercent(double fraction);           // "63 %" with a thin space

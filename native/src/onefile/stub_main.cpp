@@ -8,6 +8,7 @@
 //   FW_ONEFILE_NO_UI=1     no progress window, no message boxes (errors go to stderr)
 //   FW_ONEFILE_DEBUG=1     trace lines on stderr, "fw-onefile: ..."
 //   FW_ONEFILE_NO_MUTEX=1  tests: first starts race for the folder name without the lock
+//   FW_ONEFILE_SHORT_PATHS=1  tests: behave as if Windows' long path support were off
 
 #include "OnefileFormat.h"
 #include "ProgressWindow.h"
@@ -523,7 +524,7 @@ int run(HINSTANCE instance)
                                         std::wstring(kReleases));
     }
     const bool portable = fileExists(join(p.exeDir, L"portable.txt"));
-    const std::vector<std::wstring> roots = runtimeRoots(p, portable);
+    std::vector<std::wstring> roots = runtimeRoots(p, portable, trace);
     trace(L"version " + utf8ToWide(p.version) + L", payload " + utf8ToWide(p.sha.substr(0, 12)) +
           (portable ? L", portable" : L""));
 
@@ -573,6 +574,18 @@ int run(HINSTANCE instance)
         if (e != 0) {
             relay.finish();
             CloseHandle(marker);
+            // A path Windows cannot start a program from (too long without
+            // long path support): the next folder, never the same one again.
+            const auto here = std::find_if(roots.begin(), roots.end(), [&](const std::wstring& r) {
+                return CompareStringOrdinal(r.c_str(), -1, root.c_str(), -1, TRUE) == CSTR_EQUAL;
+            });
+            if ((e == ERROR_FILENAME_EXCED_RANGE || e == ERROR_PATH_NOT_FOUND) && here != roots.end() && roots.size() > 1) {
+                trace(L"cannot start the program from " + root + L" (" + errorText(e) + L"), trying the next folder");
+                discardFolder(root, dir, trace);
+                roots.erase(here);
+                attempt = -1; // the remaining folders, cached copy first
+                continue;
+            }
             if (!fresh && attempt == 0) {
                 trace(L"cached copy does not start (" + errorText(e) + L"), unpacking again");
                 discardFolder(root, dir, trace);

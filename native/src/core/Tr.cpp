@@ -80,12 +80,15 @@ QString shortened(const QString& text)
     return text.size() > 60 ? text.left(59) + QChar(0x2026) : text;
 }
 
+bool hasUnsafeCharacter(const QString& text);
+
 // Language names are shown as plain text in a list: nothing that a widget
-// could take for markup or a mnemonic, and no more than a line.
+// could take for markup or a mnemonic, no more than a line, and nothing that
+// turns the text round (a name could then read as another language's).
 QString cleanName(const QString& raw)
 {
     const QString name = raw.simplified();
-    if (name.isEmpty() || name.size() > 60 || name.contains(u'<') || name.contains(u'&'))
+    if (name.isEmpty() || name.size() > 60 || name.contains(u'<') || name.contains(u'&') || hasUnsafeCharacter(name))
         return {};
     return name;
 }

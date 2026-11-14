@@ -440,6 +440,25 @@ QString freshName(const QString& path)
     return cand;
 }
 
+// Gives a finished, verified package its name in the output folder. Never
+// QFile::rename(), which copies a file it cannot rename straight under the
+// final name: a rename that is refused (a scanner still holds the file) is
+// retried, then the file is copied through "<name>.part" and flushed to the
+// drive. That copy is not cut short by a cancel: the package in the work
+// folder is the only copy of finished work, and the work folder is removed
+// when the job ends. The cancel is seen at the next checkpoint, once the
+// package has its name.
+Status moveFinished(const QString& from, const QString& to, const Log& log)
+{
+    QString why;
+    if (renameWithoutCopying(from, to, &why))
+        return success();
+    log.debug(why);
+    FW_TRY(copyFileStreaming(from, to, CancellationToken(), nullptr, false, true));
+    QFile::remove(from);
+    return success();
+}
+
 QString randomTag(int hexChars)
 {
     QString t;
@@ -610,6 +629,16 @@ Status validateBackportRequest(const BackportUpdateRequest& r, const FpkgSetting
     return success();
 }
 
+FpkgSettings backportBaseSettings(const FpkgSettings& s)
+{
+    FpkgSettings in = innerSettings(s);
+    // Its updates get the generated layout (backportUpdateSettings): the base
+    // gets it too, never the game folder's own PlayGo table, or base and
+    // update would put the game's files in different chunks.
+    in.useSourcePlayGoTable = false;
+    return in;
+}
+
 FpkgSettings backportUpdateSettings(const FpkgSettings& s, int baseChunks, const QStringList& baseLanguages)
 {
     FpkgSettings in = innerSettings(s);
@@ -765,6 +794,34 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
     NewOutputFolder newOutput;
     if (!QFileInfo::exists(output))
         newOutput.dir = output;
+    const auto installNote = [](qsizetype updateCount) {
+        return updateCount > 1 ? QStringLiteral("Install the base package first, then the update for your firmware. The two "
+                                                "outputs are alternative updates: install only one.")
+                               : QStringLiteral("Install the base package first, then this update.");
+    };
+    // A cancel while the publisher checks a finished package keeps it (GitHub
+    // #97) and finishes the job as with verification off: it ends with the
+    // packages verified so far and the kept one, which is not called
+    // verified. Nothing more is built.
+    const auto keptUnverified = [&](const QString& kept, const QString& baseOutput, const QString& version,
+                                    const QString& note) {
+        log.warn(note);
+        JobOutcome o = outcome;
+        o.outputs << updates << kept;
+        o.verification = Verification::Skipped;
+        o.verificationDetail = QStringLiteral("Verification was cancelled, so the package is not verified.");
+        o.details.insert(QStringLiteral("verificationCancelled"), true);
+        o.warnings << note;
+        QStringList names;
+        for (const QString& u : std::as_const(updates))
+            names << QFileInfo(u).fileName();
+        names << QFileInfo(kept).fileName();
+        o.summary = QStringLiteral("%1 · version %2").arg(names.join(QStringLiteral(", ")), version);
+        o.details.insert(QStringLiteral("basePackage"), baseOutput);
+        o.details.insert(QStringLiteral("sdkFix"), sdk.release);
+        pr->flush();
+        return o;
+    };
 
     // ---- backport inputs: unpack ZIPs, unwrap one wrapper folder, check them -------------------
     std::vector<Selected> sel = selections(req);
@@ -857,17 +914,37 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
         BuildRequest br;
         br.source = gameFolder;
         br.output = baseWork;
-        auto built = runBuild(br, innerSettings(s), sub);
+        auto built = runBuild(br, backportBaseSettings(s), sub);
+        sp.reporter()->flush(); // the stage ends where the build ended, not at the throttle's last report
         if (!built.ok())
             return built.takeError();
         const QString partial = built->outputs.value(0);
         for (const QString& w : built->warnings)
-            if (!w.startsWith(QStringLiteral("Install the base")))
-                outcome.warnings << w;
+            if (!w.startsWith(QStringLiteral("Install the base")) && (sdk.recommended || w != sdkVersionZeroWarning()))
+                outcome.warnings << w; // (an older SDK Fix release has its note already)
+        // A cancel while the finished base is checked keeps it (GitHub #97):
+        // it gets a free name in the output folder, as a verified one would,
+        // is not called verified, and nothing is built against it.
+        const auto keepUncheckedBase = [&]() -> Result<JobOutcome> {
+            const QString kept = availableOutputPath(QDir(output).filePath(QFileInfo(partial).fileName()));
+            if (Status mv = moveFinished(partial, kept, log); !mv.ok()) {
+                log.warn(QStringLiteral("Could not keep the finished base package: %1").arg(mv.error().toLogString()));
+                return Error::cancelled();
+            }
+            for (const QFileInfo& d : QDir(baseWork).entryInfoList({QStringLiteral("*-build-logs")}, QDir::Dirs | QDir::NoDotAndDotDot))
+                QDir().rename(d.absoluteFilePath(), freshName(QFileInfo(kept).absoluteDir().filePath(
+                                                        QFileInfo(kept).completeBaseName() + QStringLiteral("-build-logs"))));
+            return keptUnverified(kept, kept, gid->version,
+                                  QStringLiteral("The job was cancelled while the base package was checked, so no update was "
+                                                 "built. The base was kept, not verified: %1").arg(native(kept)));
+        };
         // The Companion's checks of a freshly built base.
         auto bi = inspectPackage(partial, ctx.token);
-        if (!bi.ok())
+        if (!bi.ok()) {
+            if (ctx.token.isCancelled())
+                return keepUncheckedBase();
             return bi.takeError();
+        }
         if (bi->kind != PackageKind::Ps5)
             return Error(ErrorCode::VerificationFailed, QStringLiteral("The publisher did not produce the expected PS5 FIH "
                                                                        "container. No final output was published."));
@@ -877,15 +954,19 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
             return Error(ErrorCode::VerificationFailed,
                          QStringLiteral("The built base version differs from the source. No final output was published."));
         auto rep = verifyPublisherPackage(partial, tc, s, sub);
-        if (!rep.ok())
+        if (!rep.ok()) {
+            if (rep.error().isCancelled())
+                return keepUncheckedBase();
             return rep.takeError();
+        }
         reports.push_back(rep.value());
         baseVerified = true;
         const QString finalBase = availableOutputPath(QDir(output).filePath(QFileInfo(partial).fileName()));
         if (finalBase != QDir(output).filePath(QFileInfo(partial).fileName()))
             log.info(QStringLiteral("Existing output kept; writing the new build to %1").arg(native(finalBase)));
-        if (!QFile::rename(partial, finalBase))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not move the finished base package to %1.").arg(native(finalBase)));
+        if (Status mv = moveFinished(partial, finalBase, log); !mv.ok())
+            return Error(ErrorCode::IoError, QStringLiteral("Could not move the finished base package to %1.").arg(native(finalBase)),
+                         mv.error().toLogString());
         for (const QFileInfo& d : QDir(baseWork).entryInfoList({QStringLiteral("*-build-logs")}, QDir::Dirs | QDir::NoDotAndDotDot))
             QDir().rename(d.absoluteFilePath(), freshName(QFileInfo(finalBase).absoluteDir().filePath(
                                                     QFileInfo(finalBase).completeBaseName() + QStringLiteral("-build-logs"))));
@@ -1088,6 +1169,7 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
         log.info(QStringLiteral("==> Building the delta against the base (compression %1)")
                      .arg(s.compressionLevel ? QString::number(*s.compressionLevel) : QStringLiteral("7, tool default")));
         auto built = runBuild(br, in, sub);
+        sp.reporter()->flush(); // the stage ends where the build ended, not at the throttle's last report
         if (!built.ok()) {
             logRetained();
             return built.takeError();
@@ -1100,18 +1182,67 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
                 delta = o;
         }
         for (const QString& w : built->warnings)
-            if (!w.startsWith(QStringLiteral("Install the base")))
+            if (!w.startsWith(QStringLiteral("Install the base")) && (sdk.recommended || w != sdkVersionZeroWarning()))
                 outcome.warnings << w;
+
+        // Publish: the delta and its NAPS metric under a name nothing else uses.
+        const QString wanted = QDir(output).filePath(backportPackageName(titleId, b.tag));
+        const auto publish = [&]() -> Result<QString> {
+            const QString finalPath = availableOutputPath(wanted);
+            if (finalPath != QFileInfo(wanted).absoluteFilePath())
+                log.info(QStringLiteral("Existing output kept; writing the new backport to %1").arg(native(finalPath)));
+            if (Status mv = moveFinished(delta, finalPath, log); !mv.ok())
+                return Error(ErrorCode::IoError, QStringLiteral("Could not move the finished update to %1.").arg(native(finalPath)),
+                             mv.error().toLogString());
+            const QString metric = delta + QStringLiteral(".naps_metric.json");
+            if (QFileInfo::exists(metric))
+                (void)moveFinished(metric, finalPath + QStringLiteral(".naps_metric.json"), log);
+            // Build logs next to the update.
+            const QDir workDir(work);
+            for (const QFileInfo& d : workDir.entryInfoList({QStringLiteral("*-build-logs")}, QDir::Dirs | QDir::NoDotAndDotDot)) {
+                // An older logs folder of the same name is kept: the new one gets -2, -3 ...
+                const QString logsTo = freshName(QFileInfo(finalPath).absoluteDir().filePath(QFileInfo(finalPath).completeBaseName()
+                                                                                              + QStringLiteral("-build-logs")));
+                QDir().rename(d.absoluteFilePath(), logsTo);
+            }
+            return finalPath;
+        };
+        // A cancel while the finished update is checked keeps it (GitHub #97),
+        // under its name and not called verified; the job ends there with
+        // what it has. Only the remastered image, a by-product of the checks,
+        // goes.
+        const auto keepUncheckedUpdate = [&]() -> Result<JobOutcome> {
+            auto kept = publish();
+            if (!kept.ok()) {
+                log.warn(kept.error().toLogString());
+                logRetained();
+                return Error::cancelled();
+            }
+            JobOutcome o = keptUnverified(kept.value(), basePath, newVersion,
+                                          QStringLiteral("The job was cancelled while the %1 update was checked. It was kept, "
+                                                         "not verified: %2").arg(b.label, native(kept.value())));
+            logRetained();
+            for (size_t later = size_t(&b - sel.data()) + 1; later < sel.size(); ++later)
+                o.warnings << QStringLiteral("Cancelled before the %1 update could be built.").arg(sel[later].label);
+            o.warnings << installNote(updates.size() + 1);
+            o.details.insert(QStringLiteral("version"), newVersion);
+            o.details.insert(QStringLiteral("baseDigest"), bi.digestHex);
+            return o;
+        };
 
         // Delta checks: a LIH container that references the base's digest.
         log.info(QStringLiteral("==> Verifying the delta references the base"));
         auto di = inspectPackage(delta, ctx.token);
         if (!di.ok()) {
+            if (ctx.token.isCancelled())
+                return keepUncheckedUpdate();
             logRetained();
             return di.takeError();
         }
         auto n = countOccurrences(delta, bi.digest, ctx.token);
         if (!n.ok()) {
+            if (ctx.token.isCancelled())
+                return keepUncheckedUpdate();
             logRetained();
             return n.takeError();
         }
@@ -1134,6 +1265,8 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
         }
         auto ri = inspectPackage(remastered, ctx.token);
         if (!ri.ok()) {
+            if (ctx.token.isCancelled())
+                return keepUncheckedUpdate();
             logRetained();
             return ri.takeError();
         }
@@ -1157,31 +1290,19 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
                                 "full remastered image before removing that temporary image."));
         auto rep = verifyPublisherPackage(remastered, tc, s, sub);
         if (!rep.ok()) {
+            if (rep.error().isCancelled())
+                return keepUncheckedUpdate();
             logRetained();
             return rep.takeError();
         }
         reports.push_back(rep.value());
 
-        // Publish: the delta and its NAPS metric under a name nothing else uses.
-        const QString wanted = QDir(output).filePath(backportPackageName(titleId, b.tag));
-        const QString finalPath = availableOutputPath(wanted);
-        if (finalPath != QFileInfo(wanted).absoluteFilePath())
-            log.info(QStringLiteral("Existing output kept; writing the new backport to %1").arg(native(finalPath)));
-        if (!QFile::rename(delta, finalPath)) {
+        auto published = publish();
+        if (!published.ok()) {
             logRetained();
-            return Error(ErrorCode::IoError, QStringLiteral("Could not move the finished update to %1.").arg(native(finalPath)));
+            return published.takeError();
         }
-        const QString metric = delta + QStringLiteral(".naps_metric.json");
-        if (QFileInfo::exists(metric))
-            QFile::rename(metric, finalPath + QStringLiteral(".naps_metric.json"));
-        // Build logs next to the update.
-        const QDir workDir(work);
-        for (const QFileInfo& d : workDir.entryInfoList({QStringLiteral("*-build-logs")}, QDir::Dirs | QDir::NoDotAndDotDot)) {
-            // An older logs folder of the same name is kept: the new one gets -2, -3 ...
-            const QString logsTo = freshName(QFileInfo(finalPath).absoluteDir().filePath(QFileInfo(finalPath).completeBaseName()
-                                                                                          + QStringLiteral("-build-logs")));
-            QDir().rename(d.absoluteFilePath(), logsTo);
-        }
+        const QString finalPath = published.value();
         updates << finalPath;
         log.info(QStringLiteral("Verified %1 update retained: %2").arg(b.label, native(finalPath)));
     }
@@ -1196,10 +1317,7 @@ Result<JobOutcome> runBackportUpdates(const BackportUpdateRequest& req, const Fp
     for (const QString& u : std::as_const(updates))
         names << QFileInfo(u).fileName();
     outcome.summary = QStringLiteral("%1 · version %2").arg(names.join(QStringLiteral(", ")), newVersion);
-    outcome.warnings << (updates.size() > 1
-                             ? QStringLiteral("Install the base package first, then the update for your firmware. The two "
-                                              "outputs are alternative updates: install only one.")
-                             : QStringLiteral("Install the base package first, then this update."));
+    outcome.warnings << installNote(updates.size());
     outcome.details.insert(QStringLiteral("basePackage"), basePath);
     outcome.details.insert(QStringLiteral("version"), newVersion);
     outcome.details.insert(QStringLiteral("baseDigest"), bi.digestHex);

@@ -3,10 +3,10 @@
 // Settings, generated from the SettingsSchema: search (Ctrl+F) in the page
 // header · section list with icons, Import legacy settings… and Reset all…
 // under it · section header ("n changed" badge, Reset section) · cards per
-// group of SettingRows, with the section's advanced settings folded into an
-// "Advanced" Disclosure · dependency rows (Tools and "Tools this section
-// depends on") · "Where the app keeps its files" with the portable-mode row
-// and the temporary-files row (Storage) · legacy import (Advanced).
+// group of SettingRows, with the section's advanced settings (three or more)
+// folded into an "Advanced" Disclosure · dependency rows (Tools and "Tools
+// this section depends on") · "Where the app keeps its files" with the
+// portable-mode row and the temporary-files row (Storage).
 
 #include "app/pages/Page.h"
 #include "app/ui/DependencyRow.h"

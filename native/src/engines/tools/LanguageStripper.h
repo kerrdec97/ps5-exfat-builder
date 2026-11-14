@@ -80,9 +80,13 @@ struct RestoreResult {
 
 // Puts everything from a strip backup back into `gameRoot` (never overwrites).
 // The ZIP must carry a valid manifest and hold nothing but the items the
-// manifest lists; anything else is refused before a file is written.
+// manifest lists; anything else is refused before a file is written, and so
+// is a drive without room for all of it (plus `freeSpaceMarginBytes`).
+// Each file is written under a temporary name and renamed when complete; a
+// file of the game that has that temporary name is never touched.
 Result<RestoreResult> restoreLanguageBackup(const QString& backupZip, const QString& gameRoot,
-                                            const CancellationToken& token, ProgressReporter* progress);
+                                            const CancellationToken& token, ProgressReporter* progress,
+                                            qint64 freeSpaceMarginBytes = 256LL * 1024 * 1024);
 // The same, returning only the number of restored files.
 Result<int> restoreLanguages(const QString& backupZip, const QString& gameRoot, const CancellationToken& token,
                              ProgressReporter* progress);

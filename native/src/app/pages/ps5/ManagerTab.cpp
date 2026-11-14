@@ -110,6 +110,7 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     // ---- where to look -----------------------------------------------------------------
     auto* where = new Card(this);
     m_refresh = button(FW_TR("Refresh"), ButtonVariant::Primary, QStringLiteral("refresh"), where);
+    setToolPrimary(m_refresh); // the tab's one gradient button; the list's and Compare's are plain
     where->setTitle(FW_TR("Games on the console"), m_refresh);
     auto* form = new QWidget(where);
     auto* fh = hbox(form, space::lg);
@@ -160,7 +161,12 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
         keepColumnLeftToRight(m_games, c); // sizes, dates, paths, IDs: left to right in any language
     m_games->setSelectionMode(QAbstractItemView::SingleSelection);
     m_games->horizontalHeader()->setSectionResizeMode(GNameCol, QHeaderView::Stretch);
-    m_games->setColumnWidth(GStatusCol, 150);
+    // Every state whole in every language ("Größe abweichend"): the badge only
+    // cuts itself when the table is too narrow even for that.
+    m_games->setColumnWidth(GStatusCol, badgeColumnWidth(m_games, GStatusCol,
+                                                         {ps5::gameStatusLabel(ps5::GameStatus::OnPs5), ps5::gameStatusLabel(ps5::GameStatus::SizeMismatch),
+                                                          ps5::gameStatusLabel(ps5::GameStatus::LocalOnly), ps5::gameStatusLabel(ps5::GameStatus::Ps5Only),
+                                                          FW_TR("Game folder")}));
     m_games->setColumnWidth(GLocalCol, 100);
     m_games->setColumnWidth(GRemoteCol, 100);
     m_games->setColumnWidth(GPathCol, 330);
@@ -168,7 +174,7 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     list->body()->addWidget(m_games);
     m_gamesEmpty = new EmptyState(QStringLiteral("game"), FW_TR("Game list not loaded"),
                                   FW_TR("Refresh lists the images and game folders in the folders above, with the console's free space."), list);
-    auto* load = m_gamesEmpty->addAction(FW_TR("Refresh"), ButtonVariant::Primary);
+    auto* load = m_gamesEmpty->addAction(FW_TR("Refresh"), ButtonVariant::Secondary);
     list->body()->addWidget(m_gamesEmpty);
     m_gamesFooter = caption({}, list);
     list->footer()->addWidget(m_gamesFooter, 1);
@@ -185,7 +191,7 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
     m_cmpFilter->setCurrentIndex(0);
     ch->addWidget(m_cmpFilter);
     m_cmpCancel = button(FW_TR("Cancel"), ButtonVariant::Secondary, QStringLiteral("stop"), cmp);
-    m_cmpGo = button(FW_TR("Compare"), ButtonVariant::Primary, QStringLiteral("file_search"), cmp);
+    m_cmpGo = button(FW_TR("Compare"), ButtonVariant::Secondary, QStringLiteral("file_search"), cmp);
     ch->addWidget(m_cmpCancel);
     ch->addWidget(m_cmpGo);
     auto* cform = new QWidget(cmp);
@@ -216,7 +222,9 @@ Ps5ManagerTab::Ps5ManagerTab(AppContext& ctx, EndpointFn endpointFn, QWidget* pa
         keepColumnLeftToRight(m_diffs, c); // sizes, dates, paths, IDs: left to right in any language
     m_diffs->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_diffs->horizontalHeader()->setSectionResizeMode(DPathCol, QHeaderView::Stretch);
-    m_diffs->setColumnWidth(DStatusCol, 190);
+    m_diffs->setColumnWidth(DStatusCol, badgeColumnWidth(m_diffs, DStatusCol,
+                                                         {ps5::diffKindLabel(ps5::DiffKind::MissingOnConsole), ps5::diffKindLabel(ps5::DiffKind::OnlyOnConsole),
+                                                          ps5::diffKindLabel(ps5::DiffKind::SizeDiffers)}));
     m_diffs->setColumnWidth(DLocalCol, 110);
     m_diffs->setColumnWidth(DRemoteCol, 110);
     m_diffs->setAccessibleName(FW_TR("Differences"));

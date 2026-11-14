@@ -186,6 +186,7 @@ Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QSt
     log.doc.insert(QStringLiteral("version"), 1);
     log.doc.insert(QStringLiteral("created"), QDateTime::currentDateTime().toString(Qt::ISODate));
     QJsonArray entries;
+    const bool logExisted = QFileInfo::exists(log.path);
 
     qint64 readyCount = 0;
     for (const auto& it : plan)
@@ -214,8 +215,6 @@ Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QSt
             ++out.skipped;
             continue;
         }
-        if (progress)
-            progress->setCurrentItem(it.currentName);
         // Re-check right before touching the disk: never overwrite.
         if (QFileInfo::exists(it.targetPath) || QFileInfo(it.targetPath).isSymLink()) {
             it.status = RenameStatus::TargetExists;
@@ -230,7 +229,32 @@ Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QSt
             step();
             continue;
         }
+        // The undo log learns of the rename before it happens ("pending"): a
+        // crash or a power cut between the two still leaves the old name on
+        // record, and the undo tells from the names that exist whether it
+        // took place.
+        QJsonObject e;
+        e.insert(QStringLiteral("from"), QDir::toNativeSeparators(it.sourcePath));
+        e.insert(QStringLiteral("to"), QDir::toNativeSeparators(it.targetPath));
+        e.insert(QStringLiteral("time"), QDateTime::currentDateTime().toString(Qt::ISODate));
+        e.insert(QStringLiteral("pending"), true);
+        entries.append(e);
+        log.doc.insert(QStringLiteral("entries"), entries);
+        const Status recorded = log.save();
+        if (recorded.ok())
+            logWritten = true;
+        if (progress)
+            progress->setCurrentItem(it.currentName);
         if (!QDir().rename(it.sourcePath, it.targetPath)) {
+            // Nothing happened: the log does not keep it (nor a log of nothing).
+            entries.removeLast();
+            log.doc.insert(QStringLiteral("entries"), entries);
+            if (recorded.ok()) {
+                if (entries.isEmpty() && !logExisted && QFile::remove(log.path))
+                    logWritten = false;
+                else
+                    (void)log.save();
+            }
             it.status = RenameStatus::Failed;
             it.message = !destinationRoot.isEmpty()
                            ? QStringLiteral("The folder could not be moved. The destination must be on the same drive, "
@@ -243,18 +267,15 @@ Result<RenameRunResult> applyDumpRenames(std::vector<RenameItem> plan, const QSt
         }
         it.status = RenameStatus::Renamed;
         ++out.renamed;
-        QJsonObject e;
-        e.insert(QStringLiteral("from"), QDir::toNativeSeparators(it.sourcePath));
-        e.insert(QStringLiteral("to"), QDir::toNativeSeparators(it.targetPath));
-        e.insert(QStringLiteral("time"), QDateTime::currentDateTime().toString(Qt::ISODate));
-        entries.append(e);
+        e.remove(QStringLiteral("pending"));
+        entries.replace(entries.size() - 1, e);
         log.doc.insert(QStringLiteral("entries"), entries);
         if (auto s = log.save(); s.ok()) {
             logWritten = true;
-        } else {
+        } else if (!recorded.ok()) {
             // The rename happened; say clearly that it cannot be undone automatically.
             it.message = QStringLiteral("Renamed, but the undo log could not be written: %1").arg(s.error().message);
-        }
+        } // (else the log holds it as pending, which the undo reverses as well)
         step();
     }
     // Only point at a log that exists (an earlier save may have succeeded).
@@ -292,6 +313,15 @@ Result<RenameRunResult> undoDumpRenames(const QString& undoLogPath, const Cancel
         it.targetPath = QDir::fromNativeSeparators(e.value(QStringLiteral("to")).toString());
         it.currentName = QFileInfo(it.targetPath).fileName();
         it.proposedName = QFileInfo(it.sourcePath).fileName();
+        // Logged before it happened, and the run stopped there (a crash): the
+        // names that exist say whether it took place. One that never did has
+        // nothing to undo.
+        if (e.value(QStringLiteral("pending")).toBool() && !e.value(QStringLiteral("undone")).toBool()
+            && !QFileInfo(it.targetPath).isDir() && QFileInfo(it.sourcePath).isDir()) {
+            if (progress)
+                progress->advance(1);
+            continue;
+        }
         if (out.cancelled && !e.value(QStringLiteral("undone")).toBool()) {
             // Still listed, so the caller can tell which names are not back.
             it.status = RenameStatus::NotSelected;

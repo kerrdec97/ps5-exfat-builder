@@ -194,7 +194,9 @@ Result<std::shared_ptr<Ufs2Reader>> Ufs2Reader::findSuperblock(std::shared_ptr<U
     if (unsupported)
         return *unsupported;
     // Explain the primary location, unless only another location has a signature.
-    Error e = *primaryError;
+    // The first location is always read (the size check above), so this is
+    // set; the fallback only keeps that obvious to a reader and to analysers.
+    Error e = primaryError.value_or(Error(ErrorCode::CorruptData, QStringLiteral("bad superblock (no UFS2 signature).")));
     if (signedError && e.message.contains(QLatin1String("no UFS2 signature")))
         e = *signedError;
     if (e.code == ErrorCode::CorruptData)

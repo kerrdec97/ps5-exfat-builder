@@ -79,9 +79,11 @@ struct BuildStats {
     bool containerCompressed = false;
     int threads = 1;
     double seconds = 0;
-    // Where the writing thread spent its time (compression runs on the pool).
+    // Where the pipeline spent its time (compression runs on the pool). The
+    // input is read by a reader thread when the pool has workers, else by the
+    // writing thread.
     double readSeconds = 0;
-    double waitSeconds = 0;  // waiting for the next block in order to be compressed
+    double waitSeconds = 0;  // the writing thread waiting for the next block in order (read and compressed)
     double writeSeconds = 0;
 };
 

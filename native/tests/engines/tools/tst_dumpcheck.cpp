@@ -304,6 +304,20 @@ private slots:
         QVERIFY(dumpNameProblem(QStringLiteral("readme ")).contains(QStringLiteral("dot or a space")));
         QVERIFY(dumpNameProblem(QStringLiteral("NUL")).contains(QStringLiteral("reserved")));
         QVERIFY(dumpNameProblem(QStringLiteral("com3.txt")).contains(QStringLiteral("reserved")));
+        // Windows reads the superscript digits of Latin-1 as digits in device names.
+        QVERIFY(dumpNameProblem(QStringLiteral("COM¹")).contains(QStringLiteral("reserved")));
+        QVERIFY(dumpNameProblem(QStringLiteral("lpt³.log")).contains(QStringLiteral("reserved")));
+        // The console devices, and a device name with spaces before its extension.
+        QVERIFY(dumpNameProblem(QStringLiteral("CONIN$")).contains(QStringLiteral("reserved")));
+        QVERIFY(dumpNameProblem(QStringLiteral("conout$.txt")).contains(QStringLiteral("reserved")));
+        QVERIFY(dumpNameProblem(QStringLiteral("AUX  .dat")).contains(QStringLiteral("reserved")));
+        // The message's list names the device the user typed.
+        QVERIFY(dumpNameProblem(QStringLiteral("CONIN$")).contains(QStringLiteral("CONIN$,")));
+        QVERIFY(dumpNameProblem(QStringLiteral("conout$.txt")).contains(QStringLiteral("CONOUT$,")));
+        QVERIFY(dumpNameProblem(QStringLiteral("COM¹")).contains(QStringLiteral("COM¹ to COM³")));
+        QVERIFY(dumpNameProblem(QStringLiteral("COM10")).isEmpty());
+        QVERIFY(dumpNameProblem(QStringLiteral("CONIN")).isEmpty());
+        QVERIFY(dumpNameProblem(QStringLiteral("CON$")).isEmpty());
         QVERIFY(dumpNameProblem(QStringLiteral("console.txt")).isEmpty());
         QVERIFY(dumpNameProblem(QStringLiteral("a:b")).contains(QStringLiteral("character")));
         QVERIFY(dumpNameProblem(QStringLiteral("what?.bin")).contains(QStringLiteral("character")));
@@ -319,6 +333,24 @@ private slots:
         QVERIFY(caseCollisions({QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("a1")}).isEmpty());
         // A name listed twice is one name, not a twin of itself.
         QVERIFY(caseCollisions({QStringLiteral("a"), QStringLiteral("a")}).isEmpty());
+        // exFAT compares names one UTF-16 unit at a time through its up-case
+        // table: "ß" stays "ß" there and "ﬁ" stays one letter, so these are
+        // two files each, not twins.
+        QVERIFY(caseCollisions({QStringLiteral("straße.bin"), QStringLiteral("STRASSE.bin")}).isEmpty());
+        QVERIFY(caseCollisions({QStringLiteral("ﬁle.dat"), QStringLiteral("FILE.dat")}).isEmpty());
+        // Letters outside ASCII with a case pair are twins as well.
+        QCOMPARE(caseCollisions({QStringLiteral("Ärger"), QStringLiteral("ärger")}).size(), 1);
+        // Its table, not Unicode case folding: the Kelvin sign (U+212A), the
+        // long s (U+017F) and the micro sign (U+00B5) keep their own names
+        // there, and a letter outside the BMP (Deseret, two UTF-16 units) has
+        // no up-case at all, so each pair is two files.
+        QVERIFY(caseCollisions({QStringLiteral("k.bin"), QString(QChar(0x212A)) + QStringLiteral(".bin")}).isEmpty());
+        QVERIFY(caseCollisions({QStringLiteral("s.bin"), QString(QChar(0x017F)) + QStringLiteral(".bin")}).isEmpty());
+        QVERIFY(caseCollisions({QString(QChar(0x00B5)) + QStringLiteral(".bin"), QString(QChar(0x03BC)) + QStringLiteral(".bin")}).isEmpty());
+        QVERIFY(caseCollisions({QString::fromUcs4(U"\U00010400.bin"), QString::fromUcs4(U"\U00010428.bin")}).isEmpty());
+        // Greek and Cyrillic letters with a case pair are twins.
+        QCOMPARE(caseCollisions({QString(QChar(0x03A3)) + QStringLiteral(".bin"), QString(QChar(0x03C3)) + QStringLiteral(".bin")}).size(), 1);
+        QCOMPARE(caseCollisions({QString(QChar(0x0416)) + QStringLiteral(".bin"), QString(QChar(0x0436)) + QStringLiteral(".bin")}).size(), 1);
     }
 
     void junkAndExecutableNames()
@@ -422,7 +454,12 @@ private slots:
         QCOMPARE(job.value()->title(), QStringLiteral("Check Check Me"));
         QVERIFY(job.value()->validate(SettingsValues(schema, {}, {})).ok());
         qint64 filesSeen = 0;
-        ProgressReporter progress([&](const ProgressSnapshot& p) { filesSeen = std::max(filesSeen, p.filesDone); }, 0);
+        bool countedAsBytes = false;
+        ProgressReporter progress([&](const ProgressSnapshot& p) {
+            filesSeen = std::max(filesSeen, p.filesDone);
+            // The walk lists files: no byte count, so no read speed made from the listing.
+            countedAsBytes = countedAsBytes || p.unitIsBytes || p.done > 0 || !p.indeterminate;
+        }, 0);
         JobContext ctx = context(progress);
         ctx.settings = SettingsValues(schema, {}, {});
         auto o = job.value()->run(ctx);
@@ -432,6 +469,7 @@ private slots:
         QVERIFY(o->warnings.isEmpty());
         QVERIFY(o->outputs.isEmpty());
         QCOMPARE(filesSeen, qint64(7));
+        QVERIFY(!countedAsBytes);
 
         const QJsonObject d = o->details;
         const QJsonObject counts = d.value(QStringLiteral("counts")).toObject();

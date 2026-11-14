@@ -49,16 +49,29 @@ QString hostFileName(const QString& name, bool windowsRules)
     if (!windowsRules)
         return name;
     QString out = sanitizeFileName(name);
-    static const QSet<QString> reserved = {QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"),
-                                           QStringLiteral("NUL"), QStringLiteral("COM1"), QStringLiteral("COM2"),
-                                           QStringLiteral("COM3"), QStringLiteral("COM4"), QStringLiteral("COM5"),
-                                           QStringLiteral("COM6"), QStringLiteral("COM7"), QStringLiteral("COM8"),
-                                           QStringLiteral("COM9"), QStringLiteral("LPT1"), QStringLiteral("LPT2"),
-                                           QStringLiteral("LPT3"), QStringLiteral("LPT4"), QStringLiteral("LPT5"),
-                                           QStringLiteral("LPT6"), QStringLiteral("LPT7"), QStringLiteral("LPT8"),
-                                           QStringLiteral("LPT9")};
-    const QString stem = out.section(u'.', 0, 0).toUpper();
-    if (reserved.contains(stem))
+    // Windows also takes the superscript digits ¹ ² ³ as port numbers, and
+    // CONIN$ / CONOUT$ open the console.
+    static const QSet<QString> reserved = [] {
+        QSet<QString> s = {QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"), QStringLiteral("NUL"),
+                           QStringLiteral("CONIN$"), QStringLiteral("CONOUT$")};
+        static const QString digits = QStringLiteral("123456789¹²³");
+        for (const QChar d : digits) {
+            s.insert(QStringLiteral("COM") + d);
+            s.insert(QStringLiteral("LPT") + d);
+        }
+        return s;
+    }();
+    // The device is found by the name before the first dot, without the
+    // spaces in front of that dot ("CON .txt" is CON on Windows 10). None of
+    // those names is longer than 7 characters, and upper case never makes a
+    // name shorter: a longer one is not looked up (every segment of every
+    // name in an archive's list comes here).
+    QStringView stem(out);
+    if (const qsizetype dot = stem.indexOf(u'.'); dot >= 0)
+        stem = stem.first(dot);
+    while (stem.endsWith(u' '))
+        stem.chop(1);
+    if (stem.size() <= 7 && reserved.contains(stem.toString().toUpper()))
         out.prepend(u'_');
     return out;
 }

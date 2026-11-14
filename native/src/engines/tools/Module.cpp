@@ -21,6 +21,15 @@ QStringList toStringList(const QJsonValue& v)
     return out;
 }
 
+// The app-wide free-space reserve, when the build has that setting.
+qint64 freeSpaceMarginBytes(const SettingsValues& s)
+{
+    static const QString marginKey = QStringLiteral("storage.freeSpaceMarginMiB");
+    if (const QVariantMap all = s.effective(); all.contains(marginKey) && all.value(marginKey).toLongLong() >= 0)
+        return all.value(marginKey).toLongLong() * 1024 * 1024;
+    return StripPlan().freeSpaceMarginBytes;
+}
+
 class ScanJob : public Job {
 public:
     explicit ScanJob(QJsonObject p) : m_p(std::move(p)) {}
@@ -95,10 +104,7 @@ public:
         if (isSameOrInside(plan.backupFolder, plan.gameRoot))
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The backup folder cannot be inside the game folder."));
         QDir().mkpath(plan.backupFolder);
-        // The app-wide free-space reserve, when the build has that setting.
-        static const QString marginKey = QStringLiteral("storage.freeSpaceMarginMiB");
-        if (const QVariantMap all = ctx.settings.effective(); all.contains(marginKey) && all.value(marginKey).toLongLong() >= 0)
-            plan.freeSpaceMarginBytes = all.value(marginKey).toLongLong() * 1024 * 1024;
+        plan.freeSpaceMarginBytes = freeSpaceMarginBytes(ctx.settings);
         auto r = stripLanguages(plan, ctx.token, ctx.progress);
         if (!r.ok())
             return r.takeError();
@@ -147,7 +153,8 @@ public:
     Result<JobOutcome> run(JobContext& ctx) override
     {
         const QString gameRoot = m_p.value(QStringLiteral("gameRoot")).toString();
-        auto r = restoreLanguageBackup(m_p.value(QStringLiteral("backupZip")).toString(), gameRoot, ctx.token, ctx.progress);
+        auto r = restoreLanguageBackup(m_p.value(QStringLiteral("backupZip")).toString(), gameRoot, ctx.token, ctx.progress,
+                                       freeSpaceMarginBytes(ctx.settings));
         if (!r.ok())
             return r.takeError();
         JobOutcome o;

@@ -1,8 +1,10 @@
 #include "core/FileUtil.h"
 
+#include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Tr.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
@@ -20,18 +22,61 @@
 #include <io.h>
 #include <windows.h>
 #else
+#include <signal.h>
 #include <unistd.h>
 #endif
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <optional>
 
 namespace fw {
 
 // ---- formatting --------------------------------------------------------------
+
+namespace {
+// The interface language's way of writing numbers ("441,1 GB" and "18.442" in
+// German), in Latin digits only. English, the pseudo-languages and a language
+// whose numbers are written in other digits (Arabic, Persian, Bengali...) get
+// none: they keep the English form. Sizes and rates have no group separator,
+// as in English ("1023.9 KB"); counts have one ("18,442").
+struct NumberFormat {
+    QLocale plain;   // sizes and rates
+    QLocale grouped; // counts
+};
+
+const NumberFormat* uiNumbers()
+{
+    thread_local QString code = QStringLiteral("en");
+    thread_local std::optional<NumberFormat> format;
+    const QString current = i18n::currentCode();
+    if (current != code) {
+        code = current;
+        format.reset();
+        const QLocale locale(current);
+        if (!current.startsWith(QLatin1String("qps")) && locale.language() != QLocale::C
+            && locale.language() != QLocale::English && locale.zeroDigit() == QLatin1String("0")) {
+            NumberFormat f{locale, locale};
+            f.plain.setNumberOptions(QLocale::OmitGroupSeparator);
+            f.grouped.setNumberOptions(QLocale::DefaultNumberOptions);
+            format = f;
+        }
+    }
+    return format ? &*format : nullptr;
+}
+
+// `v` with `decimals` decimals, no group separator.
+QString localNumber(double v, int decimals)
+{
+    if (const NumberFormat* f = uiNumbers())
+        return f->plain.toString(v, 'f', decimals);
+    return QString::number(v, 'f', decimals);
+}
+} // namespace
 
 QString formatBytes(qint64 bytes)
 {
@@ -52,7 +97,7 @@ QString formatBytes(qint64 bytes)
         v /= 1024.0;
         ++u;
     }
-    return QStringLiteral("%1 %2").arg(QString::number(v, 'f', 1), QLatin1String(units[u]));
+    return QStringLiteral("%1 %2").arg(localNumber(v, 1), QLatin1String(units[u]));
 }
 
 QString formatRate(double bytesPerSec)
@@ -64,11 +109,11 @@ QString formatRate(double bytesPerSec)
     if (kb < 0.5)
         return QStringLiteral("<1 KB/s"); // would print as "0 KB/s"
     if (kb < 1023.5)
-        return QStringLiteral("%1 KB/s").arg(QString::number(kb, 'f', 0));
+        return QStringLiteral("%1 KB/s").arg(localNumber(kb, 0));
     const double mb = kb / 1024.0;
     if (mb < 1023.5)
-        return QStringLiteral("%1 MB/s").arg(QString::number(mb, 'f', 0));
-    return QStringLiteral("%1 GB/s").arg(QString::number(mb / 1024.0, 'f', 1));
+        return QStringLiteral("%1 MB/s").arg(localNumber(mb, 0));
+    return QStringLiteral("%1 GB/s").arg(localNumber(mb / 1024.0, 1));
 }
 
 QString formatTimeLeft(qint64 ms)
@@ -89,8 +134,10 @@ QString formatTimeLeft(qint64 ms)
 
 QString formatCount(qint64 n)
 {
-    QLocale c(QLocale::English, QLocale::UnitedStates);
-    return c.toString(n);
+    if (const NumberFormat* f = uiNumbers())
+        return f->grouped.toString(n);
+    static const QLocale english(QLocale::English, QLocale::UnitedStates);
+    return english.toString(n);
 }
 
 // ---- paths -------------------------------------------------------------------
@@ -126,6 +173,16 @@ bool isSameOrInside(const QString& child, const QString& parent)
 
 QString sanitizeFileName(const QString& name)
 {
+    // Almost every name needs nothing: told by one scan, which costs a small
+    // part of what the expression below does (every segment of every name
+    // in an archive's list comes here).
+    const auto forbidden = [](QChar ch) {
+        const char16_t c = ch.unicode();
+        return c < 0x20 || c == u'<' || c == u'>' || c == u':' || c == u'"' || c == u'/' || c == u'\\' || c == u'|'
+            || c == u'?' || c == u'*';
+    };
+    if (!name.isEmpty() && !name.endsWith(u'.') && !name.endsWith(u' ') && std::none_of(name.cbegin(), name.cend(), forbidden))
+        return name;
     static const QRegularExpression bad(QStringLiteral("[<>:\"/\\\\|?*\\x00-\\x1F]"));
     QString out = name;
     out.replace(bad, QStringLiteral("_"));
@@ -136,7 +193,9 @@ QString sanitizeFileName(const QString& name)
 
 QString uniquePath(const QString& path)
 {
-    const auto taken = [](const QString& p) { return QFileInfo::exists(p) || QFileInfo::exists(p + QStringLiteral(".part")); };
+    const auto taken = [](const QString& p) {
+        return QFileInfo::exists(p) || QFileInfo::exists(p + QStringLiteral(".part")) || QFileInfo::exists(PartFile::partPathFor(p));
+    };
     if (!taken(path))
         return path;
     const QFileInfo fi(path);
@@ -172,7 +231,48 @@ Status writeFileAtomic(const QString& path, const QByteArray& data)
     return success();
 }
 
-PartFile::PartFile(QString finalPath) : m_final(std::move(finalPath)) {}
+namespace {
+bool existsOrLink(const QString& path)
+{
+    const QFileInfo fi(path);
+    return fi.exists() || fi.isSymLink();
+}
+} // namespace
+
+QString PartFile::partPathFor(const QString& finalPath)
+{
+    static const QString suffix = QStringLiteral(".fw.part");
+    // NTFS and exFAT allow 255 characters in a name. A name with no room for
+    // the suffix keeps its start and a digest of the whole name instead: the
+    // working name stays this file's own, so the next run finds its leftover.
+    constexpr qsizetype kMaxName = 255;
+    const qsizetype slash = std::max(finalPath.lastIndexOf(u'/'), finalPath.lastIndexOf(u'\\'));
+    const QStringView name = QStringView(finalPath).sliced(slash + 1);
+    if (name.size() + suffix.size() <= kMaxName)
+        return finalPath + suffix;
+    const QString digest = QString::fromLatin1(QCryptographicHash::hash(name.toUtf8(), QCryptographicHash::Sha1).toHex().left(16));
+    qsizetype keep = kMaxName - suffix.size() - 1 - digest.size();
+    if (name.at(keep - 1).isHighSurrogate())
+        --keep; // never half a character
+    return finalPath.left(slash + 1) + name.first(keep) + u'~' + digest + suffix;
+}
+
+PartFile::PartFile(QString finalPath) : m_final(std::move(finalPath)), m_part(partPathFor(m_final))
+{
+    if (existsOrLink(m_part))
+        QFile::remove(m_part); // ours by its name: left by an interrupted run
+    // Not known to be this app's: left alone (see the header), and named in
+    // the log, so a leftover of an older version can be found and deleted.
+    const QString plain = m_final + QStringLiteral(".part");
+    if (!existsOrLink(plain))
+        return;
+    const QString theirs = QDir::toNativeSeparators(plain);
+    Logger::instance().log(LogLevel::Warning, QStringLiteral("files"),
+                           QStringLiteral("%1 was left as it is: it may be another program's file or a leftover of an "
+                                          "older version (delete it if you do not need it). Writing %2 instead.")
+                               .arg(theirs, QDir::toNativeSeparators(m_part)),
+                           {}, {{QStringLiteral("file"), theirs}});
+}
 
 PartFile::~PartFile()
 {
@@ -185,13 +285,13 @@ namespace {
 // (another program holds the file) by copying the whole file: minutes for an
 // image, not cancellable, and as much disk space again, only to fail anyway.
 // This never copies. A scanner or indexer that still has the file open gets a
-// moment to let go first.
-bool renameWithoutCopy(const QString& from, const QString& to, QString& why)
+// moment to let go first: `attempts` tries, 100 ms apart.
+bool renameWithoutCopy(const QString& from, const QString& to, QString& why, int attempts = 10)
 {
 #ifdef Q_OS_WIN
     const std::wstring source = toLongPath(from).toStdWString(), target = toLongPath(to).toStdWString();
     DWORD err = ERROR_SUCCESS;
-    for (int attempt = 0; attempt < 10; ++attempt) {
+    for (int attempt = 0; attempt < std::max(1, attempts); ++attempt) {
         if (attempt > 0)
             Sleep(100);
         if (MoveFileExW(source.c_str(), target.c_str(), 0)) // no MOVEFILE_COPY_ALLOWED, no replacing
@@ -203,48 +303,134 @@ bool renameWithoutCopy(const QString& from, const QString& to, QString& why)
     why = QStringLiteral("MoveFileEx failed (%1): %2 -> %3").arg(QString::number(err), from, to);
     return false;
 #else
+    Q_UNUSED(attempts);
     if (!QFileInfo::exists(to) && ::rename(QFile::encodeName(from).constData(), QFile::encodeName(to).constData()) == 0)
         return true;
     why = QStringLiteral("rename failed: %1 -> %2").arg(from, to);
     return false;
 #endif
 }
+
+// Renames `from` over the existing file `to` in one step (NTFS and POSIX
+// renames replace atomically): afterwards `to` is the old file or the new one,
+// never missing, whatever happens in between. Never copies; retries like
+// renameWithoutCopy().
+bool replaceWithoutCopy(const QString& from, const QString& to, QString& why)
+{
+#ifdef Q_OS_WIN
+    const std::wstring source = toLongPath(from).toStdWString(), target = toLongPath(to).toStdWString();
+    DWORD err = ERROR_SUCCESS;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        if (attempt > 0)
+            Sleep(100);
+        if (MoveFileExW(source.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return true;
+        err = GetLastError();
+        if (err != ERROR_SHARING_VIOLATION && err != ERROR_ACCESS_DENIED && err != ERROR_LOCK_VIOLATION)
+            break;
+    }
+    why = QStringLiteral("MoveFileEx (replace) failed (%1): %2 -> %3").arg(QString::number(err), from, to);
+    return false;
+#else
+    if (::rename(QFile::encodeName(from).constData(), QFile::encodeName(to).constData()) == 0)
+        return true;
+    why = QStringLiteral("rename failed: %1 -> %2").arg(from, to);
+    return false;
+#endif
+}
+
+// True when another program holds `path` so that it cannot be renamed or
+// deleted (opened without delete sharing). Tells which of the two files of a
+// refused replace is in use.
+bool heldOpen(const QString& path)
+{
+#ifdef Q_OS_WIN
+    const std::wstring p = toLongPath(path).toStdWString();
+    HANDLE h = CreateFileW(p.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return GetLastError() == ERROR_SHARING_VIOLATION;
+    CloseHandle(h);
+    return false;
+#else
+    Q_UNUSED(path);
+    return false;
+#endif
+}
 } // namespace
+
+bool renameWithoutCopying(const QString& from, const QString& to, QString* why, int attempts)
+{
+    QString reason;
+#ifdef Q_OS_WIN
+    // "game.exfat" → "Game.exfat": the name of `to` is the file itself on a
+    // case-insensitive folder. MoveFileEx without MOVEFILE_REPLACE_EXISTING
+    // still refuses a different file of that name (a case-sensitive folder).
+    const QString a = QDir::cleanPath(QFileInfo(from).absoluteFilePath()), b = QDir::cleanPath(QFileInfo(to).absoluteFilePath());
+    const bool caseOnly = a != b && a.compare(b, Qt::CaseInsensitive) == 0;
+#else
+    const bool caseOnly = false;
+#endif
+    const bool ok = (caseOnly || !existsOrLink(to)) && renameWithoutCopy(from, to, reason, attempts);
+    if (why)
+        *why = ok ? QString() : reason.isEmpty() ? QStringLiteral("%1 already exists").arg(to) : reason;
+    return ok;
+}
+
+bool replaceWithoutCopying(const QString& from, const QString& to, QString* why)
+{
+    QString reason;
+    const bool ok = replaceWithoutCopy(from, to, reason);
+    if (why)
+        *why = ok ? QString() : reason;
+    return ok;
+}
+
+Status commitFinishedFile(const QString& partPath, const QString& finalPath, bool replaceExisting)
+{
+    QString why;
+    const QString name = QFileInfo(finalPath).fileName();
+    const auto renameFailed = [&] {
+        return Error(ErrorCode::IoError,
+                     QStringLiteral("Could not give %1 its final name. Close any program that has it or its .part file "
+                                    "open and try again.")
+                         .arg(name),
+                     why);
+    };
+    const auto replaceFailed = [&] {
+        return Error(ErrorCode::PermissionDenied,
+                     QStringLiteral("Could not replace %1. Close any program using it and try again.").arg(name), why);
+    };
+    const QFileInfo existing(finalPath);
+    if (existing.exists() || existing.isSymLink()) {
+        if (!replaceExisting)
+            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists. Choose another name or folder.").arg(name));
+        if (existing.isDir() && !existing.isSymLink())
+            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 is a folder. Choose another name or folder.").arg(name));
+        // A read-only file is not replaced by a rename: the flag goes for
+        // the replace and comes back if it fails. Nothing is set aside under
+        // another name (a power cut in between would leave the name empty).
+        const bool readOnly = !existing.isWritable() && !existing.isSymLink();
+        const QFileDevice::Permissions before = existing.permissions();
+        if (readOnly)
+            QFile::setPermissions(finalPath, before | QFileDevice::WriteOwner | QFileDevice::WriteUser);
+        // One step: a power cut cannot leave the name empty (audit M2).
+        if (!replaceWithoutCopy(partPath, finalPath, why)) {
+            if (readOnly)
+                QFile::setPermissions(finalPath, before);
+            return heldOpen(partPath) && !heldOpen(finalPath) ? renameFailed() : replaceFailed();
+        }
+    } else if (!renameWithoutCopy(partPath, finalPath, why)) {
+        return renameFailed();
+    }
+    return success();
+}
 
 Status PartFile::commit(bool replaceExisting)
 {
     if (m_committed)
         return success();
-    QString why;
-    const auto renameFailed = [&] {
-        return Error(ErrorCode::IoError,
-                     QStringLiteral("Could not give %1 its final name. Close any program that has it or its .part file "
-                                    "open and try again.")
-                         .arg(QFileInfo(m_final).fileName()),
-                     why);
-    };
-    if (QFileInfo::exists(m_final)) {
-        if (!replaceExisting)
-            return Error(ErrorCode::AlreadyExists,
-                         QStringLiteral("%1 already exists. Choose another name or folder.")
-                             .arg(QFileInfo(m_final).fileName()));
-        // Set the old file aside first so a failed rename can be undone (audit M2).
-        // A name nobody uses, so a user's own "<name>.old" is never touched.
-        const QString aside = uniquePath(m_final + QStringLiteral(".fw-old"));
-        if (!renameWithoutCopy(m_final, aside, why))
-            return Error(ErrorCode::PermissionDenied,
-                         QStringLiteral("Could not replace %1. Close any program using it and try again.")
-                             .arg(QFileInfo(m_final).fileName()),
-                         why);
-        if (!renameWithoutCopy(partPath(), m_final, why)) {
-            QString ignored;
-            renameWithoutCopy(aside, m_final, ignored);
-            return renameFailed();
-        }
-        QFile::remove(aside);
-    } else if (!renameWithoutCopy(partPath(), m_final, why)) {
-        return renameFailed();
-    }
+    FW_TRY(commitFinishedFile(partPath(), m_final, replaceExisting));
     m_committed = true;
     return success();
 }
@@ -262,10 +448,15 @@ Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what)
     const QFileInfo fi(part.finalPath());
     const QString suffix = fi.suffix().isEmpty() ? QString() : u'.' + fi.suffix();
     const QString kept = uniquePath(fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(" (new)") + suffix));
-    if (!QFileInfo::exists(part.partPath()) || !QFile::rename(part.partPath(), kept))
+    QString ignored;
+    if (!QFileInfo::exists(part.partPath()) || !renameWithoutCopy(part.partPath(), kept, ignored))
         return st; // nothing could be saved: the plain error stands
     Error e = st.error();
     e.detail = e.detail.isEmpty() ? e.message : e.message + u' ' + e.detail;
+    // The finished work is saved: running the job again would only make
+    // another full copy of it, so the queue must not retry this by itself.
+    if (e.code == ErrorCode::IoError)
+        e.code = ErrorCode::PermissionDenied;
     const QString name = QDir::toNativeSeparators(part.finalPath());
     const QString keptName = QDir::toNativeSeparators(kept);
     if (e.code == ErrorCode::AlreadyExists)
@@ -281,6 +472,64 @@ Status commitOrKeep(PartFile& part, bool replaceExisting, const QString& what)
 
 namespace {
 constexpr char kOwnerMarkerMagic[] = "fw-temp 1\n"; // first line of TempDir's marker file
+
+// When this process started (Windows: its creation time in 100 ns units), or
+// 0 when that cannot be told. With the process id it names the owner of a
+// temporary folder, also after the id has gone to a later process.
+qint64 ownStartTime()
+{
+#ifdef Q_OS_WIN
+    static const qint64 started = [] {
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
+            return qint64(0);
+        return qint64((quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime);
+    }();
+    return started;
+#else
+    return 0;
+#endif
+}
+
+// The marker's text: the magic line, the owner while a job works in the
+// folder ("owner <process id> <start time>"), and a line for whoever finds it.
+QByteArray ownerMarkerText(bool inUse)
+{
+    QByteArray text = kOwnerMarkerMagic;
+    if (inUse)
+        text += "owner " + QByteArray::number(QCoreApplication::applicationPid()) + ' ' + QByteArray::number(ownStartTime()) + '\n';
+    text += "Temporary folder of exFAT Image Builder. It is removed when its job ends.\n";
+    return text;
+}
+
+// True while process `pid` runs and, when `started` is known, is the process
+// that started then rather than a later one that was given the same id.
+bool processStillRuns(qint64 pid, qint64 started)
+{
+    if (pid <= 0)
+        return false;
+#ifdef Q_OS_WIN
+    // Every process of this user, elevated or not, lets itself be opened for
+    // limited queries (Task Manager relies on it). One that refuses is not a
+    // copy of the app the user started: with the start time on record, the id
+    // has gone to another account's process (a service, say), and the folder's
+    // owner has ended. Only without a start time does a refusal keep it.
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(pid));
+    if (!h)
+        return GetLastError() == ERROR_ACCESS_DENIED && started <= 0;
+    DWORD code = 0;
+    const bool running = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
+    FILETIME created{}, exited{}, kernel{}, user{};
+    const bool timed = GetProcessTimes(h, &created, &exited, &kernel, &user);
+    CloseHandle(h);
+    if (!running)
+        return false;
+    return started <= 0 || !timed || qint64((quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime) == started;
+#else
+    Q_UNUSED(started);
+    return ::kill(pid_t(pid), 0) == 0 || errno == EPERM;
+#endif
+}
 } // namespace
 
 TempDir::TempDir(const QString& prefix, const QString& parentDir)
@@ -295,11 +544,12 @@ TempDir::TempDir(const QString& prefix, const QString& parentDir)
         if (!QFileInfo::exists(p) && QDir().mkpath(p)) {
             m_path = p;
             // Without the marker the folder still works; it is then never
-            // swept from a folder the user chose.
+            // swept from a folder the user chose. It names this process: a
+            // sweep (of another copy of the app, too) leaves the folder while
+            // this process runs.
             QFile marker(QDir(p).filePath(ownerMarkerName()));
             if (marker.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-                marker.write(kOwnerMarkerMagic);
-                marker.write("Temporary folder of exFAT Image Builder. It is removed when its job ends.\n");
+                marker.write(ownerMarkerText(true));
                 marker.close();
             }
             return;
@@ -324,10 +574,37 @@ bool TempDir::isOwnedFolder(const QString& dir)
     return marker.open(QIODevice::ReadOnly) && marker.read(sizeof(kOwnerMarkerMagic) - 1) == kOwnerMarkerMagic;
 }
 
+bool TempDir::isInUse(const QString& dir)
+{
+    QFile marker(QDir(dir).filePath(ownerMarkerName()));
+    if (!marker.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray head = marker.read(512);
+    marker.close();
+    if (!head.startsWith(kOwnerMarkerMagic))
+        return false;
+    for (const QByteArray& line : head.split('\n'))
+        if (line.startsWith("owner ")) {
+            const QList<QByteArray> owner = line.mid(6).simplified().split(' ');
+            return processStillRuns(owner.value(0).toLongLong(), owner.value(1).toLongLong());
+        }
+    return false; // no owner: a kept folder, or one of 5.0.2 and earlier
+}
+
 TempDir::~TempDir()
 {
-    if (!m_keep && !m_path.isEmpty())
+    if (m_path.isEmpty())
+        return;
+    if (!m_keep) {
         removeTreeNoFollow(m_path); // never through a junction left inside
+        return;
+    }
+    // Kept: no job works in it any more, so a later Clear may take it.
+    if (isOwnedFolder(m_path)) {
+        QFile marker(QDir(m_path).filePath(ownerMarkerName()));
+        if (marker.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            marker.write(ownerMarkerText(false));
+    }
 }
 
 QString TempDir::filePath(const QString& name) const
@@ -481,7 +758,7 @@ Status copyFileStreaming(const QString& src, const QString& dst, const Cancellat
     QDir().mkpath(QFileInfo(dst).absolutePath());
     PartFile part(dst);
     QFile out(toLongPath(part.partPath()));
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly))
         return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(QFileInfo(dst).fileName()),
                      out.errorString());
     QByteArray buf;

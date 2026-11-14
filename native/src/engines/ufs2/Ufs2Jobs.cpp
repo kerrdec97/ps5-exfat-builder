@@ -51,6 +51,22 @@ QStringList listingOf(const SourceTree& t)
 
 QString seconds(qint64 ms) { return QStringLiteral("%1 s").arg(QString::number(double(ms) / 1000.0, 'f', 1)); }
 
+// The share of the bar of the three phases of a build or an extraction
+// (scanning or reading the image, writing, verifying). Scanning and reading
+// the image's tree are quick; with a zipped dump the first phase also holds
+// the unpacking (a step that takes its first half), about as long as
+// writing. The structure check and a compare of names and sizes read
+// metadata only; a byte-for-byte compare reads everything again; a phase that
+// does not run takes no share, so the bar does not stop short of the end.
+QList<double> threePhaseWeights(bool zip, bool check, bool fullCompare)
+{
+    QList<double> w = zip ? QList<double>{0.3, 0.45, 0.25} : QList<double>{0.05, 0.6, 0.35};
+    const double last = !check ? 0.0 : fullCompare ? w[2] : 0.05;
+    w[1] += w[2] - last;
+    w[2] = last;
+    return w;
+}
+
 QJsonObject geometryJson(const PlanSummary& s)
 {
     const Geometry& g = s.geometry;
@@ -79,23 +95,56 @@ void logProblems(const Log& log, const QStringList& items, const QString& what)
         log.warn(QStringLiteral("%1: %2 more").arg(what).arg(items.size() - 20));
 }
 
-// Opens `imagePath`, runs the structure check and, when `compare`, compares it
-// with `tree`. Damage is a failed verification, not a job error.
-Result<VerifyResult> verifyImage(const QString& imagePath, const SourceTree& tree, bool compare, CompareDepth depth,
-                                 JobContext& ctx, int checkPhase, int comparePhase)
+// Opens `imagePath`, or says why it is no image (`failed`). Damage is a failed
+// verification, not a job error.
+Result<std::shared_ptr<Ufs2Reader>> openForVerify(const QString& imagePath, VerifyResult& failed)
+{
+    auto opened = Ufs2Reader::open(imagePath);
+    if (opened.ok() || opened.error().code != ErrorCode::CorruptData)
+        return opened;
+    failed.verification = Verification::Failed;
+    failed.detail = opened.error().message;
+    return std::shared_ptr<Ufs2Reader>();
+}
+
+// Compares the image `reader` reads with `tree` in phase `phase`.
+Result<VerifyResult> compareWithTree(Ufs2Reader& reader, const SourceTree& tree, CompareDepth depth, JobContext& ctx, int phase)
 {
     VerifyResult v;
-    auto opened = Ufs2Reader::open(imagePath);
-    if (!opened.ok()) {
-        if (opened.error().code != ErrorCode::CorruptData)
-            return opened.takeError();
-        v.verification = Verification::Failed;
-        v.detail = opened.error().message;
+    const bool full = depth == CompareDepth::Full;
+    ctx.progress->beginPhase(phase, full ? tree.totalBytes : tree.fileCount, tree.fileCount, full);
+    FW_TRY_ASSIGN(CompareReport cmp, compareImage(reader, tree, depth, ctx.token, ctx.progress, ioBufferBytes(ctx.settings)));
+    if (!full) // the compare counts one unit per file; this only makes sure the stage ends full
+        ctx.progress->setDone(tree.fileCount);
+    logProblems(ctx.log, cmp.missing, QStringLiteral("Missing"));
+    logProblems(ctx.log, cmp.extra, QStringLiteral("Unexpected"));
+    logProblems(ctx.log, cmp.changed, QStringLiteral("Different"));
+    v.verification = cmp.ok() ? Verification::Passed : Verification::Failed;
+    v.detail = cmp.summary(depth);
+    return v;
+}
+
+// Opens `imagePath`, runs the structure check and, when `compare`, compares it
+// with `tree`. Damage is a failed verification, not a job error.
+// `structurePassed` (optional) is set once the structure check has passed.
+Result<VerifyResult> verifyImage(const QString& imagePath, const SourceTree& tree, bool compare, CompareDepth depth,
+                                 JobContext& ctx, int checkPhase, int comparePhase, bool* structurePassed = nullptr)
+{
+    VerifyResult v;
+    FW_TRY_ASSIGN(const std::shared_ptr<Ufs2Reader> reader, openForVerify(imagePath, v));
+    if (!reader)
         return v;
+    const qint64 inodes = std::max<qint64>(0, qint64(reader->sb().inodeCount()) - reader->sb().csNifree);
+    if (checkPhase == comparePhase && compare) {
+        // One stage for both: the check (counted in inodes) is a step that
+        // takes its first half, the compare goes on from there. Counted as
+        // the whole stage, the check would fill it and leave the compare,
+        // the long part, at 99 %.
+        ctx.progress->beginPhase(checkPhase, 0, 0, false);
+        ctx.progress->beginStep(QStringLiteral("Checking structure"), inodes, 0, false);
+    } else {
+        ctx.progress->beginPhase(checkPhase, inodes, 0, false);
     }
-    const std::shared_ptr<Ufs2Reader> reader = opened.value();
-    const qint64 inodes = qint64(reader->sb().inodeCount()) - reader->sb().csNifree;
-    ctx.progress->beginPhase(checkPhase, std::max<qint64>(0, inodes), 0, false);
     FW_TRY_ASSIGN(CheckReport check, checkImage(*reader, ctx.token, ctx.progress));
     if (!check.ok()) {
         logProblems(ctx.log, check.problems, QStringLiteral("Structure"));
@@ -104,19 +153,55 @@ Result<VerifyResult> verifyImage(const QString& imagePath, const SourceTree& tre
         return v;
     }
     ctx.log.info(check.summary());
+    ctx.progress->setDone(inodes); // the inodes in use include the reserved ones, which the check does not visit
+    if (structurePassed)
+        *structurePassed = true;
     if (!compare) {
         v.verification = Verification::Skipped;
         v.detail = QStringLiteral("Structure check passed. Comparing with the source is turned off in the Verification settings.");
         return v;
     }
-    const bool full = depth == CompareDepth::Full;
-    ctx.progress->beginPhase(comparePhase, full ? tree.totalBytes : tree.fileCount, tree.fileCount, full);
-    FW_TRY_ASSIGN(CompareReport cmp, compareImage(*reader, tree, depth, ctx.token, ctx.progress, ioBufferBytes(ctx.settings)));
-    logProblems(ctx.log, cmp.missing, QStringLiteral("Missing"));
-    logProblems(ctx.log, cmp.extra, QStringLiteral("Unexpected"));
-    logProblems(ctx.log, cmp.changed, QStringLiteral("Different"));
-    v.verification = cmp.ok() ? Verification::Passed : Verification::Failed;
-    v.detail = cmp.summary(depth);
+    return compareWithTree(*reader, tree, depth, ctx, comparePhase);
+}
+
+// Cancel while finished work is being verified (GitHub #97): the work is kept
+// exactly as with verification turned off, and the outcome says it was not
+// verified. What runs with verification turned off still has to pass (the
+// structure check; for an edit also the names and sizes of the edited tree):
+// what has not passed yet is finished with a token that the cancel does not
+// stop (it reads only the image's metadata) but closing the app does. A failed
+// check is a failed verification, as always. While the app is closing nothing
+// is kept: the cancel stands.
+Result<VerifyResult> afterCancelledVerification(const QString& imagePath, const SourceTree* edited, bool structurePassed,
+                                                JobContext& ctx, int phase)
+{
+    if (!ctx.token.keepFinishedWork())
+        return Error::cancelled();
+    VerifyResult v;
+    JobContext rest = ctx;
+    rest.token = ctx.token.untilShutdown();
+    if (!structurePassed && edited) {
+        ctx.log.info(QStringLiteral("Verification was cancelled; checking the structure, names and sizes of the edited image before "
+                                    "it is kept."));
+        FW_TRY_ASSIGN(v, verifyImage(imagePath, *edited, true, CompareDepth::Structure, rest, phase, phase));
+    } else if (!structurePassed) {
+        ctx.log.info(QStringLiteral("Verification was cancelled; checking the image's structure before it is kept."));
+        FW_TRY_ASSIGN(v, verifyImage(imagePath, SourceTree(), false, CompareDepth::Structure, rest, phase, phase));
+    } else if (edited) {
+        // The structure check passed before the cancel: the names and sizes are left.
+        ctx.log.info(QStringLiteral("Verification was cancelled; checking the names and sizes of the edited image before it is kept."));
+        FW_TRY_ASSIGN(const std::shared_ptr<Ufs2Reader> reader, openForVerify(imagePath, v));
+        if (reader) {
+            FW_TRY_ASSIGN(v, compareWithTree(*reader, *edited, CompareDepth::Structure, rest, phase));
+        }
+    }
+    if (v.verification == Verification::Failed)
+        return v;
+    v.verification = Verification::Skipped;
+    v.detail = edited ? QStringLiteral("Verification was cancelled, so the edited image is not verified (its structure, names and "
+                                       "sizes were checked).")
+                      : QStringLiteral("Verification was cancelled, so the image is not verified (its structure was checked).");
+    ctx.log.warn(v.detail);
     return v;
 }
 
@@ -135,6 +220,13 @@ public:
     QStringList phases() const override
     {
         return {QStringLiteral("Scanning"), QStringLiteral("Writing image"), QStringLiteral("Verifying")};
+    }
+    QList<double> phaseWeights() const override { return threePhaseWeights(archive::isZipSource(source()), true, true); }
+    // The structure check runs with verification turned off too; only a
+    // byte-for-byte compare takes the verification's full share.
+    QList<double> phaseWeights(const SettingsValues& s) const override
+    {
+        return threePhaseWeights(archive::isZipSource(source()), true, verifyEnabled(s) && verifyDepth(s) == CompareDepth::Full);
     }
     QJsonObject parameters() const override { return m_p; }
 
@@ -162,6 +254,10 @@ public:
     Result<JobOutcome> run(JobContext& ctx) override
     {
         FW_TRY(validate(ctx.settings));
+        // As the queue declared them (a runner that declared none gets them
+        // here), before anything is counted: the unpacking of a zipped dump
+        // is the first step of Scanning.
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         if (archive::isZipSource(source())) {
             const QString zip = source();
             FW_TRY_ASSIGN(m_unpacked, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, marginBytes(ctx.settings)));
@@ -190,6 +286,8 @@ public:
                                      ctx.tempDir));
         if (const QString line = pfs::amprActionLogLine(ampr.action); !line.isEmpty())
             ctx.log.info(line);
+        if (const QString line = pfs::amprLeftOutLogLine(ampr.leftOut); !line.isEmpty())
+            ctx.log.warn(line);
 
         QStringList notes;
         WriterOptions opt;
@@ -217,6 +315,9 @@ public:
             outcome.warnings << w;
         }
         const QString outDir = QFileInfo(out).absolutePath();
+        // Made first: it removes what an interrupted build of this image left,
+        // whose space the check below must count as free.
+        PartFile part(out);
         FW_TRY(ensureFreeSpace(outDir, plan.imageBytes, marginBytes(ctx.settings)));
         if (!QDir().mkpath(outDir))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(native(outDir)));
@@ -225,8 +326,6 @@ public:
                          QStringLiteral("The output drive uses FAT32, which cannot store files of 4 GB or more. "
                                         "Choose a folder on an NTFS or exFAT drive."));
 
-        PartFile part(out);
-        QFile::remove(part.partPath()); // left by an interrupted build of this image
         prog.beginPhase(1, tree.totalBytes, tree.fileCount);
         FW_TRY_ASSIGN(WriteStats ws, writer.write(part.partPath(), ctx.token, ctx.progress));
         ctx.log.info(QStringLiteral("Wrote %1 (%2 of files) in %3 — %4")
@@ -234,10 +333,17 @@ public:
 
         const bool compare = verifyEnabled(ctx.settings);
         const CompareDepth depth = verifyDepth(ctx.settings);
-        FW_TRY_ASSIGN(VerifyResult v, verifyImage(part.partPath(), tree, compare, depth, ctx, 2, 2));
+        bool structurePassed = false;
+        auto checked = verifyImage(part.partPath(), tree, compare, depth, ctx, 2, 2, &structurePassed);
+        const bool cancelled = !checked.ok() && ctx.token.isCancelled() && !ctx.token.isShutdown();
+        if (cancelled)
+            checked = afterCancelledVerification(part.partPath(), nullptr, structurePassed, ctx, 2);
+        FW_TRY_ASSIGN(VerifyResult v, std::move(checked));
         outcome.verification = v.verification;
         outcome.verificationDetail = v.detail;
         outcome.details = geometryJson(plan);
+        if (cancelled)
+            outcome.details.insert(QStringLiteral("verificationCancelled"), true);
         outcome.details.insert(QStringLiteral("dataBytes"), double(ws.dataBytes));
         outcome.details.insert(QStringLiteral("writeMs"), double(ws.elapsedMs));
         outcome.details.insert(QStringLiteral("writeBytesPerSec"), ws.bytesPerSec);
@@ -311,6 +417,15 @@ public:
         return source().isEmpty() ? QStringLiteral("Verify FFPKG") : QStringLiteral("Verify FFPKG against %1").arg(native(source()));
     }
     QStringList phases() const override { return {QStringLiteral("Checking structure"), QStringLiteral("Comparing")}; }
+    QList<double> phaseWeights() const override { return {0.1, 0.9}; }
+    // Without a folder, in structure mode, the check is all there is; a
+    // compare of names and sizes reads metadata, as the check does.
+    QList<double> phaseWeights(const SettingsValues& s) const override
+    {
+        if (verifyDepth(s) == CompareDepth::Full)
+            return phaseWeights();
+        return source().isEmpty() ? QList<double>{1, 0} : QList<double>{1, 1};
+    }
     QJsonObject parameters() const override { return m_p; }
 
     Status validate(const SettingsValues&) const override
@@ -327,6 +442,7 @@ public:
         FW_TRY(validate(ctx.settings));
         JobOutcome outcome;
         const CompareDepth depth = verifyDepth(ctx.settings);
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         if (!source().isEmpty()) {
             ctx.progress->beginPhase(0, 0, 0, false);
             FW_TRY_ASSIGN(SourceTree tree, scanLocalFolder(source(), ctx.token));
@@ -387,6 +503,11 @@ public:
     {
         return {QStringLiteral("Reading image"), QStringLiteral("Extracting"), QStringLiteral("Verifying")};
     }
+    QList<double> phaseWeights() const override { return threePhaseWeights(false, true, true); }
+    QList<double> phaseWeights(const SettingsValues& s) const override
+    {
+        return threePhaseWeights(false, verifyEnabled(s), verifyDepth(s) == CompareDepth::Full);
+    }
     QJsonObject parameters() const override { return m_p; }
 
     Status validate(const SettingsValues&) const override
@@ -408,6 +529,7 @@ public:
         const QString out = output();
         const QString staging = out + QStringLiteral(".part");
         JobOutcome outcome;
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         ctx.progress->beginPhase(0, 0, 0, false);
         FW_TRY_ASSIGN(auto reader, Ufs2Reader::open(image()));
         QStringList skipped;
@@ -465,26 +587,41 @@ public:
             const CompareDepth depth = verifyDepth(ctx.settings);
             const bool full = depth == CompareDepth::Full;
             ctx.progress->beginPhase(2, full ? tree.totalBytes : tree.fileCount, tree.fileCount, full);
-            FW_TRY_ASSIGN(CompareReport cmp, verifyExtracted(tree, ex, depth, ctx.token, ctx.progress, ioBufferBytes(ctx.settings)));
-            outcome.verification = cmp.ok() ? Verification::Passed : Verification::Failed;
-            outcome.verificationDetail = cmp.summary(depth);
-            if (!cmp.ok()) {
-                logProblems(ctx.log, cmp.changed + cmp.missing, QStringLiteral("Extracted"));
-                outcome.summary = QStringLiteral("Not saved: the extracted files did not match the image.");
-                return outcome; // staging removed by `cleanup`
+            auto checked = verifyExtracted(tree, ex, depth, ctx.token, ctx.progress, ioBufferBytes(ctx.settings));
+            if (checked.ok() && !full) // the compare counts one unit per file; this only makes sure the stage ends full
+                ctx.progress->setDone(tree.fileCount);
+            if (!checked.ok() && ctx.token.keepFinishedWork()) {
+                // GitHub #97: the extracted files are kept, as with verification
+                // turned off (not when the app is closing: the cancel then stands).
+                outcome.verification = Verification::Skipped;
+                outcome.verificationDetail = QStringLiteral("Verification was cancelled, so the extracted files are not verified.");
+                outcome.details.insert(QStringLiteral("verificationCancelled"), true);
+                ctx.log.warn(outcome.verificationDetail);
+            } else {
+                FW_TRY_ASSIGN(CompareReport cmp, std::move(checked));
+                outcome.verification = cmp.ok() ? Verification::Passed : Verification::Failed;
+                outcome.verificationDetail = cmp.summary(depth);
+                if (!cmp.ok()) {
+                    logProblems(ctx.log, cmp.changed + cmp.missing, QStringLiteral("Extracted"));
+                    outcome.summary = QStringLiteral("Not saved: the extracted files did not match the image.");
+                    return outcome; // staging removed by `cleanup`
+                }
             }
         } else {
             outcome.verification = Verification::Skipped;
+            outcome.verificationDetail = QStringLiteral("Verification is turned off in Settings.");
         }
         QFile::remove(QDir(staging).filePath(kStagingMarker));
-        if ((QFileInfo(out).isDir() && !QDir().rmdir(out)) || !QDir().rename(staging, out)) {
+        // A folder rename that a scanner briefly refuses is tried again (renameWithoutCopying).
+        if ((QFileInfo(out).isDir() && !QDir().rmdir(out)) || !renameWithoutCopying(staging, out)) {
             // The files are extracted (and verified): they are not deleted
             // because a folder name could not be taken.
             cleanup.armed = false;
             QString kept = uniquePath(out + QStringLiteral(".new"));
-            if (!QDir().rename(staging, kept))
+            if (!renameWithoutCopying(staging, kept))
                 kept = staging;
-            return Error(ErrorCode::IoError,
+            // Not an IoError: a retry would only extract another full copy.
+            return Error(ErrorCode::PermissionDenied,
                          QStringLiteral("The files were extracted%1, but the folder %2 could not be used because it is "
                                         "open in another program. They were saved in %3.")
                              .arg(outcome.verification == Verification::Passed ? QStringLiteral(" and verified") : QString(),
@@ -525,6 +662,20 @@ public:
         return {QStringLiteral("Reading image"), QStringLiteral("Writing image"), QStringLiteral("Verifying"),
                 QStringLiteral("Replacing original")};
     }
+    // Replacing the original is a rename. The new image is always compared
+    // with the edited tree, by name and size at least (then a quick check).
+    QList<double> phaseWeights() const override { return editWeights(true); }
+    QList<double> phaseWeights(const SettingsValues& s) const override { return editWeights(compareDepth(s) == CompareDepth::Full); }
+    static QList<double> editWeights(bool fullCompare)
+    {
+        return fullCompare ? QList<double>{0.05, 0.5, 0.4, 0.05} : QList<double>{0.05, 0.85, 0.05, 0.05};
+    }
+    // The original is about to be replaced, so the new image is always
+    // compared with the edited tree (at least by name and size).
+    static CompareDepth compareDepth(const SettingsValues& s)
+    {
+        return verifyEnabled(s) ? verifyDepth(s) : CompareDepth::Structure;
+    }
     QJsonObject parameters() const override { return m_p; }
 
     Status validate(const SettingsValues& settings) const override
@@ -542,6 +693,8 @@ public:
         const QString img = image();
         JobOutcome outcome;
         PartFile part(img);
+        const CompareDepth depth = compareDepth(ctx.settings);
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         {
             ctx.progress->beginPhase(0, 0, 0, false);
             FW_TRY_ASSIGN(auto reader, Ufs2Reader::open(img));
@@ -587,19 +740,22 @@ public:
                                             "files of 4 GB or more. Move the image to an NTFS or exFAT drive first.")
                                  .arg(formatBytes(plan.imageBytes)));
             FW_TRY(ensureFreeSpace(QFileInfo(img).absolutePath(), plan.imageBytes, marginBytes(ctx.settings)));
-            QFile::remove(part.partPath());
             ctx.progress->beginPhase(1, tree.totalBytes, tree.fileCount);
             FW_TRY_ASSIGN(WriteStats ws, writer.write(part.partPath(), ctx.token, ctx.progress));
             ctx.log.info(QStringLiteral("Rebuilt image: %1 in %2").arg(formatBytes(ws.imageBytes), seconds(ws.elapsedMs)));
 
-            // The original is about to be replaced, so the new image is always
-            // compared with the edited tree (at least by name and size).
-            const CompareDepth depth = verifyEnabled(ctx.settings) ? verifyDepth(ctx.settings) : CompareDepth::Structure;
-            FW_TRY_ASSIGN(VerifyResult v, verifyImage(part.partPath(), tree, true, depth, ctx, 2, 2));
+            bool structurePassed = false;
+            auto checked = verifyImage(part.partPath(), tree, true, depth, ctx, 2, 2, &structurePassed);
+            const bool cancelled = !checked.ok() && ctx.token.isCancelled();
+            if (cancelled)
+                checked = afterCancelledVerification(part.partPath(), &tree, structurePassed, ctx, 2);
+            FW_TRY_ASSIGN(VerifyResult v, std::move(checked));
             outcome.verification = v.verification;
             outcome.verificationDetail = v.detail;
             outcome.details = geometryJson(plan);
             outcome.details.insert(QStringLiteral("operations"), editOpsToJson(ops));
+            if (cancelled)
+                outcome.details.insert(QStringLiteral("verificationCancelled"), true);
             if (v.verification == Verification::Failed) {
                 outcome.summary = QStringLiteral("Not changed: the rebuilt image failed verification. The original is untouched.");
                 return outcome;
@@ -608,7 +764,9 @@ public:
             // before the original is replaced.
         }
         ctx.progress->beginPhase(3, 0, 0, false);
-        FW_TRY(commitOrKeep(part, true, QStringLiteral("The edited image was built and verified")));
+        FW_TRY(commitOrKeep(part, true,
+                            outcome.verification == Verification::Passed ? QStringLiteral("The edited image was built and verified")
+                                                                         : QStringLiteral("The edited image was built")));
         outcome.outputs << img;
         outcome.summary = QStringLiteral("%1 change%2 applied to %3").arg(ops.size()).arg(ops.size() == 1 ? QString() : QStringLiteral("s"),
                                                                            QFileInfo(img).fileName());

@@ -17,6 +17,7 @@
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QJsonObject>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QSpinBox>
 #include <QTableWidget>
@@ -120,6 +121,7 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
     hh->addLayout(names, 1);
     m_load = button(FW_TR("Load from console"), ButtonVariant::Secondary, QStringLiteral("download"), head);
     m_push = button(FW_TR("Push changes"), ButtonVariant::Primary, QStringLiteral("upload"), head);
+    setToolPrimary(m_push);
     m_push->setEnabled(false);
     hh->addWidget(m_load, 0, Qt::AlignTop);
     hh->addWidget(m_push, 0, Qt::AlignTop);
@@ -253,8 +255,12 @@ QWidget* ShadowMountTab::buildRow(const SmpKey& k, QWidget* parent)
         r.spin = new QSpinBox(box);
         r.spin->setRange(int(k.minimum), int(k.maximum));
         r.spin->setFixedWidth(150);
+        // A number at the end of its field, its unit inside the field after
+        // it, as Settings shows them.
+        r.spin->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         if (k.key.endsWith(QLatin1String("_seconds")))
-            r.spin->setSuffix(QStringLiteral(" s"));
+            if (auto* edit = r.spin->findChild<QLineEdit*>())
+                setInputSuffix(edit, QStringLiteral("s"));
         control = r.spin;
         connect(r.spin, &QSpinBox::valueChanged, this, [this, key = k.key](int) {
             if (!m_populating) {
@@ -320,6 +326,10 @@ QWidget* ShadowMountTab::buildRow(const SmpKey& k, QWidget* parent)
     control->setAccessibleName(shownLabel);
     control->setToolTip(tip);
     r.reset = new IconButton(QStringLiteral("undo"), FW_TR("Back to the default (removes the line)"), IconButton::Size::Tiny, box);
+    // Hidden at the default, its slot kept: every control ends on one line.
+    QSizePolicy keep = r.reset->sizePolicy();
+    keep.setRetainSizeWhenHidden(true);
+    r.reset->setSizePolicy(keep);
     connect(r.reset, &QToolButton::clicked, this, [this, key = k.key] { resetToDefault(key); });
     if (tall) {
         h->addWidget(r.label, 0, 0);

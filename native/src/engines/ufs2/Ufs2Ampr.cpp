@@ -14,17 +14,32 @@ namespace fw::ufs2 {
 namespace {
 
 // The root's ampr_emu.index, or -1. Dumps live on Windows, so the name is
-// matched without regard to case. `dir`: look for a folder of that name instead.
+// matched without regard to case (the exact name first). `dir`: look for a
+// folder of that name instead.
 int rootIndexNode(const SourceTree& tree, bool dir = false)
 {
     if (tree.nodes.empty())
         return -1;
+    int found = -1;
     for (int c : tree.liveChildren(0)) {
         const TreeNode& n = tree.nodes[size_t(c)];
-        if (n.isDir() == dir && n.name.compare(pfs::kAmprIndexName, Qt::CaseInsensitive) == 0)
+        if (n.isDir() != dir || n.name.compare(pfs::kAmprIndexName, Qt::CaseInsensitive) != 0)
+            continue;
+        if (n.name == pfs::kAmprIndexName)
             return c;
+        if (found < 0)
+            found = c;
     }
-    return -1;
+    return found;
+}
+
+// The runtime opens /app0/ampr_emu.index, and UFS2 compares names byte for
+// byte: a dump's own index spelt in other letters (Windows does not mind)
+// would not be found in the image. It goes in under the exact name.
+void giveRuntimeName(TreeNode& n)
+{
+    n.name = pfs::kAmprIndexName;
+    n.rawName = n.name.toUtf8();
 }
 
 std::vector<pfs::AmprFile> amprFiles(const SourceTree& tree)
@@ -47,6 +62,19 @@ std::vector<pfs::AmprFile> amprFiles(const SourceTree& tree)
         }
     }
     return files;
+}
+
+// The dump's own index goes into the image as it is, with "off" too (a
+// conversion builds that way), but under the name the runtime opens: only the
+// letters' case changes. A game without fakelib/libSceAmpr.sprx never opens
+// it, and a folder of that name is in the way of the file.
+void nameOwnIndexForRuntime(SourceTree& tree)
+{
+    const int own = rootIndexNode(tree);
+    if (own < 0 || tree.nodes[size_t(own)].name == pfs::kAmprIndexName || rootIndexNode(tree, true) >= 0
+        || !pfs::hasAmprLibrary(amprFiles(tree)))
+        return;
+    giveRuntimeName(tree.nodes[size_t(own)]);
 }
 
 Result<QString> saveIndex(const QString& tempDir, const QByteArray& index)
@@ -82,7 +110,12 @@ pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mod
         if (!n.isDir() && pfs::isAmprPackIndexName(n.name))
             state.hasAssetPacks = true;
     }
-    const auto fresh = [&files] { return pfs::buildAmprIndex(pfs::amprToolRows(files).rows); };
+    QStringList leftOut;
+    const auto fresh = [&files, &leftOut] {
+        pfs::AmprToolRows rows = pfs::amprToolRows(files);
+        leftOut = rows.skippedRuntime;
+        return pfs::buildAmprIndex(rows.rows);
+    };
     const auto dumpIndex = [&]() -> Result<QByteArray> {
         const TreeNode& n = tree.nodes[size_t(own)];
         QFile f(toLongPath(n.localPath));
@@ -91,7 +124,10 @@ pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mod
                          f.errorString());
         return f.read(n.size + 1);
     };
-    return pfs::decideAmprIndex(mode, state, fresh, dumpIndex);
+    pfs::AmprIndexDecision d = pfs::decideAmprIndex(mode, state, fresh, dumpIndex);
+    if (pfs::amprActionChangesImage(d.action))
+        d.leftOut = leftOut;
+    return d;
 }
 
 void placeAmprIndex(SourceTree& tree, const QString& indexFile)
@@ -101,6 +137,7 @@ void placeAmprIndex(SourceTree& tree, const QString& indexFile)
     const QFileInfo fi(indexFile);
     if (const int own = rootIndexNode(tree); own >= 0) {
         TreeNode& n = tree.nodes[size_t(own)];
+        giveRuntimeName(n); // the same place in the listing: only the letters' case changes
         n.localPath = fi.absoluteFilePath();
         n.imageIno = 0;
         n.size = fi.size();
@@ -134,8 +171,11 @@ Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const
     AmprPlacement out;
     const pfs::AmprIndexDecision d = decideAmprIndex(tree, mode);
     out.action = d.action;
-    if (!pfs::amprActionChangesImage(d.action))
+    if (!pfs::amprActionChangesImage(d.action)) {
+        nameOwnIndexForRuntime(tree);
         return out;
+    }
+    out.leftOut = d.leftOut;
     FW_TRY_ASSIGN(out.indexFile, saveIndex(tempDir, d.index));
     placeAmprIndex(tree, out.indexFile);
     return out;
@@ -145,16 +185,21 @@ bool acceptBuiltAmprIndex(SourceTree& tree, const QString& image, const QString&
 {
     if (tree.nodes.empty() || rootIndexNode(tree, true) >= 0 || !pfs::hasAmprLibrary(amprFiles(tree)))
         return false;
-    const QByteArray fresh = amprIndexFor(tree);
-    if (fresh.isEmpty())
-        return false;
     auto reader = Ufs2Reader::open(image);
     if (!reader.ok())
         return false;
     const int own = rootIndexNode(tree);
-    const QString name = own >= 0 ? tree.nodes[size_t(own)].name : pfs::kAmprIndexName;
-    const auto ino = reader.value()->resolve(u'/' + name);
+    // A build gives the index its exact name (giveRuntimeName); an image made
+    // before that kept the folder's spelling.
+    auto ino = reader.value()->resolve(u'/' + pfs::kAmprIndexName);
+    if (ino.ok() && own >= 0)
+        giveRuntimeName(tree.nodes[size_t(own)]);
+    else if (!ino.ok() && own >= 0)
+        ino = reader.value()->resolve(u'/' + tree.nodes[size_t(own)].name);
     if (!ino.ok())
+        return false;
+    const QByteArray fresh = amprIndexFor(tree);
+    if (fresh.isEmpty())
         return false;
     const auto inode = reader.value()->readInode(ino.value());
     if (!inode.ok() || !inode.value().isReg() || inode.value().size != fresh.size())

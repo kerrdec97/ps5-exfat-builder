@@ -22,8 +22,6 @@ public:
 
     void drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter,
                        const QWidget* widget = nullptr) const override;
-    void drawControl(ControlElement element, const QStyleOption* option, QPainter* painter,
-                     const QWidget* widget = nullptr) const override;
     int pixelMetric(PixelMetric metric, const QStyleOption* option = nullptr,
                     const QWidget* widget = nullptr) const override;
     int styleHint(StyleHint hint, const QStyleOption* option = nullptr, const QWidget* widget = nullptr,
@@ -33,6 +31,8 @@ public:
                       QPalette::ColorRole textRole = QPalette::NoRole) const override;
     QSize sizeFromContents(ContentsType type, const QStyleOption* option, const QSize& size,
                            const QWidget* widget) const override;
+    // A sorted column's chevron follows its leading-aligned label.
+    QRect subElementRect(SubElement element, const QStyleOption* option, const QWidget* widget) const override;
 };
 
 // Application-wide input rules, installed once by theme::apply():

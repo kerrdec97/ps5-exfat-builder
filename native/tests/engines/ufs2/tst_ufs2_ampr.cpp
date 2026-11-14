@@ -259,22 +259,115 @@ private slots:
         QCOMPARE(b.files, snapshotFolder(src));
         QVERIFY(!b.outcome.details.contains(QStringLiteral("amprIndex")));
 
-        // A dump that was copied has other file times: still up to date, and
-        // the dump's own bytes go into the image.
+        // Other file times (a dump copied without its times, or files
+        // changed in place): the runtime reports the index's times as the
+        // files' (fstat), so the image gets an index with the times its
+        // files have. The dump keeps its own.
         const QByteArray otherTimes = toolIndex(src, 3600);
         QVERIFY(otherTimes != fresh);
         QVERIFY(pfs::amprIndexesDifferOnlyInTimes(otherTimes, fresh));
         QVERIFY(mktext(own, otherTimes));
         b = build(src, QStringLiteral("auto"));
         QVERIFY(b.ok);
+        QCOMPARE(b.index, fresh);
+        QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: rebuilt (it did not match the game's files)")});
+        QVERIFY(sameApartFromIndex(b.files, snapshotFolder(src)));
+        QCOMPARE(readAll(own), otherTimes);
+        QVERIFY(verifies(b.image, src));
+        // "Add when the dump has none" copies that one as it is, "always rebuild it" replaces it.
+        b = build(src, QStringLiteral("missing"));
+        QVERIFY(b.ok);
         QCOMPARE(b.index, otherTimes);
-        QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: kept (up to date)")});
-        // "Always rebuild it" replaces even that one.
         b = build(src, QStringLiteral("refresh"));
         QVERIFY(b.ok);
         QCOMPARE(b.index, fresh);
         QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: rebuilt (set to always rebuild it)")});
         QCOMPARE(readAll(own), otherTimes);
+    }
+
+    // A dump on Windows may spell its index AMPR_EMU.INDEX. UFS2 names are
+    // compared byte for byte, and the runtime opens /app0/ampr_emu.index: the
+    // image has the index under that name whether it is rebuilt or the dump's
+    // is kept, and still verifies against the folder.
+    void indexSpeltInOtherLettersGetsTheNameTheRuntimeOpens()
+    {
+        const QString src = makeGame(QStringLiteral("upper"), true);
+        const QString own = src + QStringLiteral("/AMPR_EMU.INDEX");
+        QVERIFY(mktext(own, "an index made before the game changed"));
+        const QByteArray fresh = toolIndex(src);
+
+        Built b = build(src, QStringLiteral("auto"));
+        QVERIFY(b.ok);
+        QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: rebuilt (it did not match the game's files)")});
+        QVERIFY(b.hasIndex);
+        QVERIFY(!b.files.contains(QStringLiteral("AMPR_EMU.INDEX")));
+        QCOMPARE(b.index, fresh);
+        QVERIFY(verifies(b.image, src));
+
+        QVERIFY(mktext(own, fresh));
+        for (const QString& mode : {QStringLiteral("auto"), QStringLiteral("missing")}) {
+            b = build(src, mode);
+            QVERIFY2(b.ok, qPrintable(mode));
+            QVERIFY2(b.hasIndex, qPrintable(mode));
+            QVERIFY(!b.files.contains(QStringLiteral("AMPR_EMU.INDEX")));
+            QCOMPARE(b.index, fresh);
+            QVERIFY(!b.outcome.details.contains(QStringLiteral("amprIndex"))); // the dump's own, kept
+            QVERIFY2(verifies(b.image, src), qPrintable(mode));
+        }
+        QCOMPARE(readAll(own), fresh); // the dump is not written
+        // "off" (what a conversion builds with) copies the dump's index as it
+        // is, under that name too: only the letters' case changes.
+        QVERIFY(mktext(own, "an index the build does not look at"));
+        b = build(src, QStringLiteral("off"));
+        QVERIFY(b.ok);
+        QVERIFY(b.log.isEmpty());
+        QVERIFY(b.hasIndex);
+        QVERIFY(!b.files.contains(QStringLiteral("AMPR_EMU.INDEX")));
+        QCOMPARE(b.index, QByteArray("an index the build does not look at"));
+        QVERIFY(verifies(b.image, src));
+
+        // A game without the AMPR library never opens the file: its name stays.
+        const QString plain = makeGame(QStringLiteral("upper-plain"), false);
+        QVERIFY(mktext(plain + QStringLiteral("/AMPR_EMU.INDEX"), "not an index"));
+        for (const QString& mode : {QStringLiteral("auto"), QStringLiteral("off")}) {
+            b = build(plain, mode);
+            QVERIFY2(b.ok, qPrintable(mode));
+            QVERIFY2(!b.hasIndex, qPrintable(mode));
+            QCOMPARE(b.files.value(QStringLiteral("AMPR_EMU.INDEX")), QByteArray("not an index"));
+        }
+    }
+
+    // A file changed in place keeps its size and gets a new time: the
+    // index made before is out of date, and the image gets a current one.
+    void indexOfAFileChangedInPlaceIsRebuilt()
+    {
+        const QString src = makeGame(QStringLiteral("patched"), true);
+        const QString own = src + QStringLiteral("/ampr_emu.index");
+        const QString eboot = src + QStringLiteral("/eboot.bin");
+        const QDateTime then = QFileInfo(eboot).lastModified();
+        QVERIFY(then.isValid());
+        const QByteArray before = toolIndex(src);
+        QVERIFY(mktext(own, before));
+        QByteArray patched = readAll(eboot);
+        QVERIFY(!patched.isEmpty());
+        patched[0] = char(patched[0] ^ 0x5a);
+        QVERIFY(mktext(eboot, patched));
+        {
+            QFile f(eboot);
+            QVERIFY(f.open(QIODevice::ReadWrite));
+            QVERIFY(f.setFileTime(then.addSecs(120), QFileDevice::FileModificationTime));
+        }
+        const QByteArray fresh = toolIndex(src);
+        QCOMPARE(fresh.size(), before.size());
+        QVERIFY(fresh != before);
+        QVERIFY(pfs::amprIndexesDifferOnlyInTimes(before, fresh)); // 5.0.2 kept it as up to date
+
+        const Built b = build(src, QStringLiteral("auto"));
+        QVERIFY(b.ok);
+        QCOMPARE(b.index, fresh);
+        QCOMPARE(b.log, QStringList{QStringLiteral("ampr_emu.index: rebuilt (it did not match the game's files)")});
+        QCOMPARE(b.outcome.details.value(QStringLiteral("amprIndex")).toString(), QStringLiteral("rebuilt"));
+        QCOMPARE(readAll(own), before);
     }
 
     // A packed game's index lists the files inside its packs: "auto" leaves it alone.

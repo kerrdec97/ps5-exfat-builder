@@ -2,6 +2,7 @@
 
 #include "core/FileUtil.h"
 #include "core/ProcessRunner.h"
+#include "core/Tr.h"
 #include "engines/fpkg/AsciiAliases.h"
 #include "engines/fpkg/BackportUpdate.h"
 #include "engines/fpkg/DumpRules.h"
@@ -305,8 +306,10 @@ int freeNumber(const QStringList& paths)
 Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy, QStringList& notes, QStringList* kept,
                     const RenameFn& renameFn, std::vector<ReplacedOutput>* replaced)
 {
+    // Never QFile::rename(): it copies a package it cannot rename, under the
+    // final name and uncancellably.
     const RenameFn doRename = renameFn ? renameFn : RenameFn([](const QString& from, const QString& to) {
-        return QFile::rename(from, to);
+        return renameWithoutCopying(from, to);
     });
     const auto fileName = [](const QString& p) { return QFileInfo(p).fileName(); };
     struct Aside {
@@ -426,7 +429,10 @@ Status placeOutputs(const std::vector<OutputMove>& moves, OutputConflict policy,
         message += QStringLiteral(" The new package was kept as %1.").arg(joinNative(keptHere));
     else if (!keptHere.isEmpty())
         message += QStringLiteral(" The new packages were kept as %1.").arg(joinNative(keptHere));
-    return Error(failure->code, message, detail.join(QStringLiteral("; ")));
+    // A kept package is not an I/O error the queue would retry: that would
+    // only pack it all again into another copy.
+    const ErrorCode code = !keptHere.isEmpty() && failure->code == ErrorCode::IoError ? ErrorCode::PermissionDenied : failure->code;
+    return Error(code, message, detail.join(QStringLiteral("; ")));
 }
 
 Status placeOutput(const QString& partial, const QString& finalPath, OutputConflict policy, QStringList& notes)
@@ -454,12 +460,12 @@ void restoreReplaced(const std::vector<ReplacedOutput>& replaced, QStringList& p
     const int n = freeNumber(placed);
     for (QString& p : placed) {
         const QString to = n > 0 ? numberedPath(p, n) : keepBothName(p);
-        if (!to.isEmpty() && QFile::rename(p, to))
+        if (!to.isEmpty() && renameWithoutCopying(p, to))
             p = to;
     }
     for (auto it = replaced.rbegin(); it != replaced.rend(); ++it) {
         const QString name = QFileInfo(it->finalPath).fileName();
-        if (!nameTaken(it->finalPath) && QFile::rename(it->aside, it->finalPath))
+        if (!nameTaken(it->finalPath) && renameWithoutCopying(it->aside, it->finalPath))
             notes << QStringLiteral("The previous %1 was put back.").arg(name);
         else
             notes << QStringLiteral("The previous %1 could not be put back; it is now %2.")
@@ -533,8 +539,22 @@ QStringList planEmptyDirs(BuildPlan& p, const FpkgSettings& s)
                                                  "folder. That DLC will not mount.").arg(mf, e.contentId);
                     continue;
                 }
-                if (!p.scan.hasFileUnder(mf))
+                if (!p.scan.hasFileUnder(mf)) {
                     add(spelled(mf), QStringLiteral("dlc_emu.ini mount folder"));
+                    continue;
+                }
+                // The DLC's data travels inside the game package.
+                const QString prefix = mf + u'/';
+                qint64 files = 0, bytes = 0;
+                for (const ScannedFile& f : p.scan.files)
+                    if (f.rel.startsWith(prefix, Qt::CaseInsensitive)) {
+                        ++files;
+                        bytes += f.size;
+                    }
+                p.log << QStringLiteral("dlc_emu.ini: %1 mounts %2 (%3 file(s), %4); packaged with the game")
+                             .arg(e.contentId, spelled(mf))
+                             .arg(files)
+                             .arg(formatBytes(bytes));
             }
         }
         for (const QString& d : std::as_const(p.scan.dirs))
@@ -561,6 +581,13 @@ Status finalizeParam(BuildPlan& p, const PlanOptions& o, const FpkgSettings& s)
     // An update keeps the versions of its own param.json.
     const QStringList sdkNotes = o.isUpdate ? QStringList() : applySdkVersionRule(p.param, p.executableSdk);
     p.paramNotes = sdkNotes + applyParamPatch(p.param, po);
+    // Lowering the required firmware to the firmware of sdkVersion (major and
+    // minor) can take it below sdkVersion itself when that has lower digits
+    // ("0x0114000000080001"). The reference toolkit applies its rule last, so
+    // the required version is never below the SDK version; img_verify reports
+    // "Required System Software version < Required SDK version" otherwise.
+    if (!o.isUpdate && po.lowerRequiredFirmware && parseHexOrNumber(p.param.value(QStringLiteral("sdkVersion"))))
+        p.paramNotes << applySdkVersionRule(p.param, p.executableSdk);
 
     qint64 u = 0;
     for (const PlannedEntry& e : p.entries)
@@ -918,6 +945,27 @@ Result<BuildPlan> planBuild(const PlanOptions& o, const FpkgSettings& s, const C
 
     p.emptyDirs = planEmptyDirs(p, s);
     FW_TRY(finalizeParam(p, o, s));
+
+    // The title field renames the default language only (as the reference
+    // does). A console set to another language shows that language's own
+    // name, which then looks as if the new title was lost. (The Build page
+    // always sends the title it read, so only a changed one counts.)
+    if (!o.title.isEmpty() && o.title != paramTitle(p.sourceParam)) {
+        const json::Value& loc = p.param.value(QStringLiteral("localizedParameters"));
+        const QString lang = paramDefaultLanguage(p.param);
+        QStringList others;
+        if (loc.isObject())
+            for (const QString& key : loc.keys()) {
+                const json::Value& entry = loc.value(key);
+                if (key != lang && entry.isObject() && entry.contains(QStringLiteral("titleName"))
+                    && entry.value(QStringLiteral("titleName")).toString() != o.title)
+                    others << key;
+            }
+        if (!others.isEmpty())
+            p.warnings << QStringLiteral("The title was changed for %1, the default language of param.json, only. %2 other "
+                                         "language(s) keep their own name (%3): a console set to one of them shows "
+                                         "that name.").arg(lang).arg(others.size()).arg(listSome(others, 8));
+    }
     return p;
 }
 
@@ -1100,20 +1148,36 @@ Status validateAddonRequest(const AddonRequest& r, const FpkgSettings& s)
 QStringList buildPhases()
 {
     return {QStringLiteral("Preparing the source"), QStringLiteral("Planning"), QStringLiteral("Writing project files"),
-            QStringLiteral("Pre-reading files"), QStringLiteral("Packing"), QStringLiteral("Finishing"),
-            QStringLiteral("Checking the package"), QStringLiteral("Verifying with img_verify"),
-            QStringLiteral("Computing SHA-256")};
+            QStringLiteral("Pre-reading files"), QStringLiteral("Packing"), QStringLiteral("Checking the package"),
+            QStringLiteral("Verifying with img_verify"), QStringLiteral("Computing SHA-256")};
 }
 
 QStringList addonPhases() { return buildPhases(); }
 
 namespace {
 
-const QList<double> kBuildWeights = {8, 0.5, 0.5, 3, 90, 0.5, 1, 8, 6};
+const QList<double> kBuildWeights = {8, 0.5, 0.5, 3, 90, 1, 8, 6};
 // An extracted package tree against the size of the (Kraken-compressed) .pkg:
 // the free-space checks before img_extract ask for this much.
 constexpr qint64 kExtractedTreeFactor = 2;
-enum Phase { PhPrepare = 0, PhPlan, PhGenerate, PhPrescan, PhPack, PhFinish, PhCheck, PhVerify, PhSha };
+enum Phase { PhPrepare = 0, PhPlan, PhGenerate, PhPrescan, PhPack, PhCheck, PhVerify, PhSha };
+
+// A phase the build will not enter takes no share of the bar, so the bar
+// does not stop short of the end: the pre-scan, img_verify and the SHA-256
+// are options, and an add-on has no source to prepare and no pre-scan.
+QList<double> buildWeights(const FpkgSettings& s, bool addon)
+{
+    QList<double> w = kBuildWeights;
+    if (addon)
+        w[PhPrepare] = 0;
+    if (addon || !s.prescan)
+        w[PhPrescan] = 0;
+    if (s.postVerify == PostVerify::HeaderOnly)
+        w[PhVerify] = 0;
+    if (!s.computeSha256)
+        w[PhSha] = 0;
+    return w;
+}
 
 QStringList aliasBases(const QString& jobTemp, const QString& output)
 {
@@ -1214,6 +1278,7 @@ Status prescanFiles(const QStringList& files, int threads, const CancellationTok
                     std::lock_guard lock(m);
                     failed << files[i];
                 }
+                pr->advance(1); // the stage is counted in files
                 pr->advanceFiles(1);
             }
         });
@@ -1292,6 +1357,35 @@ Error packFailure(const ToolRunResult& r, const QString& what)
                  QStringLiteral("exit code %1, %2 error line(s)").arg(r.exitCode).arg(r.errors.size()));
 }
 
+// "Overwrite" cut short (a power cut, a crash) after the old package was set
+// aside and before the new one took its name left the old one as
+// "<name>.fw-replaced" and nothing under its name: it gets its name back
+// before anything is built, so it is never lost. Called under the output
+// lock (never while another build of this package places its own), before
+// the generated inputs. The policy then applies to it as to any existing
+// package: with "Fail" the build is refused now, not after the pack.
+Status putBackSetAside(const QString& outputDir, const QString& stem, const QStringList& finals, OutputConflict policy,
+                       const Log& log, QStringList& warnings)
+{
+    QStringList back;
+    for (const QString& name : {fullPackageName(stem), updatePackageName(stem), companionName(stem)}) {
+        const QString finalPath = QDir(outputDir).filePath(name);
+        const QFileInfo aside(finalPath + QStringLiteral(".fw-replaced"));
+        if (!nameTaken(finalPath) && aside.isFile() && !aside.isSymLink() && renameWithoutCopying(aside.filePath(), finalPath)) {
+            const QString note = QStringLiteral("The previous %1 was put back.").arg(name);
+            log.warn(note);
+            warnings << note;
+            back << name;
+        }
+    }
+    if (policy == OutputConflict::Fail)
+        for (const QString& f : finals)
+            if (const QString name = QFileInfo(f).fileName(); back.contains(name, Qt::CaseInsensitive))
+                return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists in the output folder.").arg(name),
+                             QStringLiteral("The previous %1 was put back.").arg(name));
+    return success();
+}
+
 // Everything from img_create to the finished, checked, verified package.
 struct PackJob {
     const PubToolchain* tc = nullptr;
@@ -1326,12 +1420,25 @@ Result<JobOutcome> packAndFinish(PackJob& j)
     ProgressReporter* pr = ctx.progress;
     const Log& log = ctx.log;
 
-    const QString partial = QDir(j.outputDir).filePath(j.stem + QStringLiteral(".partial.pkg"));
+    // A partial package already in the output folder is not this build's: an
+    // earlier build may have kept its finished package there (it could not take
+    // its name), or another program wrote it. It is left alone, and this build
+    // packs under the first free name.
+    const auto partialTaken = [](const QString& p) {
+        return nameTaken(p) || nameTaken(p + QStringLiteral(".remastered.pkg")) || nameTaken(p + QStringLiteral(".naps_metric.json"));
+    };
+    QString partial = QDir(j.outputDir).filePath(j.stem + QStringLiteral(".partial.pkg"));
+    if (partialTaken(partial)) {
+        const QString earlier = partial;
+        for (int n = 2; partialTaken(partial); ++n)
+            partial = QDir(j.outputDir).filePath(j.stem + QStringLiteral(".partial-%1.pkg").arg(n));
+        log.warn(QStringLiteral("%1 (or its .remastered.pkg) is already in the output folder and is left as it is; this "
+                                "build packs into %2.")
+                     .arg(native(earlier), QFileInfo(partial).fileName()));
+    }
     const QString partialCompanion = partial + QStringLiteral(".remastered.pkg");
     const QString metric = partial + QStringLiteral(".naps_metric.json");
     const QStringList partials{partial, partialCompanion, metric};
-    for (const QString& p : partials)
-        QFile::remove(p);
     QStringList keptPartials; // finished packages that could not be put in place: never deleted
     ScopeExit dropPartials([&] {
         for (const QString& p : partials)
@@ -1382,7 +1489,7 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         *best = std::max(*best, steps);
         pr->setDone(qint64(*best) * 1000 / kBarSteps);
     };
-    ro.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(QStringLiteral("%1 written").arg(formatBytes(b))); };
+    ro.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(FW_TR("%1 written").arg(formatBytes(b))); };
     ro.onLine = [&log](const ToolLine& l) { logToolLine(log, l); };
 
     pr->beginPhase(PhPack, 1000, 0, false);
@@ -1418,7 +1525,6 @@ Result<JobOutcome> packAndFinish(PackJob& j)
                      QStringLiteral("The update was built, but its full-package companion (.remastered.pkg) is missing."));
 
     // Structure check: the full image (the update delta has no FIH header).
-    pr->beginPhase(PhFinish, 0);
     pr->beginPhase(PhCheck, 0);
     const QString checkTarget = j.update ? partialCompanion : partial;
     const HeaderCheck hc = checkPackageHeader(checkTarget);
@@ -1463,7 +1569,7 @@ Result<JobOutcome> packAndFinish(PackJob& j)
     if (j.keepNapsMetric && j.update && j.updateOutput != UpdateOutput::FullOnly && QFileInfo::exists(metric)) {
         const QString keptMetric = placed.value(0) + QStringLiteral(".naps_metric.json");
         QFile::remove(keptMetric);
-        if (!QFile::rename(metric, keptMetric))
+        if (!renameWithoutCopying(metric, keptMetric))
             log.warn(QStringLiteral("Could not keep %1.").arg(native(keptMetric)));
     }
     QFile::remove(metric);
@@ -1490,10 +1596,20 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         j.outcome.outputs = placed;
     };
 
+    const QString sdkZeroWarning = sdkVersionZeroWarning();
+
     // Optional deep check with the user's tool.
     j.outcome.verification = Verification::Passed;
     j.outcome.verificationDetail = QStringLiteral("Header and plaintext debug marker checked only; the package content "
                                                   "was not read (img_verify is off).");
+    if (s.postVerify == PostVerify::HeaderOnly) {
+        // img_verify does not read the SDK version back: a toolkit known by
+        // its files to be one of the older releases says it instead.
+        if (const SdkFixStatus sdk = checkSdkFixToolchain(*j.tc); sdk.ready() && !sdk.recommended) {
+            j.outcome.warnings << sdkZeroWarning;
+            log.warn(QStringLiteral("%1 (%2)").arg(sdkZeroWarning, sdk.release));
+        }
+    }
     if (s.postVerify != PostVerify::HeaderOnly) {
         pr->beginPhase(PhVerify, 0);
         ToolRunOptions vo;
@@ -1503,48 +1619,57 @@ Result<JobOutcome> packAndFinish(PackJob& j)
         vo.workingDirectory = ro.workingDirectory;
         vo.environment = ro.environment;
         vo.withBar = false;
-        // "param.json: SDK Version = 6.00.00.00-00.00.00.0.0." as the package carries it.
+        // "param.json: SDK Version = 6.00.00.00-00.00.00.0.0." as the package
+        // carries it, with or without an [Info] prefix (a line without one
+        // never reaches onLine).
         QString packagedSdk;
-        vo.onLine = [&](const ToolLine& l) {
+        vo.onLine = ro.onLine;
+        vo.onAnyLine = [&](const QString& raw) {
             static const QLatin1String marker("param.json: SDK Version = ");
-            const qsizetype at = l.text.indexOf(marker);
+            const qsizetype at = raw.indexOf(marker);
             if (at >= 0)
-                packagedSdk = l.text.mid(at + marker.size()).trimmed();
-            if (ro.onLine)
-                ro.onLine(l);
+                packagedSdk = raw.mid(at + marker.size()).trimmed();
         };
         applyJobLimits(vo, s, ctx);
         (void)ctx.token.checkpoint(); // a paused job waits here; a cancelled one is reported by the run below
         auto vr = runPubTool(vo, ctx.token);
-        if (vr.ok() && (vr->cancelled || ctx.token.isCancelled())) {
-            settleReplaced(false);
-            log.warn(QStringLiteral("img_verify was cancelled; the package was kept: %1").arg(native(placed.value(0))));
-            return Error::cancelled();
-        }
+        const bool verifyCancelled = ctx.token.isCancelled() || (vr.ok() && vr->cancelled);
         if (packagedSdk.startsWith(QLatin1String("0.00."))) {
-            // Toolkits before sdk-fpkg279-fix15 write 0 whatever param.json says.
-            const QString w = QStringLiteral("The package carries SDK version 0 in its param.json. Publishing Tools toolkits "
-                                             "older than sdk-fpkg279-fix15 write 0 whatever the game needs, and a game can "
-                                             "crash or misbehave when the console starts it that way. Build with the fix15 "
-                                             "toolkit (Settings > Tools).");
-            j.outcome.warnings << w;
-            log.warn(w);
+            j.outcome.warnings << sdkZeroWarning;
+            log.warn(sdkZeroWarning);
         }
-        if (vr.ok() && vr->ok()) {
+        // A package built from a dump never passes img_verify cleanly: its
+        // fake-signed executables are always reported, and so are the SDK
+        // version fields when the toolkit wrote 0 into them. Only what is
+        // left after those is worth a warning. A package that carries a
+        // real SDK version (fix15) should not get the SDK messages: there
+        // they say that sdkVersion does not match the executables, or that
+        // the required version is below it. What img_verify reported before
+        // a cancel counts as well.
+        const bool sdkZero = packagedSdk.isEmpty() || packagedSdk.startsWith(QLatin1String("0.00."));
+        const ImgVerifyFindings found = vr.ok() && !vr->crashed && !vr->errors.isEmpty()
+            ? sortImgVerifyErrors(vr->errors, sdkZero)
+            : ImgVerifyFindings{};
+        if (verifyCancelled && found.problems.isEmpty()) {
+            // GitHub #97: a cancel while the finished package is checked keeps
+            // it, and says it is not verified. It has not passed the check
+            // "Overwrite" waits for, so an old package gets its name back.
+            j.outcome.verification = Verification::Skipped;
+            j.outcome.verificationDetail = QStringLiteral("Verification was cancelled, so the package is not verified (its "
+                                                          "header was checked).");
+            j.outcome.details.insert(QStringLiteral("verificationCancelled"), true);
+            log.warn(j.outcome.verificationDetail);
+        } else if (!verifyCancelled && vr.ok() && vr->ok()) {
             j.outcome.verificationDetail = s.postVerify == PostVerify::ToolFull
                 ? QStringLiteral("Header checked; img_verify passed (format and integrity).")
                 : QStringLiteral("Header checked; img_verify passed (format).");
             log.info(QStringLiteral("img_verify passed."));
         } else {
-            // A package built from a dump never passes img_verify cleanly: its
-            // fake-signed executables and zero SDK version fields are always
-            // reported. Only what is left after those is worth a warning.
-            const ImgVerifyFindings found = vr.ok() && !vr->crashed && !vr->errors.isEmpty() ? sortImgVerifyErrors(vr->errors)
-                                                                                         : ImgVerifyFindings{};
+            const QString kinds = sdkZero ? QStringLiteral("fake-signed executables, SDK version fields")
+                                          : QStringLiteral("fake-signed executables");
             const QString usual = found.expected == 1
-                ? QStringLiteral("1 message every package built from a dump gets (fake-signed executables, SDK version fields)")
-                : QStringLiteral("%1 messages every package built from a dump gets (fake-signed executables, SDK version fields)")
-                      .arg(found.expected);
+                ? QStringLiteral("1 message every package built from a dump gets (%1)").arg(kinds)
+                : QStringLiteral("%1 messages every package built from a dump gets (%2)").arg(found.expected).arg(kinds);
             if (vr.ok() && !vr->crashed && !vr->errors.isEmpty() && found.problems.isEmpty()) {
                 j.outcome.verificationDetail = s.postVerify == PostVerify::ToolFull
                     ? QStringLiteral("Header checked; img_verify (format and integrity) found nothing beyond the %1.").arg(usual)
@@ -1578,17 +1703,36 @@ Result<JobOutcome> packAndFinish(PackJob& j)
     for (const QString& p : partials)
         QFile::remove(p);
 
-    if (s.computeSha256) {
+    // After a cancel the package is finished as it is: no hash of it.
+    if (s.computeSha256 && ctx.token.isCancelled())
+        log.info(QStringLiteral("The SHA-256 was not computed because the job was cancelled."));
+    if (s.computeSha256 && !ctx.token.isCancelled()) {
+        // One stage for every placed file (an update and its .remastered.pkg):
+        // entered once per file, the second would find the stage full.
+        qint64 hashBytes = 0;
+        for (const QString& p : std::as_const(placed))
+            hashBytes += QFileInfo(p).size();
+        pr->beginPhase(PhSha, hashBytes, placed.size());
         QJsonObject hashes;
+        bool hashCancelled = false;
         for (const QString& p : placed) {
-            pr->beginPhase(PhSha, QFileInfo(p).size());
+            pr->setCurrentItem(QFileInfo(p).fileName());
             auto h = sha256File(p, ctx.token, pr);
+            if (!h.ok() && h.error().isCancelled()) {
+                // The package is placed (and an old one may be gone): a
+                // cancel now only leaves out its hash, as above.
+                hashCancelled = true;
+                log.info(QStringLiteral("The SHA-256 was not computed because the job was cancelled."));
+                break;
+            }
             if (!h.ok())
                 return h.takeError();
+            pr->advanceFiles(1);
             log.info(QStringLiteral("SHA-256 of %1: %2").arg(QFileInfo(p).fileName(), h.value()));
             hashes.insert(QFileInfo(p).fileName(), h.value());
         }
-        j.outcome.details.insert(QStringLiteral("sha256"), hashes);
+        if (!hashCancelled)
+            j.outcome.details.insert(QStringLiteral("sha256"), hashes);
     }
 
     if (!j.keepProjectOnSuccess) {
@@ -1709,7 +1853,7 @@ Result<QString> extractBaseForMerge(const QString& basePackage, const QString& o
         auto d = diskSpace(dest);
         return d.ok() ? std::max<qint64>(0, free0 - d->available) : 0;
     };
-    o.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(QStringLiteral("%1 extracted").arg(formatBytes(b))); };
+    o.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(FW_TR("%1 extracted").arg(formatBytes(b))); };
     o.onLine = [&ctx](const ToolLine& l) { logToolLine(ctx.log, l); };
     auto r = runPubTool(o, ctx.token);
     if (!r.ok())
@@ -1732,7 +1876,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
 {
     ProgressReporter* pr = ctx.progress;
     const Log& log = ctx.log;
-    pr->setPhases(buildPhases(), kBuildWeights);
+    pr->setPhases(buildPhases(), buildWeights(s, false));
     FW_TRY(validateBuildRequest(req, s));
 
     const PubToolchain tc = locatePubTools(s.pubToolsPath);
@@ -1910,6 +2054,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             FW_TRY(mapDir(aliases, QFileInfo(req.basePackage).absolutePath(), QStringLiteral("ref")));
         OutputLock lock;
         FW_TRY(lock.acquire(lockKey(cid, output), ctx.token, log));
+        FW_TRY(putBackSetAside(output, stem, finals, s.outputConflict, log, outcome.warnings));
         PackJob j;
         j.tc = &tc;
         j.s = &s;
@@ -1954,6 +2099,9 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
             if (!req.baseFolder.isEmpty()) {
                 roots << QFileInfo(req.baseFolder).absoluteFilePath();
             } else {
+                // A part of Preparing without a size (img_extract reports none):
+                // the stage does not stand at the end of the staging meanwhile.
+                pr->beginPhase(PhPrepare, 0);
                 auto extracted = extractBaseForMerge(QFileInfo(req.basePackage).absoluteFilePath(), output, tc, s, ctx,
                                                      aliases, baseGuard);
                 if (!extracted.ok())
@@ -2011,6 +2159,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
 
     OutputLock lock;
     FW_TRY(lock.acquire(lockKey(plan.contentId, output), ctx.token, log));
+    FW_TRY(putBackSetAside(output, plan.stem, finals, s.outputConflict, log, outcome.warnings));
 
     qint64 generated = 0;
     for (const PlannedEntry& e : plan.entries)
@@ -2160,7 +2309,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
         for (const PlannedEntry& e : plan.entries)
             if (e.kind == EntryKind::GameFile)
                 files << e.src;
-        pr->beginPhase(PhPrescan, 0, files.size(), false);
+        pr->beginPhase(PhPrescan, files.size(), files.size(), false);
         FW_TRY(prescanFiles(files, std::clamp(2 * s.workerThreads, 8, 32), ctx.token, pr));
     }
 
@@ -2206,7 +2355,7 @@ Result<JobOutcome> runAddon(const AddonRequest& req, const FpkgSettings& s, JobC
 {
     ProgressReporter* pr = ctx.progress;
     const Log& log = ctx.log;
-    pr->setPhases(addonPhases(), kBuildWeights);
+    pr->setPhases(addonPhases(), buildWeights(s, true));
     FW_TRY(validateAddonRequest(req, s));
     const PubToolchain tc = locatePubTools(s.pubToolsPath);
     if (!tc.ok())
@@ -2263,6 +2412,7 @@ Result<JobOutcome> runAddon(const AddonRequest& req, const FpkgSettings& s, JobC
     FW_TRY(mapDir(aliases, output, QStringLiteral("out")));
     OutputLock lock;
     FW_TRY(lock.acquire(lockKey(cid, output), ctx.token, log));
+    FW_TRY(putBackSetAside(output, stem, finals, s.outputConflict, log, outcome.warnings));
 
     pr->beginPhase(PhGenerate, 0);
     const QString logsDir = QDir(output).filePath(stem + QStringLiteral("-build-logs"));
@@ -2401,28 +2551,34 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
     const PubToolchain tc = locatePubTools(s.pubToolsPath);
     if (!tc.ok())
         return Error(ErrorCode::DependencyMissing, tc.problems.join(u' '));
-    const bool created = !di.exists();
-    if (!QDir().mkpath(dest))
-        return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(dest)));
-    // Everything in the destination is ours (it was empty): remove it if we fail.
+    // img_extract writes into "<destination>.part", which takes the
+    // destination's name once the tool has finished: a crash, a failure or a
+    // cancel never leaves part of a package under that name, and the clean-up
+    // removes only what the tool wrote. The marker next to it says a leftover
+    // is ours.
+    const QString stage = dest + QStringLiteral(".part");
+    const QString marker = dest + QStringLiteral(".part.extracting");
+    const QString parent = QFileInfo(dest).absolutePath();
+    if (QFileInfo::exists(stage) || QFileInfo(stage).isSymLink()) {
+        if (!QFileInfo::exists(marker))
+            return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists. Move or delete it, then try again.").arg(native(stage)));
+        FW_TRY(removeTreeSafely(stage, parent));
+    }
+    if (!QDir().mkpath(stage) || !QFile(marker).open(QIODevice::WriteOnly))
+        return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(native(stage)));
+    bool keepStage = false;
     ScopeExit cleanup([&] {
-        QDir d(dest);
-        for (const QFileInfo& fi : d.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)) {
-            if (fi.isDir() && !fi.isSymbolicLink())
-                removeTreeNoFollow(fi.absoluteFilePath());
-            else
-                QFile::remove(fi.absoluteFilePath());
-        }
-        if (created)
-            QDir().rmdir(dest);
+        if (!keepStage)
+            (void)removeTreeSafely(stage, parent);
+        QFile::remove(marker);
     });
     const QString target = toolTargetFor(req.package, ctx.log);
-    FW_TRY(ensureFreeSpace(dest, kExtractedTreeFactor * QFileInfo(target).size(), s.freeSpaceMarginBytes));
-    AsciiAliases aliases(aliasBases(ctx.tempDir, dest), {}, ctx.log);
+    FW_TRY(ensureFreeSpace(stage, kExtractedTreeFactor * QFileInfo(target).size(), s.freeSpaceMarginBytes));
+    AsciiAliases aliases(aliasBases(ctx.tempDir, stage), {}, ctx.log);
     auto pkgDir = aliases.map(QFileInfo(target).absolutePath(), QStringLiteral("pkg"));
     if (!pkgDir.ok())
         return pkgDir.takeError();
-    auto destTool = aliases.map(dest, QStringLiteral("dst"));
+    auto destTool = aliases.map(stage, QStringLiteral("dst"));
     if (!destTool.ok())
         return destTool.takeError();
 
@@ -2434,12 +2590,12 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
     ro.environment = publisherEnv(QDir(ctx.tempDir).filePath(QStringLiteral("extract-tmp")), aliases, ctx.log);
     ro.withBar = false;
     applyJobLimits(ro, s, ctx);
-    const qint64 free0 = diskSpace(dest).ok() ? diskSpace(dest)->available : 0;
-    ro.pollBytes = [dest, free0] {
-        auto d = diskSpace(dest);
+    const qint64 free0 = diskSpace(stage).ok() ? diskSpace(stage)->available : 0;
+    ro.pollBytes = [stage, free0] {
+        auto d = diskSpace(stage);
         return d.ok() ? std::max<qint64>(0, free0 - d->available) : 0;
     };
-    ro.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(QStringLiteral("%1 written").arg(formatBytes(b))); };
+    ro.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(FW_TR("%1 written").arg(formatBytes(b))); };
     ro.onLine = [&ctx](const ToolLine& l) { logToolLine(ctx.log, l); };
     auto r = runPubTool(ro, ctx.token);
     if (!r.ok())
@@ -2449,7 +2605,7 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
     if (!r->ok())
         return packFailure(r.value(), QStringLiteral("img_extract"));
     qint64 files = 0, bytes = 0;
-    QDirIterator it(dest, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+    QDirIterator it(stage, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         it.next();
         ++files;
@@ -2457,7 +2613,24 @@ Result<JobOutcome> runExtract(const ExtractRequest& req, const FpkgSettings& s, 
     }
     if (files == 0)
         return Error(ErrorCode::ExternalToolFailed, QStringLiteral("img_extract reported success but wrote no files."));
-    cleanup.dismiss();
+    // Into place: an empty destination folder goes, the stage takes its name.
+    // When that cannot be done (the folder is open in another program, or
+    // something was put in it meanwhile), the extracted files are not
+    // deleted: they keep a free name next to it.
+    const bool existed = QFileInfo(dest).isDir();
+    if ((existed && !QDir().rmdir(dest)) || !QDir().rename(stage, dest)) {
+        if (existed && !QFileInfo::exists(dest))
+            QDir().mkdir(dest);
+        keepStage = true;
+        QString kept = uniquePath(dest + QStringLiteral(".new"));
+        if (!QDir().rename(stage, kept))
+            kept = stage;
+        return Error(ErrorCode::PermissionDenied,
+                     QStringLiteral("The files were extracted%1, but the folder %2 could not be used because it is "
+                                    "open in another program. They were saved in %3.")
+                         .arg(QString(), native(dest), native(kept)));
+    }
+    keepStage = true;
     JobOutcome o;
     o.outputs << dest;
     o.verification = Verification::NotRun;
@@ -2524,6 +2697,14 @@ QString redactedCommand(const QStringList& args)
 
 } // namespace
 
+QString sdkVersionZeroWarning()
+{
+    // Toolkits before sdk-fpkg279-fix15 write 0 whatever param.json says.
+    return QStringLiteral("The package carries SDK version 0 in its param.json. Publishing Tools toolkits older than "
+                          "sdk-fpkg279-fix15 write 0 whatever the game needs, and a game can crash or misbehave when the "
+                          "console starts it that way. Build with the fix15 toolkit (Settings > Tools).");
+}
+
 Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, const PubToolchain& tc, const FpkgSettings& s,
                                                      JobContext& ctx)
 {
@@ -2554,7 +2735,8 @@ Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, con
     auto r1 = pass(false, true);
     if (!r1.ok())
         return r1.takeError();
-    if (r1->cancelled || !ctx.token.checkpoint())
+    // A problem the tool reported before a cancel still fails the check.
+    if ((r1->cancelled || !ctx.token.checkpoint()) && r1->errors.isEmpty())
         return Error::cancelled();
     // An [Error] line fails the required pass even with exit code 0, as for
     // every other run of the tool.
@@ -2609,7 +2791,7 @@ Result<QString> extractPackage(const QString& package, const QString& destinatio
         auto d = diskSpace(destination);
         return d.ok() ? std::max<qint64>(0, free0 - d->available) : 0;
     };
-    o.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(QStringLiteral("%1 extracted").arg(formatBytes(b))); };
+    o.onBytesWritten = [pr](qint64 b) { pr->setCurrentItem(FW_TR("%1 extracted").arg(formatBytes(b))); };
     o.onLine = [&ctx](const ToolLine& l) { logToolLine(ctx.log, l); };
     ctx.log.info(redactedCommand(o.arguments));
     auto r = runPubTool(o, ctx.token);

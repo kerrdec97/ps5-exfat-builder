@@ -50,6 +50,9 @@ struct VerifyReport {
     qint64 paddedFiles = 0;
     bool nested = false;
     bool contentCompared = false;
+    // The check was cancelled after it had already found a problem: the
+    // report is partial, and it fails (never set on a report that passes).
+    bool cancelled = false;
     QStringList warnings;
     QString summary;
 
@@ -63,6 +66,8 @@ struct ProgressHooks {
 
 // Structural damage (bad metadata, a block that does not decompress) is
 // returned as ErrorCode::CorruptData; content differences make passed false.
+// A cancel returns Error::cancelled(), unless a difference was found before
+// it: then the partial, failed report is returned (VerifyReport::cancelled).
 Result<VerifyReport> verifyImage(const QString& image, const VerifyExpectation& expect, VerifyDepth depth,
                                  const CancellationToken& token, const ProgressHooks& hooks = {});
 
@@ -104,7 +109,9 @@ struct ExtractReport {
 
 // Unpacks the image into `outputDir`. A new or empty folder is filled through
 // "<outputDir>.part" and renamed at the end, so a cancelled or failed
-// extraction leaves nothing behind. Every output path is built from image
+// extraction leaves nothing behind. A finished extraction that cannot take the
+// folder's name (it is open in another program) is kept as "<outputDir>.new",
+// and the error says so. Every output path is built from image
 // names that pass isSafeEntryName() and is checked to stay inside the folder
 // (core/PathSafety.h); names the drive cannot store (on Windows: forbidden
 // characters, trailing dots or spaces, device names such as CON; names that

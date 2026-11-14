@@ -133,6 +133,7 @@ private:
     void applyLiveCpuLimit();
     void pickFromDlcEmu();
     void onPackageTypeChanged();
+    void updateDlcEmuNote();
     void updateStartHint();
     enum class PackageType { App, Addon, Update, Backport };
     QString packageType() const;   // the tile's value: app / addon / update / backport
@@ -187,6 +188,7 @@ private:
     ui::PathField* m_basePackage = nullptr;
     QWidget* m_addonField = nullptr;
     QWidget* m_titleRow = nullptr;
+    QWidget* m_dlcEmuRow = nullptr;      // App builds of a game with dlc_emu.ini: its DLC data goes along
     QWidget* m_backportField = nullptr;  // the two backport pickers + note
     ui::PathField* m_backport4 = nullptr;
     ui::PathField* m_backport5 = nullptr;
@@ -203,6 +205,7 @@ private:
     QComboBox* m_volumeType = nullptr;
 
     ui::PathField* m_output = nullptr;
+    ui::Badge* m_saveStep = nullptr; // "Step 3", "Step 4" with the Package card
     ui::MessageRow* m_spaceRow = nullptr;
     ui::InfoBar* m_spaceBar = nullptr;
     QLabel* m_fileLabel = nullptr;

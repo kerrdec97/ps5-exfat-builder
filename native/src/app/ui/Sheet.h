@@ -20,7 +20,12 @@ namespace fw::ui {
 class Sheet : public QWidget {
     Q_OBJECT
 public:
-    enum class Role { Safe, Primary, Destructive };
+    // Close: the button of an information sheet that only closes it (a
+    // result, a preview, a list): the secondary look, yet the default button
+    // (focused when the sheet opens, Enter) and the answer to Esc.
+    // Aside: a button at the start of the row that acts on the sheet's
+    // content and leaves it open ("Load more", "Copy report").
+    enum class Role { Safe, Primary, Destructive, Close, Aside };
     enum class Icon { None, Info, Warning, Error };
 
     Sheet(QWidget* host, const QString& title, Icon icon = Icon::None, int width = theme::size::dialog);
@@ -41,10 +46,14 @@ public:
     // Shows the sheet and blocks until a button is pressed (returns its index),
     // Esc is pressed (returns the safe button's index, or -1), or close() is called.
     int exec();
-    void open();                 // non-modal show (screenshots, countdowns)
+    void open();                 // non-modal show (screenshots, countdowns); the answer comes with finished()
     void close(int result = -1);
     bool isOpen() const { return isVisible() && !m_closing; } // not while it fades away after its answer
     int result() const { return m_result; }
+    // Above every sheet opened after it, with the keyboard (the end-of-queue
+    // countdown): a later sheet opens under it and gets the focus when it closes.
+    void setKeepOnTop(bool on) { m_keepOnTop = on; }
+    bool keepsOnTop() const { return m_keepOnTop; }
     // The sheet takes its size when it opens and when its window is resized.
     // Content that changed its height afterwards (a list that filled) calls this.
     void refit() { relayout(); }
@@ -70,6 +79,11 @@ public:
     // The same for several plain lines: each is escaped, one line per row.
     static QString monoLines(const QStringList& plainLines);
 
+signals:
+    // The answer, once: the button's index, or the safe button's for Esc and
+    // close(-1). Emitted by close(), for open() and exec() alike.
+    void finished(int result);
+
 protected:
     void paintEvent(QPaintEvent* e) override;
     void resizeEvent(QResizeEvent* e) override;
@@ -85,6 +99,7 @@ private:
     void finishClose(); // after the fade: hidden and deleted
     QLabel* addBodyLabel(const QString& text, Qt::TextFormat format);
     QPushButton* defaultButton() const; // Enter outside a button; focused when the sheet opens
+    Sheet* keepOnTopAbove() const;
     motion::Value* m_shown; // 0 = gone .. 1 = open: the scrim fades, the panel rises 8 px and fades
     bool m_closing = false; // answered, fading away
     QRect m_panelRect;      // where the panel rests
@@ -98,6 +113,7 @@ private:
     int m_result = -1;
     bool m_answered = false; // close() ran (exec(): the loop did not just end with the application)
     bool m_counted = false; // in openCount()
+    bool m_keepOnTop = false;
     QPointer<QEventLoop> m_loop;
     QPointer<QWidget> m_previousFocus;
     bool m_previousByKeyboard = false;
@@ -116,6 +132,9 @@ public:
               int lifetimeMs = -1); // -1: 6 s for Ok/Info, sticky for Warn/Err
     int count() const { return int(m_toasts.size()); }
     void clear();
+    // What the stack keeps clear of at the bottom (the window's status bar)
+    // and at its end edge (the page's scroll bar); 16 px more than that.
+    void setInsets(int bottom, int end);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -124,7 +143,10 @@ protected:
 private:
     void relayout();
     void remove(QWidget* toast);
+    int toastX(int slide) const; // where a toast stands, `slide` px short of its place
     std::vector<QWidget*> m_toasts;
+    int m_bottomInset = 0;
+    int m_endInset = 0;
 };
 
 } // namespace fw::ui

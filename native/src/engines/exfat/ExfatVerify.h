@@ -32,6 +32,9 @@ struct VerifyReport {
     QStringList structureProblems;    // image damage
     QStringList warnings;             // not failures (lost clusters, ...)
     qint64 elapsedMs = 0;
+    // The check was cancelled after it had already found a problem: the
+    // report is partial, and it fails (never set on a report that passes).
+    bool cancelled = false;
 
     bool passed() const { return mismatches.empty() && structureProblems.isEmpty(); }
     // "18,442 files compared byte for byte, all identical" / "3 problems: ..."
@@ -63,7 +66,9 @@ struct VerifyOptions {
 
 // Verifies `image` against `expected` (the files and folders it must hold,
 // nothing more). `otherImage` is the image that ExpectedFile::imageEntry
-// points into (edits), or empty.
+// points into (edits), or empty. A cancel returns Error::cancelled(), unless
+// a problem was found before it: then the partial, failed report is returned
+// (VerifyReport::cancelled), so the work is treated as not verifying.
 Result<VerifyReport> verifyImage(const QString& image, const std::vector<ExpectedFile>& expected,
                                  const VerifyOptions& options, const CancellationToken& token,
                                  ProgressReporter* progress = nullptr, const QString& otherImage = {},

@@ -175,8 +175,9 @@ struct ReplacedOutput {
 // free numbered name ("name (n).pkg"), or under its partial name when even
 // that rename fails; the error names them and `kept` lists them. Numbered
 // names of one call share their n, so an update and its .remastered.pkg stay
-// a pair. Notes for the outcome go to `notes`. `renameFn` replaces
-// QFile::rename (tests use it to simulate a file another program holds open).
+// a pair. Notes for the outcome go to `notes`. Files are renamed with
+// renameWithoutCopying() (never copied); `renameFn` replaces it (tests use it
+// to simulate a file another program holds open).
 // With `replaced`, "Overwrite" does not delete the old files: they are
 // listed there and the caller ends the step with discardReplaced() or
 // restoreReplaced() once the new package's checks are over.
@@ -216,6 +217,11 @@ struct PublisherVerifyReport {
 };
 Result<PublisherVerifyReport> verifyPublisherPackage(const QString& package, const PubToolchain& tools,
                                                      const FpkgSettings& settings, JobContext& ctx);
+
+// The warning a build gives when its package carries SDK version 0 (read
+// back by img_verify, or known from an older SDK Fix toolkit when only the
+// header is checked). A flow that says so itself leaves it out.
+QString sdkVersionZeroWarning();
 
 // img_extract of the whole package into `destination` (created; must be
 // empty). Returns the app root inside it (the folder holding sce_sys).

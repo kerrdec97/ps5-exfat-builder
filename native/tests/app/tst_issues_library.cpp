@@ -6,7 +6,8 @@
 //    as they will be.
 //  * Games: "Check dump…" runs the read-only dump check for the selection;
 //    the result comes as a toast with "Show details", the details sheet
-//    groups the findings by severity, and the last result stays available.
+//    groups the findings by severity, and the last result stays available;
+//    several checks run in the order of the selection.
 
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
@@ -30,6 +31,7 @@
 #include <QMap>
 #include <QPointer>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSet>
 #include <QSettings>
 #include <QSignalSpy>
@@ -39,6 +41,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 
@@ -308,6 +311,15 @@ private slots:
         QVERIFY(report.contains(QStringLiteral("  3 files are empty (0 bytes).\n      data/cache/a.tmp.bin\n")));
         QVERIFY(report.endsWith(QStringLiteral("The check reads the dump and changes nothing.\n")));
 
+        // An information sheet: Close is the default button in the secondary
+        // look; Copy report sits at the start of the button row.
+        QPushButton* close = buttonByText(sheet, QStringLiteral("Close"));
+        QPushButton* copy = buttonByText(sheet, QStringLiteral("Copy report"));
+        QVERIFY(close && copy);
+        QVERIFY(close->property("variant").toString() != QLatin1String("primary"));
+        QCOMPARE(copy->parentWidget(), close->parentWidget());
+        QVERIFY(copy->mapTo(sheet, QPoint(0, 0)).x() < buttonByText(sheet, QStringLiteral("Backport…"))->mapTo(sheet, QPoint(0, 0)).x());
+
         // "Backport…" asks for the Backport tab and closes the sheet; "Copy report" keeps it open.
         QSignalSpy backport(sheet, &pages::DumpCheckSheet::backportRequested);
         buttonByText(sheet, QStringLiteral("Copy report"))->click();
@@ -437,6 +449,46 @@ private slots:
         lib->gamesView()->clearSelection();
         m_window->toasts()->clear();
         m_ctx->queue().clearFinished();
+    }
+
+    // Several checks started together run in the order of the selection, on
+    // a paused queue too: the last one does not start first and the others
+    // follow in turn (JobQueue::startNow with the whole list).
+    void severalChecksRunInTheirOrder()
+    {
+        pages::LibraryPage* lib = library();
+        QVERIFY(lib);
+        auto& q = m_ctx->queue();
+        QStringList folders, expected;
+        for (const char* name : {"PPSA00091 Order A", "PPSA00092 Order B", "PPSA00093 Order C"}) {
+            const QString game = m_root.filePath(QStringLiteral("order/") + QString::fromLatin1(name));
+            QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"),
+                                          R"({"titleId":"PPSA00091","contentVersion":"01.000.000","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Order"}}})"));
+            QVERIFY(fwtest::writeRandomFile(game + QStringLiteral("/eboot.bin"), 5000, 43));
+            folders << game;
+            expected << QStringLiteral("Check %1").arg(QString::fromLatin1(name)); // not in the library: named after the folder
+        }
+        QStringList started; // job titles, in the order they began to run
+        QStringList ids;
+        const auto watch = connect(&q, &JobQueue::jobChanged, this, [&](const QString& id) {
+            const auto rec = q.record(id);
+            if (rec && rec->kind == QLatin1String("tools.dump.check") && rec->state == JobState::Running && !started.contains(rec->title))
+                started << rec->title;
+        });
+        const auto cleanup = qScopeGuard([&] {
+            disconnect(watch);
+            q.holdQueue(false);
+            m_window->toasts()->clear();
+            q.clearFinished();
+        });
+        q.holdQueue(true);
+        QCOMPARE(lib->checkDumps(folders), 3);
+        for (const JobRecord& r : q.records())
+            if (r.kind == QLatin1String("tools.dump.check") && expected.contains(r.title))
+                ids << r.id;
+        QCOMPARE(ids.size(), 3);
+        QTRY_VERIFY_WITH_TIMEOUT(std::all_of(ids.cbegin(), ids.cend(), [&](const QString& id) { return isTerminal(q.record(id)->state); }), 60000);
+        QCOMPARE(started, expected);
     }
 };
 

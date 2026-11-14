@@ -102,6 +102,9 @@ QString idOr(const BackportRow& r, const QString& fallback = QStringLiteral("no 
     return r.game.titleId.isEmpty() ? fallback : r.game.titleId;
 }
 
+// The Progress card before anything has run: what it will show, not "Idle 0%".
+QString progressPlaceholder() { return FW_TR("Each game's progress appears here once a run starts."); }
+
 // `shown`: for the page (translated); otherwise for the activity log (English).
 QString modeNote(const QJsonObject& pssr2, bool shown = false)
 {
@@ -220,12 +223,14 @@ public:
             p->setFont(tf);
             p->setPen(row->game.title.isEmpty() ? color::fg_4 : color::fg_0);
             const QString title = row->game.title.isEmpty() ? FW_TR("Unknown title") : row->game.title;
-            p->drawText(QRect(tr.left(), tr.top(), tr.width(), 20), Qt::AlignLeft | Qt::AlignVCenter,
-                        QFontMetrics(tf).elidedText(title, Qt::ElideRight, tr.width()));
+            // Read in the title's own direction: a cut Latin title ends in
+            // "…" at its end also right to left, not in front of its start.
+            const QString shownTitle = QFontMetrics(tf).elidedText(title, Qt::ElideRight, tr.width());
+            p->drawText(QRect(tr.left(), tr.top(), tr.width(), 20), naturalText(opt.widget, Qt::AlignLeft | Qt::AlignVCenter, shownTitle), shownTitle);
             p->setFont(font::caption());
             p->setPen(color::fg_4);
             const QString sub = row->game.path;
-            p->drawText(QRect(tr.left(), tr.top() + 21, tr.width(), 18), Qt::AlignLeft | Qt::AlignVCenter,
+            p->drawText(QRect(tr.left(), tr.top() + 21, tr.width(), 18), leftToRightText(opt.widget, Qt::AlignLeft | Qt::AlignVCenter),
                         QFontMetrics(font::caption()).elidedText(sub, Qt::ElideMiddle, tr.width()));
             break;
         }
@@ -250,9 +255,9 @@ public:
             break;
         }
         case BackportGameModel::StatusCol: {
-            // The library's badge. The column is as wide as its widest state
-            // (fitStatusColumn); a state longer than the column's limit is
-            // cut here, and the row's tooltip always has it whole.
+            // The library's badge. The column's width follows the table's
+            // (fitStatusColumn), not the states; a state longer than the
+            // column is cut here, and the row's tooltip always has it whole.
             const QRect sr = r.adjusted(kStatusPadLeft, 0, -kStatusPadRight, 0);
             const Tone tone = BackportGameModel::statusTone(*row);
             const QString icon = tone == Tone::Neutral ? QString() : defaultBadgeIcon(tone);
@@ -265,7 +270,15 @@ public:
                 const QFontMetrics fm(font::chip());
                 const QString status = i18n::translate(row->status);
                 const QString pct = text.mid(status.size());
-                shown = fm.elidedText(status, Qt::ElideRight, w - (full - fm.horizontalAdvance(text)) - fm.horizontalAdvance(pct)) + pct;
+                QString cut = fm.elidedText(status, Qt::ElideRight, w - (full - fm.horizontalAdvance(text)) - fm.horizontalAdvance(pct));
+                // "Patching, signing…", not "Patching, signing …": the "…" joins the last word.
+                if (cut.endsWith(u'…')) {
+                    cut.chop(1);
+                    while (!cut.isEmpty() && (cut.back().isSpace() || cut.back().isPunct()))
+                        cut.chop(1);
+                    cut += u'…';
+                }
+                shown = cut + pct;
             }
             paintBadge(*p, QRectF(sr.left(), r.center().y() - size::badge / 2.0, w, size::badge), shown, tone, icon);
             break;
@@ -507,7 +520,7 @@ BackportPage::BackportPage(AppContext& ctx, JobQueueModel&, LogModel&, LibrarySt
                                 .arg(QDir::toNativeSeparators(bp::folders().settingsPath), settingsError));
 
     auto* columns = new QWidget(this);
-    auto* layout = new TwoColumnLayout(columns, 348, 4000);
+    auto* layout = new TwoColumnLayout(columns, size::dock, 4000); // the aside every page has
     auto* left = new QWidget(columns);
     auto* ll = vbox(left, space::lg);
     auto* right = new QWidget(columns);
@@ -594,8 +607,9 @@ void BackportPage::buildLibraryCard()
     lh->addWidget(clear);
     sh->addWidget(links);
     sh->addStretch(1);
-    m_scanLabel = label({}, TextStyle::Caption, color::fg_4, sub);
-    m_scanLabel->setTextFormat(Qt::PlainText);
+    m_scanLabel = new ElideLabel({}, Qt::ElideRight, sub);
+    m_scanLabel->setFont(font::caption());
+    setTextColor(m_scanLabel, color::fg_4);
     m_scanLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     sh->addWidget(m_scanLabel);
     m_libraryCard->body()->addWidget(sub);
@@ -615,20 +629,18 @@ void BackportPage::buildLibraryCard()
     m_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_table->setMinimumHeight(380);
     m_table->setAccessibleName(FW_TR("Games"));
+    // Fixed widths, and a title and status that share the rest by the table's
+    // width alone (fitStatusColumn): a state that grows during a run never
+    // moves the PPSA, SDK and FW columns.
     auto* hh = m_table->horizontalHeader();
     hh->setSectionResizeMode(QHeaderView::Fixed);
-    hh->setSectionResizeMode(BackportGameModel::TitleCol, QHeaderView::Stretch);
-    hh->resizeSection(BackportGameModel::SelectCol, 40);
-    hh->resizeSection(BackportGameModel::CoverCol, 52);
-    hh->resizeSection(BackportGameModel::PpsaCol, 112);
-    hh->resizeSection(BackportGameModel::SdkCol, 60);
-    hh->resizeSection(BackportGameModel::FwCol, 96);
-    hh->resizeSection(BackportGameModel::StatusCol, BackportGameModel::kStatusColMin);
-    // The Status column follows its widest state.
-    connect(m_model, &QAbstractItemModel::rowsInserted, this, &BackportPage::fitStatusColumn);
-    connect(m_model, &QAbstractItemModel::rowsRemoved, this, &BackportPage::fitStatusColumn);
-    connect(m_model, &QAbstractItemModel::modelReset, this, &BackportPage::fitStatusColumn);
-    connect(m_model, &QAbstractItemModel::dataChanged, this, &BackportPage::fitStatusColumn);
+    hh->setSectionResizeMode(BackportGameModel::StatusCol, QHeaderView::Stretch);
+    hh->resizeSection(BackportGameModel::SelectCol, 36);
+    hh->resizeSection(BackportGameModel::CoverCol, 48);
+    hh->resizeSection(BackportGameModel::PpsaCol, 104); // "version unknown" under the ID
+    hh->resizeSection(BackportGameModel::SdkCol, 56);
+    hh->resizeSection(BackportGameModel::FwCol, 96);    // "Required FW", "Benötigte FW"
+    hh->resizeSection(BackportGameModel::TitleCol, BackportGameModel::kTitleColMin);
     m_table->viewport()->installEventFilter(this);
     hh->setSectionsClickable(true);
     hh->setHighlightSections(false);
@@ -641,6 +653,7 @@ void BackportPage::buildLibraryCard()
     m_libraryCard->body()->addWidget(m_emptyDrop);
     m_emptyText = label({}, TextStyle::Body, color::fg_3, m_libraryCard);
     m_emptyText->setAlignment(Qt::AlignCenter);
+    m_emptyText->setWordWrap(true);
     m_emptyText->setMinimumHeight(120);
     m_libraryCard->body()->addWidget(m_emptyText);
 
@@ -733,7 +746,7 @@ void BackportPage::buildProgressCard()
     auto* row = new QWidget(card);
     auto* rh = hbox(row, space::md);
     m_bar = new ProgressBar(row);
-    m_percent = monoLabel(QStringLiteral("0%"), row, color::fg_0);
+    m_percent = monoLabel({}, row, color::fg_0); // a share once something runs
     m_percent->setMinimumWidth(QFontMetrics(font::mono()).horizontalAdvance(QStringLiteral("100%")) + 4);
     m_percent->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     rh->addWidget(m_bar, 1);
@@ -741,14 +754,17 @@ void BackportPage::buildProgressCard()
     card->body()->addWidget(row);
     auto* labels = new QWidget(card);
     auto* lh = hbox(labels, space::md);
-    // Game titles and the engine's stage names: plain text, whatever they hold.
-    m_current = label(FW_TR("Idle"), TextStyle::Body, color::fg_1, labels);
-    m_current->setTextFormat(Qt::PlainText);
-    m_stage = label({}, TextStyle::Caption, color::accent_hi, labels);
-    m_stage->setTextFormat(Qt::PlainText);
+    // Game titles and the engine's stage names: plain text, whatever they
+    // hold, cut with "…" (the whole text in the tooltip) when the card is narrow.
+    m_current = new ElideLabel(progressPlaceholder(), Qt::ElideRight, labels);
+    m_current->setFont(font::body());
+    setTextColor(m_current, color::fg_1);
+    m_stage = new ElideLabel({}, Qt::ElideRight, labels);
+    m_stage->setFont(font::caption());
+    setTextColor(m_stage, color::accent_hi);
     m_stage->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    lh->addWidget(m_current, 1);
-    lh->addWidget(m_stage);
+    lh->addWidget(m_current, 3);
+    lh->addWidget(m_stage, 2);
     card->body()->addWidget(labels);
 
     // Activity
@@ -768,6 +784,8 @@ void BackportPage::buildProgressCard()
     ah->addWidget(clear);
     act->setTitle(FW_TR("Activity"), actTools);
     m_modeLine = label({}, TextStyle::Caption, color::fg_4, act);
+    m_modeLine->setWordWrap(true); // with every option on it is long
+    keepWrappedHeight(m_modeLine);
     act->body()->addWidget(m_modeLine);
     m_logBox = new QTextEdit(act);
     keepLeftToRight(m_logBox); // log, code or hex: left to right in any language
@@ -779,6 +797,8 @@ void BackportPage::buildProgressCard()
     m_logBox->setLineWrapMode(QTextEdit::WidgetWidth);
     m_logBox->setStyleSheet(QStringLiteral("QTextEdit{background:%1;border:1px solid %2;border-radius:10px;padding:6px 8px;}")
                                 .arg(hex(color::field_bg), hex(color::border_2)));
+    // An empty well says what will come into it (also after Clear).
+    m_logBox->setPlaceholderText(FW_TR("Each run's steps and results appear here."));
     act->body()->addWidget(m_logBox);
     m_openOutput->setEnabled(false);
     m_retry->setEnabled(false);
@@ -870,11 +890,17 @@ void BackportPage::buildSideColumn(QVBoxLayout* into)
         connect(s, &QAbstractButton::toggled, this, [this](bool) { updateModeLine(); });
     into->addWidget(opts);
 
-    // ---- Black screen tip
+    // ---- Black screen tip: the fix in one sentence; why, and what to keep, in the details.
     auto* notice = new InfoBar(Tone::Warn, this);
+    notice->setObjectName(QStringLiteral("black-screen-tip"));
     notice->setTitle(FW_TR("Black screen on FW 5.00+?"));
-    notice->setMessage(i18n::translate(kBlackScreenNotice));
-    notice->setToolTip(tip(kSdkTip));
+    notice->setMessage(FW_TR("Set Target SDK to 5 or higher and backport the unmodified game again."));
+    notice->setToolTip(tip(kBlackScreenNotice));
+    connect(notice->addLink(FW_TR("Show details")), &Link::activated, this, [this] {
+        Sheet::message(window(), FW_TR("Black screen on FW 5.00+?"),
+                       i18n::translate(kBlackScreenNotice) + QStringLiteral("\n\n") + i18n::translate(kSdkTip), Sheet::Icon::Info,
+                       FW_TR("OK"), Qt::PlainText);
+    }, Qt::QueuedConnection);
     into->addWidget(notice);
 
     // ---- Backups & support
@@ -1106,6 +1132,14 @@ void BackportPage::saveDestinations()
     persistSettings(keys);
 }
 
+// "Last scan 14:02" at the end of the search row: whole when it is short,
+// cut only when it is long (a count of folders read) and the row is full.
+void BackportPage::setScanText(const QString& text)
+{
+    m_scanLabel->setFullText(text);
+    m_scanLabel->setMinimumWidth(std::min(m_scanLabel->fontMetrics().horizontalAdvance(text) + 6, 140));
+}
+
 void BackportPage::openPath(const QString& path)
 {
     if (path.isEmpty())
@@ -1213,7 +1247,8 @@ void BackportPage::updateButtons()
     m_rescanBtn->setEnabled(!busy && !isScanning());
     m_addBtn->setEnabled(!busy);
     m_rootsBtn->setEnabled(!busy);
-    for (QWidget* w : std::initializer_list<QWidget*>{m_sdk, m_apply, m_proFix, m_proBuild})
+    // The destinations too: a run keeps the folders its check approved.
+    for (QWidget* w : std::initializer_list<QWidget*>{m_sdk, m_apply, m_proFix, m_proBuild, m_outField, m_bakField})
         w->setEnabled(!busy);
     m_rootsBtn->setText(FW_TR("Locations (%1)").arg(m_settings.scanRoots.size()));
     updateStartTip();
@@ -1284,7 +1319,7 @@ void BackportPage::updateLibraryState()
 QString BackportPage::statusContext() const
 {
     if (isRunning())
-        return m_current->text();
+        return m_current->fullText();
     return QStringLiteral("PS5 Backport %1 \u00b7 %2").arg(QLatin1String(bp::kEngineVersion), m_engineBadge->text());
 }
 
@@ -1401,10 +1436,26 @@ bool BackportPage::engineUsable()
     return true;
 }
 
-// The badge between runs.
+// The badge between runs (and after a screenshot state): what is known of the engine.
 void BackportPage::showEngineState()
 {
-    setState(m_engine == Engine::Ready ? FW_TR("Ready") : FW_TR("Not checked"), m_engine == Engine::Ready ? Tone::Ok : Tone::Neutral);
+    switch (m_engine) {
+    case Engine::Ready:
+        setState(FW_TR("Ready"), Tone::Ok);
+        break;
+    case Engine::Preparing:
+        setState(FW_TR("Preparing engine…"), Tone::Info);
+        break;
+    case Engine::Missing:
+        setState(FW_TR("Engine missing"), Tone::Err);
+        break;
+    case Engine::Failed:
+        setState(FW_TR("Engine unavailable"), Tone::Err);
+        break;
+    case Engine::Unknown:
+        setState(FW_TR("Not checked"), Tone::Neutral);
+        break;
+    }
 }
 
 void BackportPage::offerInterruptedRestores()
@@ -1426,14 +1477,9 @@ void BackportPage::offerInterruptedRestores()
         if (!self)
             return;
         if (yes) {
-            // The question may have been open for a while: look again.
-            if (bp::foreignEngineRunning()) {
-                Sheet::message(window(), FW_TR("Restore"),
-                               FW_TR("PS5 Backport GUI is running. Close it, or let it finish, before restoring."), Sheet::Icon::Warning);
-                return;
-            }
-            // The backup run is the folder that holds the journal, as for a
-            // restore chosen by hand.
+            // The question may have been open for a while: runRestore() looks
+            // for the standalone program again. The backup run is the folder
+            // that holds the journal, as for a restore chosen by hand.
             const QString journal = row.value(QStringLiteral("journal")).toString();
             runRestore(QFileInfo(journal).isFile() ? QDir::toNativeSeparators(QFileInfo(journal).absolutePath())
                                                    : row.value(QStringLiteral("backup_dir")).toString());
@@ -1534,7 +1580,7 @@ void BackportPage::rescan()
     m_model->clear();
     clearCoverCache(); // icons may have changed on disk since the last scan
     setScanning(true);
-    m_scanLabel->setText(FW_TR("Scanning\u2026"));
+    setScanText(FW_TR("Scanning\u2026"));
     updateLibraryState();
     const QStringList roots = m_settings.scanRoots;
     if (roots.isEmpty()) {
@@ -1555,7 +1601,7 @@ void BackportPage::rescan()
         const QStringList games = bp::discoverGames(roots, depth, excludes, cancel.get());
         QMetaObject::invokeMethod(qApp, [self, gen, n = games.size()] {
             if (self && gen == self->m_scanGen)
-                self->m_scanLabel->setText(n == 1 ? FW_TR("Reading 1 game folder…")
+                self->setScanText(n == 1 ? FW_TR("Reading 1 game folder…")
                                                   : FW_TR("Reading %1 game folders…").arg(n));
         });
         int count = 0;
@@ -1611,7 +1657,7 @@ void BackportPage::onScanFinished(quint64 gen, int count)
         return;
     // Only the scan ends here: a run that was started meanwhile goes on.
     setScanning(false);
-    m_scanLabel->setText(FW_TR("Last scan %1").arg(QTime::currentTime().toString(QStringLiteral("HH:mm"))));
+    setScanText(FW_TR("Last scan %1").arg(QTime::currentTime().toString(QStringLiteral("HH:mm"))));
     if (!m_settings.scanRoots.isEmpty())
         log(QStringLiteral("INFO"), count == 1 ? QStringLiteral("Found 1 game folder") : QStringLiteral("Found %1 game folders").arg(count));
     if (m_proxy->sortColumn() >= 0)
@@ -1633,7 +1679,9 @@ void BackportPage::syncLibraryStatus()
         backported.insert(r.game.key, r.game.alreadyBackported || !r.game.appliedRecord.isEmpty());
     std::vector<LibraryGame> games = m_library.games();
     bool changed = false;
-    const QString mark = QStringLiteral("Backported");
+    // Stored in English (library.json keeps it across languages); the Library
+    // shows it through i18n::translate().
+    const QString mark = FW_TR_NOOP("Backported");
     for (LibraryGame& g : games) {
         const auto it = backported.constFind(bp::normKey(g.info.folder));
         if (it == backported.constEnd())
@@ -1735,7 +1783,7 @@ void BackportPage::clearList()
         m_scanCancel->store(true);
     if (isScanning()) {
         setScanning(false);
-        m_scanLabel->clear();
+        setScanText({});
     }
     reloadSettings(bp::ScanRootsKey);
     m_settings.scanRoots.clear();
@@ -1808,6 +1856,8 @@ void BackportPage::startRun(const QStringList& keysIn)
     for (const QString& k : keys)
         dirs << m_model->rowByKey(k)->game.path;
     const QString out = m_settings.outputDir, bak = m_settings.backupDir;
+    m_runOutputDir = out;
+    m_runBackupDir = bak;
     QPointer<BackportPage> self(this);
     (void)QtConcurrent::run([self, out, bak, dirs, keys] {
         const bp::Preflight pf = bp::preflight(out, bak, dirs);
@@ -1859,7 +1909,7 @@ void BackportPage::preflightDone(const bp::Preflight& pf, const QStringList& key
                                       "Before anything is written, the original of every file that will be replaced is copied to its "
                                       "own folder under:\n%2\nand verified. Only backport files are written into the game folders; "
                                       "nothing else in them is touched.")
-                           .arg(shown.join(u'\n'), m_settings.backupDir);
+                           .arg(shown.join(u'\n'), m_runBackupDir);
         if (m_proBuild->isChecked())
             text += QStringLiteral("\n\n")
                 + FW_TR("PS5 Pro build is ON: games that declare PS5 Pro support get Pro-only files (eboot.bin, and for "
@@ -1914,7 +1964,7 @@ void BackportPage::beginRun(const QStringList& keys)
     if (m_apply->isChecked())
         msg += QStringLiteral(", apply to game folders");
     log(QStringLiteral("INFO"), msg);
-    m_lastOutputRoot = m_settings.outputDir;
+    m_lastOutputRoot = m_runOutputDir;
     runNext();
 }
 
@@ -1963,7 +2013,7 @@ void BackportPage::runNext()
         r->status = FW_TR_NOOP("Processing");
         r->tone = QStringLiteral("busy");
         m_model->rowChanged(key);
-        m_current->setText(FW_TR("Processing: %1 (%2)  \u2014  game %3 of %4").arg(nameOr(*r), idOr(*r, FW_TR("no PPSA"))).arg(m_runIndex + 1).arg(total));
+        m_current->setFullText(FW_TR("Processing: %1 (%2)  \u2014  game %3 of %4").arg(nameOr(*r), idOr(*r, FW_TR("no PPSA"))).arg(m_runIndex + 1).arg(total));
         job = {{QStringLiteral("cmd"), QStringLiteral("backport")},
                {QStringLiteral("game"), QJsonObject{{QStringLiteral("path"), r->game.path},
                                                      {QStringLiteral("title_id"), r->game.titleId},
@@ -1971,8 +2021,8 @@ void BackportPage::runNext()
                                                      {QStringLiteral("version"), r->game.version},
                                                      {QStringLiteral("sdk"), r->game.sdk},
                                                      {QStringLiteral("fw"), r->game.fw}}},
-               {QStringLiteral("output_root"), m_settings.outputDir},
-               {QStringLiteral("backup_root"), m_settings.backupDir},
+               {QStringLiteral("output_root"), m_runOutputDir},
+               {QStringLiteral("backup_root"), m_runBackupDir},
                {QStringLiteral("options"), m_runOptions}};
     } else {
         const Item& it = m_items[size_t(m_runIndex)];
@@ -1985,7 +2035,7 @@ void BackportPage::runNext()
         QString kind = i18n::translate(kinds.value(int(m_kind)));
         if (m_kind == Kind::Sdk)
             kind = kind.arg(m_sdkPair);
-        m_current->setText(FW_TR("%1: %2  \u2014  %3 of %4").arg(kind, it.name).arg(m_runIndex + 1).arg(total));
+        m_current->setFullText(FW_TR("%1: %2  \u2014  %3 of %4").arg(kind, it.name).arg(m_runIndex + 1).arg(total));
         if (auto* r = m_model->rowByKey(it.rowKey)) {
             m_rowSavedStatus = r->status;
             m_rowSavedTone = r->tone;
@@ -2028,7 +2078,7 @@ void BackportPage::onProgress(const QJsonObject& ev)
     const double frac = total > 0 ? (m_runIndex + pct / 100.0) / total : 0;
     m_bar->setFraction(frac);
     m_percent->setText(QStringLiteral("%1%").arg(int(frac * 100)));
-    m_stage->setText(label + QStringLiteral("\u2026"));
+    m_stage->setFullText(label + QStringLiteral("\u2026"));
     QString who;
     if (const BackportRow* r = m_model->rowByKey(m_runRowKey))
         who = r->game.titleId.isEmpty() ? r->game.title : r->game.titleId;
@@ -2176,8 +2226,8 @@ void BackportPage::runFinished()
         m_bar->setFraction(1);
         m_percent->setText(QStringLiteral("100%"));
     }
-    m_current->setText(cancelled ? FW_TR("Run cancelled") : FW_TR("Run complete"));
-    m_stage->clear();
+    m_current->setFullText(cancelled ? FW_TR("Run cancelled") : FW_TR("Run complete"));
+    m_stage->setFullText({});
     updateButtons();
     showEngineState();
     int done = 0;
@@ -2275,7 +2325,7 @@ void BackportPage::batchFinished()
     m_kind = Kind::Backport;
     updateButtons();
     showEngineState();
-    m_stage->clear();
+    m_stage->setFullText({});
     if (cancelled) {
         static const QHash<int, QString> what = {{int(Kind::Sdk), QStringLiteral("SDK rebuild")},
                                                  {int(Kind::ProBuild), QStringLiteral("PS5 Pro build")},
@@ -2294,7 +2344,7 @@ void BackportPage::batchFinished()
         const int left = int(m_items.size()) - made;
         const QString summary = QStringLiteral("%1 done, %2 not made").arg(made).arg(left);
         const QString shownCancelled = i18n::translate(cancelledText.value(int(kind)));
-        m_current->setText(shownCancelled);
+        m_current->setFullText(shownCancelled);
         log(QStringLiteral("WARN"), QStringLiteral("%1 cancelled: %2").arg(what.value(int(kind)), summary));
         emit toastRequested(Tone::Warn, shownCancelled, FW_TR("%1 done, %2 not made.").arg(made).arg(left));
         return;
@@ -2302,7 +2352,7 @@ void BackportPage::batchFinished()
     m_bar->setFraction(m_batchResults.empty() ? 0 : 1);
     m_percent->setText(m_batchResults.empty() ? QStringLiteral("0%") : QStringLiteral("100%"));
     if (kind == Kind::Restore) {
-        m_current->setText(FW_TR("Restore finished"));
+        m_current->setFullText(FW_TR("Restore finished"));
         if (m_batchResults.empty())
             return;
         const QJsonObject r = m_batchResults.front().second;
@@ -2327,7 +2377,7 @@ void BackportPage::batchFinished()
     static const QHash<int, QString> doneLabel = {{int(Kind::Sdk), FW_TR_NOOP("SDK rebuild finished")},
                                                   {int(Kind::ProBuild), FW_TR_NOOP("PS5 Pro build finished")},
                                                   {int(Kind::Fakelib), FW_TR_NOOP("AMPR / PlayGo switch finished")}};
-    m_current->setText(i18n::translate(doneLabel.value(int(kind))));
+    m_current->setFullText(i18n::translate(doneLabel.value(int(kind))));
     QStringList lines;
     int ok = 0, failed = 0;
     for (const auto& [item, res] : m_batchResults) {
@@ -2428,8 +2478,8 @@ void BackportPage::rebuildWithSdk(const QStringList& keys)
             continue;
         items.push_back({{{QStringLiteral("cmd"), QStringLiteral("sdk")},
                           {QStringLiteral("pair"), pair},
-                          {QStringLiteral("package"), zip},
-                          {QStringLiteral("output_root"), outputRoot().isEmpty() ? QFileInfo(zip).absolutePath() : outputRoot()},
+                          {QStringLiteral("package"), QDir::toNativeSeparators(zip)},
+                          {QStringLiteral("output_root"), outputRoot().isEmpty() ? QDir::toNativeSeparators(QFileInfo(zip).absolutePath()) : outputRoot()},
                           {QStringLiteral("title_id"), r->game.titleId},
                           {QStringLiteral("title"), r->game.title},
                           {QStringLiteral("version"), r->game.version},
@@ -2723,6 +2773,13 @@ void BackportPage::runRestore(const QString& backupRun)
 {
     if (!idleForNewWork() || !engineUsable())
         return;
+    // The standalone program may be applying or restoring in this very game
+    // folder (it shares the ledger and the backups): never two at once.
+    if (bp::foreignEngineRunning()) {
+        Sheet::message(window(), FW_TR("Restore"),
+                       FW_TR("PS5 Backport GUI is running. Close it, or let it finish, before restoring."), Sheet::Icon::Warning);
+        return;
+    }
     log(QStringLiteral("INFO"), QStringLiteral("Restoring originals from %1").arg(backupRun));
     startBatch(Kind::Restore, {{{{QStringLiteral("cmd"), QStringLiteral("restore")}, {QStringLiteral("backup_run"), backupRun}},
                                 QString(), QFileInfo(backupRun).fileName()}});
@@ -2903,7 +2960,9 @@ void BackportPage::showDetails(const QString& key)
         s->addButton(FW_TR("Open backup"), Sheet::Role::Safe);
         bakIdx = n++;
     }
-    s->addButton(FW_TR("Close"), Sheet::Role::Primary);
+    // An information sheet: Close is the default and the answer to Esc (Esc
+    // used to answer the first safe button, "Open game folder").
+    s->addButton(FW_TR("Close"), Sheet::Role::Close);
     const QString path = r->game.path;
     const int choice = s->exec();
     if (choice == 0)
@@ -3008,31 +3067,33 @@ void BackportPage::reportProblem()
     QDesktopServices::openUrl(url);
 }
 
-// As wide as the widest state in the list, within the column's limits and as
-// long as the title keeps its room (a state that does not fit is cut in its
-// cell; the row's tooltip has it whole).
+// The title and the status share what the fixed columns leave: half each
+// (the status within its limits), the status column stretching to the edge.
+// Only the table's width decides, never the states in it, so no column moves
+// while a run changes them; a state longer than its cell is cut there (the
+// row's tooltip has it whole).
 void BackportPage::fitStatusColumn()
 {
-    int w = BackportGameModel::kStatusColMin;
-    for (const BackportRow& r : m_model->rows())
-        w = std::max(w, BackportGameModel::statusWidth(r));
-    int others = 0;
+    int fixed = 0;
     for (int c = 0; c < BackportGameModel::ColumnCount; ++c)
         if (c != BackportGameModel::TitleCol && c != BackportGameModel::StatusCol && !m_table->isColumnHidden(c))
-            others += m_table->columnWidth(c);
-    const int room = m_table->viewport()->width() - others - BackportGameModel::kTitleColMin;
-    w = std::clamp(w, BackportGameModel::kStatusColMin, std::max(BackportGameModel::kStatusColMin, std::min(BackportGameModel::kStatusColMax, room)));
-    if (m_table->columnWidth(BackportGameModel::StatusCol) != w)
-        m_table->setColumnWidth(BackportGameModel::StatusCol, w);
+            fixed += m_table->columnWidth(c);
+    const int shared = m_table->viewport()->width() - fixed;
+    const int status = std::clamp(shared / 2, int(BackportGameModel::kStatusColMin), int(BackportGameModel::kStatusColMax));
+    const int title = std::max(int(BackportGameModel::kTitleColMin), shared - status);
+    if (m_table->columnWidth(BackportGameModel::TitleCol) != title)
+        m_table->setColumnWidth(BackportGameModel::TitleCol, title);
 }
 
 bool BackportPage::eventFilter(QObject* watched, QEvent* event)
 {
     if (watched == m_table->viewport() && event->type() == QEvent::Resize) {
+        // A table too narrow for every column and the title's and status's
+        // minimum gives up the cover art first, then the firmware columns.
         const int w = m_table->viewport()->width();
-        m_table->setColumnHidden(BackportGameModel::FwCol, w < 720);
-        m_table->setColumnHidden(BackportGameModel::SdkCol, w < 620);
-        m_table->setColumnHidden(BackportGameModel::CoverCol, w < 520);
+        m_table->setColumnHidden(BackportGameModel::CoverCol, w < 670);
+        m_table->setColumnHidden(BackportGameModel::FwCol, w < 620);
+        m_table->setColumnHidden(BackportGameModel::SdkCol, w < 525);
         fitStatusColumn();
     }
     return Page::eventFilter(watched, event);
@@ -3059,6 +3120,7 @@ QStringList BackportPage::demoStates() const
 
 void BackportPage::applyDemoState(const QString& name)
 {
+    leaveDemoRun();
     m_demo = true;
     ++m_scanGen;
     if (m_scanCancel)
@@ -3099,25 +3161,46 @@ void BackportPage::applyDemoState(const QString& name)
     m_engineBar->hide();
     m_engineLine->setText(QStringLiteral("PS5 Backport engine 0.3.4 by Deckerr97  \u00b7  backend 3e08eda5-914d90065d"));
     if (name == QLatin1String("running")) {
+        // The run state of a real run (Cancel in the header, the run's line in
+        // the status bar), entered through its one gate; no worker is started
+        // and nothing is written (m_demo).
+        if (isIdle() && enterRunning(Kind::Backport)) {
+            m_demoRun = true;
+            setState(FW_TR("Running"), Tone::Info);
+        }
         m_bar->setFraction(0.42);
         m_percent->setText(QStringLiteral("42%"));
-        m_current->setText(QStringLiteral("Processing: Ghost Song (PPSA09232)  \u2014  game 2 of 3"));
-        m_stage->setText(QStringLiteral("Patching, signing and packaging\u2026"));
+        // The live run's words (runNext()); the stage is the engine's own text.
+        m_current->setFullText(FW_TR("Processing: %1 (%2)  \u2014  game %3 of %4").arg(QStringLiteral("Ghost Song"), QStringLiteral("PPSA09232")).arg(2).arg(3));
+        m_stage->setFullText(QStringLiteral("Patching, signing and packaging\u2026"));
         log(QStringLiteral("INFO"), QStringLiteral("Starting 3 games: SDK 4 (FW 4.00+)"));
         log(QStringLiteral("OK"), QStringLiteral("ONE PIECE Pirate Warriors 4 (PPSA27500): Done \u2014 Backport files created. Not yet tested on a console."));
         log(QStringLiteral("OK"), QStringLiteral("    Backport ZIP: D:\\Backports\\FW 4xx PPSA27500 ONE PIECE (01.003.000) backport files.zip"));
         log(QStringLiteral("INFO"), QStringLiteral("PPSA09232: Patching, signing and packaging"));
     }
-    m_scanLabel->setText(QStringLiteral("Last scan 14:02"));
+    setScanText(FW_TR("Last scan %1").arg(QTime(14, 2).toString(QStringLiteral("HH:mm")))); // the live line's words
     updateButtons();
     updateLibraryState();
     updateStats();
+    emit statusContextChanged(); // the run's line, as a progress event sends it
+}
+
+// A running demo goes back to idle the way a run ends: through setRunState(),
+// then the engine badge instead of "Running".
+void BackportPage::leaveDemoRun()
+{
+    if (!m_demoRun)
+        return;
+    m_demoRun = false;
+    setRunState(RunState::Idle);
+    showEngineState();
 }
 
 void BackportPage::clearDemoState()
 {
     if (!m_demo)
         return;
+    leaveDemoRun();
     m_model->clear();
     m_settings = mayReadSharedFiles() ? bp::loadSettings() : bp::Settings();
     m_suppressSave = true;
@@ -3125,13 +3208,15 @@ void BackportPage::clearDemoState()
     m_bakField->setPath(m_settings.backupDir);
     m_suppressSave = false;
     m_demo = false;
+    showEngineState(); // every demo state shows the badge as "Ready"
     m_bar->setFraction(0);
-    m_percent->setText(QStringLiteral("0%"));
-    m_current->setText(FW_TR("Idle"));
-    m_stage->clear();
+    m_percent->clear();
+    m_current->setFullText(progressPlaceholder());
+    m_stage->setFullText({});
     updateButtons();
     updateLibraryState();
     updateStats();
+    emit statusContextChanged();
 }
 
 } // namespace fw::pages

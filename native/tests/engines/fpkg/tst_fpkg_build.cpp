@@ -13,10 +13,15 @@
 #include "engines/fpkg/PackageHeader.h"
 #include "engines/fpkg/PubCmd.h"
 #include "engines/fpkg/SourceStager.h"
+#include "engines/fpkg/Toolchain.h"
 
 #include "core/ProcessRunner.h"
+#include "support/ProgressAudit.h"
 
+#include <QCryptographicHash>
 #include <QDirIterator>
+#include <QScopeGuard>
+#include <QSet>
 #include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -146,8 +151,11 @@ class TstFpkgBuild : public QObject {
         std::vector<ProgressSnapshot> snapshots;
     };
 
+    // `audit` watches the progress and gets the last state at the end;
+    // `watch` sees every report on the job's thread (to act at a chosen moment).
     RunResult run(Job& job, const QVariantMap& extra = {}, const CancellationToken& token = {},
-                  const QString& jobId = QString())
+                  const QString& jobId = QString(), fwtest::ProgressAudit* audit = nullptr,
+                  const std::function<void(const ProgressSnapshot&)>& watch = {})
     {
         RunResult rr;
         QVariantMap settings = baseSettings();
@@ -162,11 +170,17 @@ class TstFpkgBuild : public QObject {
         std::mutex m;
         ProgressReporter reporter(
             [&](const ProgressSnapshot& s) {
+                if (audit)
+                    audit->report(s);
+                if (watch)
+                    watch(s);
                 std::lock_guard lock(m);
                 rr.snapshots.push_back(s);
             },
             0);
-        reporter.setPhases(job.phases());
+        if (audit)
+            audit->watch(&reporter);
+        reporter.setPhases(job.phases(), job.phaseWeights(values));
         const int n = ++m_counter;
         const QString temp = dir(QStringLiteral("jobtemp-%1").arg(n));
         JobContext ctx;
@@ -177,6 +191,11 @@ class TstFpkgBuild : public QObject {
         ctx.settings = values;
         ctx.tempDir = temp;
         rr.result = job.run(ctx);
+        if (audit) {
+            reporter.finish();
+            audit->finish(reporter.snapshot(), rr.result.ok() && rr.result->verification != Verification::Failed);
+            audit->watch(nullptr);
+        }
         QDir(temp).removeRecursively(); // what the queue does
         return rr;
     }
@@ -446,6 +465,38 @@ private slots:
                             [](const QString& w) { return w.contains(QStringLiteral("img_verify")); }));
     }
 
+    // What img_verify says about a package built from a dump: the SDK version
+    // messages are the usual ones when the toolkit wrote SDK version 0 (with a
+    // warning about that), and real problems when the package carries a real
+    // SDK version (fix15). The SDK line has no [Info] prefix.
+    void verifyVerdictFollowsPackagedSdk()
+    {
+        EnvVar mode("FAKE_PUBCMD_VERIFY", "dump");
+        const QString game = dir(QStringLiteral("vsdk/game"));
+        QVERIFY(makeSimpleDump(game));
+        const auto hasWarning = [](const JobOutcome& o, const QString& text) {
+            return std::any_of(o.warnings.begin(), o.warnings.end(), [&](const QString& w) { return w.contains(text); });
+        };
+        {
+            auto job = buildJob(game, m_root.filePath(QStringLiteral("vsdk/out0")));
+            auto rr = run(job);
+            QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+            QCOMPARE(rr.result->verification, Verification::Passed);
+            QVERIFY(rr.result->verificationDetail.contains(QStringLiteral("SDK version fields")));
+            QVERIFY(hasWarning(*rr.result, QStringLiteral("SDK version 0")));
+        }
+        {
+            EnvVar sdk("FAKE_PUBCMD_VERIFY_SDK", "6.00.00.00-00.00.00.0.0.");
+            auto job = buildJob(game, m_root.filePath(QStringLiteral("vsdk/out6")));
+            auto rr = run(job);
+            QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+            QCOMPARE(rr.result->verification, Verification::Inconclusive);
+            QVERIFY(rr.result->verificationDetail.contains(QStringLiteral("SDK version must be")));
+            QVERIFY(!hasWarning(*rr.result, QStringLiteral("SDK version 0")));
+            QVERIFY(hasWarning(*rr.result, QStringLiteral("Required System Software version")));
+        }
+    }
+
     // "Overwrite" deletes the old package only after img_verify passed; when it
     // does not, the old one is back under its name and the new one is kept.
     void overwriteKeepsTheOldPackageUntilVerified()
@@ -482,6 +533,225 @@ private slots:
         QVERIFY(!asideLeft());
         QVERIFY(std::any_of(rr.result->warnings.begin(), rr.result->warnings.end(),
                             [](const QString& w) { return w.contains(QStringLiteral("was replaced")); }));
+    }
+
+    // GitHub #97: Cancel while img_verify checks the finished package keeps
+    // it: the job does not fail, and it says the package is not verified.
+    // Under "Overwrite" the new package has not passed the check the old one
+    // waits for, so the old one gets its name back and the new one is kept as
+    // "name (1).pkg". A problem img_verify reported before the cancel still
+    // counts. No SHA-256 is computed after the cancel.
+    void cancelDuringImgVerifyKeepsThePackage_data()
+    {
+        QTest::addColumn<QByteArray>("mode");
+        QTest::addColumn<int>("verdict");
+        QTest::newRow("nothing reported yet") << QByteArray("slow") << int(Verification::Skipped);
+        QTest::newRow("a problem reported first") << QByteArray("slowfail") << int(Verification::Inconclusive);
+    }
+    void cancelDuringImgVerifyKeepsThePackage()
+    {
+        QFETCH(QByteArray, mode);
+        QFETCH(int, verdict);
+        const QString game = dir(QStringLiteral("vcancel/game"));
+        const QString out = dir(QStringLiteral("vcancel/out"));
+        QVERIFY(makeSimpleDump(game));
+        put(out, kStem + QStringLiteral(".pkg"), "previous good");
+        const QString started = m_root.filePath(QStringLiteral("vcancel/verify.started"));
+        QFile::remove(started);
+        EnvVar slow("FAKE_PUBCMD_VERIFY", mode);
+        EnvVar marker("FAKE_PUBCMD_VERIFY_STARTED", started.toUtf8());
+        auto job = buildJob(game, out);
+        CancellationSource cancel;
+        std::atomic<bool> finished{false};
+        std::thread canceller([&] {
+            while (!finished && !QFileInfo::exists(started))
+                QThread::msleep(25);
+            QThread::msleep(300); // the line printed before the marker has been read
+            cancel.cancel(QStringLiteral("test"));
+        });
+        QElapsedTimer timer;
+        timer.start();
+        auto rr = run(job, {{keys::kOutputConflict, QStringLiteral("overwrite")}, {keys::kComputeSha256, true}}, cancel.token());
+        finished = true;
+        canceller.join();
+        QVERIFY2(QFileInfo::exists(started), "img_verify never ran");
+        QVERIFY2(timer.elapsed() < 9000, "img_verify was not stopped"); // it idles for 10 s
+        QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+        QCOMPARE(int(rr.result->verification), verdict);
+        if (verdict == int(Verification::Skipped)) {
+            QVERIFY2(rr.result->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(rr.result->verificationDetail));
+            QVERIFY(rr.result->details.value(QStringLiteral("verificationCancelled")).toBool());
+        } else {
+            QVERIFY2(rr.result->verificationDetail.contains(QStringLiteral("Integrity check failed")),
+                     qPrintable(rr.result->verificationDetail));
+        }
+        const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
+        const QString kept = QDir(out).filePath(kStem + QStringLiteral(" (1).pkg"));
+        QCOMPARE(readAll(pkg), QByteArray("previous good"));
+        QCOMPARE(rr.result->outputs, QStringList{kept});
+        QVERIFY(checkPackageHeader(kept).ok); // the new package
+        QVERIFY(std::any_of(rr.result->warnings.begin(), rr.result->warnings.end(),
+                            [](const QString& w) { return w.contains(QStringLiteral("was put back")); }));
+        QVERIFY(!rr.result->details.contains(QStringLiteral("sha256")));
+        for (const QString& f : filesIn(out))
+            QVERIFY2(!f.contains(QStringLiteral(".fw-replaced")) && !f.contains(QStringLiteral(".partial")), qPrintable(f));
+    }
+
+    // A cancel while the placed package is hashed leaves out the hash only:
+    // the package is finished and checked (an old one it replaced is gone), so
+    // the job ends with its outcome, and the project files are cleaned up as
+    // after any finished build.
+    void cancelDuringSha256KeepsTheOutcome()
+    {
+        const QString game = dir(QStringLiteral("shacancel/game"));
+        const QString out = dir(QStringLiteral("shacancel/out"));
+        QVERIFY(makeSimpleDump(game));
+        put(out, kStem + QStringLiteral(".pkg"), "previous good");
+        auto job = buildJob(game, out);
+        CancellationSource cancel;
+        bool cancelled = false;
+        auto rr = run(job, {{keys::kOutputConflict, QStringLiteral("overwrite")}, {keys::kComputeSha256, true}, {keys::kKeepIntermediate, false}},
+                      cancel.token(), QString(), nullptr, [&](const ProgressSnapshot& s) {
+                          if (s.phase == QLatin1String("Computing SHA-256") && !cancelled) {
+                              cancelled = true;
+                              cancel.cancel(QStringLiteral("test"));
+                          }
+                      });
+        QVERIFY(cancelled);
+        QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+        QCOMPARE(rr.result->verification, Verification::Passed);
+        const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
+        QCOMPARE(rr.result->outputs, QStringList{pkg});
+        QVERIFY(checkPackageHeader(pkg).ok);
+        QVERIFY(!rr.result->details.contains(QStringLiteral("sha256")));
+        QVERIFY(rr.result->summary.contains(kStem));
+        QVERIFY(logged(QStringLiteral("The SHA-256 was not computed because the job was cancelled.")));
+        QVERIFY2(!QFileInfo::exists(QDir(out).filePath(kStem + QStringLiteral(".gp5"))), "the project was not cleaned up");
+    }
+
+    // A "<stem>.partial.pkg" already in the output folder may be a finished
+    // package an earlier build had to keep there: the next build leaves it
+    // alone and packs under another name.
+    void anEarlierPartialPackageIsLeftAlone()
+    {
+        const QString game = dir(QStringLiteral("oldpartial/game"));
+        const QString out = dir(QStringLiteral("oldpartial/out"));
+        QVERIFY(makeSimpleDump(game));
+        const QString earlier = QDir(out).filePath(kStem + QStringLiteral(".partial.pkg"));
+        QVERIFY(put(out, QFileInfo(earlier).fileName(), "kept by an earlier build"));
+        QVERIFY(put(out, kStem + QStringLiteral(".partial-2.pkg.naps_metric.json"), "{}"));
+        auto job = buildJob(game, out);
+        auto rr = run(job);
+        QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+        const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
+        QCOMPARE(rr.result->outputs, QStringList{pkg});
+        QVERIFY(checkPackageHeader(pkg).ok);
+        QCOMPARE(readAll(earlier), QByteArray("kept by an earlier build"));
+        QCOMPARE(readAll(QDir(out).filePath(kStem + QStringLiteral(".partial-2.pkg.naps_metric.json"))), QByteArray("{}"));
+        QVERIFY(!QFileInfo::exists(QDir(out).filePath(kStem + QStringLiteral(".partial-3.pkg"))));
+        QVERIFY(logged(QStringLiteral("is left as it is")));
+        const QStringList argv = argvOf(invocations().value(0));
+        QVERIFY2(argv.value(argv.size() - 1).endsWith(kStem + QStringLiteral(".partial-3.pkg")), qPrintable(argv.join(u' ')));
+    }
+
+    // With only the header checked, img_verify does not read the SDK version
+    // back: a toolkit known by its files to be an older SDK Fix release (they
+    // write SDK version 0) gets the same warning.
+    void headerOnlyBuildWarnsAboutAnOlderToolkit()
+    {
+        const QString game = dir(QStringLiteral("sdk0/game"));
+        QVERIFY(makeSimpleDump(game));
+        const QString bin = QDir(m_tools).filePath(QStringLiteral("toolchain"));
+        for (const QString& e : sdkFixExtFiles())
+            QVERIFY(put(bin, QStringLiteral("ext/") + e, "helper"));
+        const auto warnsSdkZero = [](const JobOutcome& o) {
+            return std::any_of(o.warnings.begin(), o.warnings.end(), [](const QString& w) { return w.contains(QStringLiteral("SDK version 0")); });
+        };
+        const QVariantMap headerOnly{{keys::kPostVerify, QStringLiteral("headerOnly")}};
+        {
+            auto job = buildJob(game, m_root.filePath(QStringLiteral("sdk0/out-unknown")));
+            auto rr = run(job, headerOnly);
+            QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+            QVERIFY(!warnsSdkZero(*rr.result)); // not a release this app knows: nothing said
+        }
+        const auto sha256 = [](const QString& path) {
+            return QString::fromLatin1(QCryptographicHash::hash(readAll(path), QCryptographicHash::Sha256).toHex()).toUpper();
+        };
+        auto& table = const_cast<QList<SdkFixRelease>&>(sdkFixReleases());
+        table.append(SdkFixRelease{QStringLiteral("older stand-in"), sha256(QDir(bin).filePath(QStringLiteral("prospero-pub-cmd.exe"))),
+                                   sha256(QDir(bin).filePath(QStringLiteral("libScePubTools.dll"))), false});
+        const auto restore = qScopeGuard([&] { table.removeLast(); });
+        auto job = buildJob(game, m_root.filePath(QStringLiteral("sdk0/out-older")));
+        auto rr = run(job, headerOnly);
+        QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+        QVERIFY(warnsSdkZero(*rr.result));
+        table.last().recommended = true;
+        QVariantMap again = headerOnly;
+        again.insert(keys::kOutputConflict, QStringLiteral("overwrite"));
+        auto fine = run(job, again);
+        QVERIFY2(fine.result.ok(), qPrintable(fine.result.ok() ? QString() : fine.result.error().toLogString()));
+        QVERIFY(!warnsSdkZero(*fine.result));
+    }
+
+    // An "Overwrite" cut short after the old package was set aside (a power
+    // cut) left it as "<name>.fw-replaced" with nothing under its name: the
+    // next build of that package gives it its name back first.
+    void aPackageLeftSetAsideIsPutBackFirst()
+    {
+        const QString game = dir(QStringLiteral("aside/game"));
+        const QString out = m_root.filePath(QStringLiteral("aside/out"));
+        QVERIFY(makeSimpleDump(game));
+        const QString pkg = QDir(out).filePath(kStem + QStringLiteral(".pkg"));
+        const QString aside = pkg + QStringLiteral(".fw-replaced");
+        auto job = buildJob(game, out);
+        const auto warned = [](const JobOutcome& o, const QString& text) {
+            return std::any_of(o.warnings.begin(), o.warnings.end(), [&](const QString& w) { return w.contains(text); });
+        };
+        {
+            // "Overwrite" and img_verify does not pass: the old package is back
+            // under its name, the new one is kept beside it.
+            put(out, kStem + QStringLiteral(".pkg.fw-replaced"), "previous good");
+            EnvVar fail("FAKE_PUBCMD_VERIFY", "fail");
+            auto rr = run(job, {{keys::kOutputConflict, QStringLiteral("overwrite")}});
+            QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+            QCOMPARE(rr.result->verification, Verification::Inconclusive);
+            QCOMPARE(readAll(pkg), QByteArray("previous good"));
+            QVERIFY(!QFileInfo::exists(aside));
+            QCOMPARE(rr.result->outputs, QStringList{QDir(out).filePath(kStem + QStringLiteral(" (1).pkg"))});
+            QVERIFY(warned(*rr.result, QStringLiteral("was put back")));
+        }
+        {
+            // "Fail": the old package has its name again, so the new one does not
+            // take it, and the build is refused before anything is packed.
+            QVERIFY(QDir(out).removeRecursively());
+            put(out, kStem + QStringLiteral(".pkg.fw-replaced"), "previous good");
+            const auto packs = [&] {
+                const QList<QJsonObject> runs = invocations();
+                return std::count_if(runs.begin(), runs.end(),
+                                     [](const QJsonObject& o) { return argvOf(o).value(0) == QStringLiteral("img_create"); });
+            };
+            const auto packsBefore = packs();
+            auto rr = run(job, {{keys::kOutputConflict, QStringLiteral("fail")}});
+            QCOMPARE(errorOf(rr.result).code, ErrorCode::AlreadyExists);
+            QVERIFY2(errorOf(rr.result).message.contains(QStringLiteral("already exists in the output folder")),
+                     qPrintable(errorOf(rr.result).message));
+            QVERIFY2(errorOf(rr.result).detail.contains(QStringLiteral("was put back")), qPrintable(errorOf(rr.result).detail));
+            QCOMPARE(packs(), packsBefore);
+            QCOMPARE(readAll(pkg), QByteArray("previous good"));
+            QVERIFY(!QFileInfo::exists(aside));
+            QCOMPARE(filesIn(out), QStringList{kStem + QStringLiteral(".pkg")});
+        }
+        {
+            // A ".fw-replaced" next to a package that is there is not touched.
+            QVERIFY(QDir(out).removeRecursively());
+            put(out, kStem + QStringLiteral(".pkg"), "current");
+            put(out, kStem + QStringLiteral(".pkg.fw-replaced"), "older");
+            auto rr = run(job, {{keys::kOutputConflict, QStringLiteral("overwrite")}});
+            QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+            QVERIFY(checkPackageHeader(pkg).ok);
+            QCOMPARE(readAll(aside), QByteArray("older"));
+            QVERIFY(!warned(*rr.result, QStringLiteral("was put back")));
+        }
     }
 
     // The required integrity pass of the backport flow fails on an [Error]
@@ -917,6 +1187,61 @@ private slots:
         QVERIFY2(!ranWhilePaused, "img_create started while the job was paused");
     }
 
+    // The bar of a build runs once to the end of the work: the pre-scan is
+    // counted file by file, the SHA-256 of an update and its .remastered.pkg is
+    // one stage (entered once per file, the second file found it full), no
+    // stage is entered and left at once, and a stage the build skips (img_verify
+    // off, no SHA-256) takes no share, so the bar does not stop short of the end.
+    void progressRunsOnceThroughTheStages()
+    {
+        const QString base = dir(QStringLiteral("prog/base-game"));
+        QVERIFY(makeSimpleDump(base));
+        const QString basePkg = m_root.filePath(QStringLiteral("prog/base/base.pkg"));
+        QVERIFY(put(m_root.filePath(QStringLiteral("prog/base")), QStringLiteral("base.pkg"), fullPackageBytes()));
+        const QString update = dir(QStringLiteral("prog/patch"));
+        put(update, QStringLiteral("sce_sys/param.json"),
+            QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"01.001.000\",\"applicationCategoryType\":0}").arg(kCid).toUtf8());
+        put(update, QStringLiteral("Data/A.pak"), QByteArray(10, 'u'));
+        const QJsonObject p{{QStringLiteral("basePackage"), basePkg}, {QStringLiteral("baseFolder"), base}};
+
+        struct Case {
+            const char* what;
+            QVariantMap settings;
+        };
+        const Case cases[] = {
+            {"img_verify and SHA-256", {{keys::kComputeSha256, true}}},
+            {"header check only", {{keys::kPostVerify, QStringLiteral("headerOnly")}}},
+        };
+        int n = 0;
+        for (const Case& c : cases) {
+            auto job = buildJob(update, m_root.filePath(QStringLiteral("prog/out%1").arg(++n)), p);
+            fwtest::ProgressAudit audit;
+            auto rr = run(job, c.settings, {}, {}, &audit);
+            QVERIFY2(rr.result.ok(), qPrintable(rr.result.ok() ? QString() : rr.result.error().toLogString()));
+            QCOMPARE(rr.result->outputs.size(), 2);
+            QVERIFY2(audit.problems().isEmpty(), qPrintable(QLatin1String(c.what) + QStringLiteral(": ") + audit.problems().join(u'\n')));
+            const auto seen = audit.seen();
+            QCOMPARE(seen.back().phaseNames, buildPhases());
+            QVERIFY(!buildPhases().contains(QStringLiteral("Finishing")));
+            // (The header check is a stage without a size, the audit's end check leaves it out.)
+            QVERIFY2(seen.back().overallFraction >= 0.97, qPrintable(QString::number(seen.back().overallFraction)));
+            bool prescanCounted = false;
+            QSet<qint64> hashTotals;
+            for (const ProgressSnapshot& s : seen) {
+                prescanCounted = prescanCounted || (s.phaseIndex == 3 && s.total > 0 && s.done == s.total && s.filesDone == s.total);
+                if (s.phaseIndex == 7)
+                    hashTotals.insert(s.total);
+            }
+            QVERIFY2(prescanCounted, c.what);
+            if (c.settings.contains(keys::kComputeSha256)) {
+                const qint64 both = QFileInfo(rr.result->outputs[0]).size() + QFileInfo(rr.result->outputs[1]).size();
+                QCOMPARE(hashTotals, QSet<qint64>{both});
+            } else {
+                QVERIFY(hashTotals.isEmpty());
+            }
+        }
+    }
+
     void updateBuildWithBaseFolder()
     {
         const QString base = dir(QStringLiteral("upd/base-game"));
@@ -1147,11 +1472,15 @@ private slots:
         {
             const auto inv = invocations();
             QCOMPARE(inv.size(), 1);
+            // Into "<destination>.part", which takes the destination's name once the tool has finished.
             QCOMPARE(argvOf(inv[0]), (QStringList{QStringLiteral("img_extract"), QStringLiteral("--passcode"), kDefaultPasscode,
                                                   QStringLiteral("--no_progress_bar"), QDir::toNativeSeparators(pkg),
-                                                  QDir::toNativeSeparators(dest)}));
+                                                  QDir::toNativeSeparators(dest + QStringLiteral(".part"))}));
         }
+        QCOMPARE(x.result->outputs, QStringList{dest});
         QVERIFY(QFileInfo::exists(QDir(dest).filePath(QStringLiteral("eboot.bin"))));
+        QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part.extracting")));
         // The tool was given this package: its own param.json came out.
         QVERIFY(readAll(QDir(dest).filePath(QStringLiteral("sce_sys/param.json"))).contains(kCid.toUtf8()));
         QVERIFY(x.result->summary.contains(QStringLiteral("files")));
@@ -1170,7 +1499,9 @@ private slots:
             const QString dest2 = m_root.filePath(QStringLiteral("vx/extracted2"));
             FpkgExtractJob x2(requestFrom<ExtractRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest2}}));
             QCOMPARE(errorOf(run(x2).result).code, ErrorCode::ExternalToolFailed);
-            QVERIFY(!QFileInfo::exists(dest2)); // created by the job, removed again with what was in it
+            QVERIFY(!QFileInfo::exists(dest2)); // never made: the half extraction went to its .part, removed again
+            QVERIFY(!QFileInfo::exists(dest2 + QStringLiteral(".part")));
+            QVERIFY(!QFileInfo::exists(dest2 + QStringLiteral(".part.extracting")));
         }
         {
             EnvVar slow("FAKE_PUBCMD_EXTRACT", "slow");
@@ -1178,24 +1509,48 @@ private slots:
             FpkgExtractJob x3(requestFrom<ExtractRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest3}}));
             CancellationSource cancel;
             // Cancel once the tool has written its files (it then idles for 10 s).
-            std::atomic<bool> sawOutput{false}, finished{false};
+            // Meanwhile the destination holds none of them, and a file the user
+            // puts there is not the job's.
+            std::atomic<bool> sawOutput{false}, finished{false}, halfUnderTheName{false};
             std::thread t([&] {
-                const QString last = QDir(dest3).filePath(QStringLiteral("playgo-chunks/001.bin"));
+                const QString last = dest3 + QStringLiteral(".part/playgo-chunks/001.bin");
                 while (!sawOutput && !finished) {
                     if (QFileInfo::exists(last))
                         sawOutput = true;
                     else
                         QThread::msleep(25);
                 }
+                halfUnderTheName = !QDir(dest3).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
+                put(dest3, QStringLiteral("mine.txt"), "the user's");
                 cancel.cancel();
             });
             auto r3 = run(x3, {}, cancel.token());
             finished = true;
             t.join();
             QVERIFY2(sawOutput, "the tool had written nothing when the job ended");
+            QVERIFY(!halfUnderTheName);
             QVERIFY(errorOf(r3.result).isCancelled());
-            QVERIFY(QFileInfo(dest3).isDir());
-            QVERIFY(QDir(dest3).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden)); // partial output removed
+            QCOMPARE(filesIn(dest3), QStringList{QStringLiteral("mine.txt")});
+            QVERIFY(!QFileInfo::exists(dest3 + QStringLiteral(".part"))); // partial output removed
+            QVERIFY(!QFileInfo::exists(dest3 + QStringLiteral(".part.extracting")));
+        }
+        {
+            // What a crash leaves: "<destination>.part" with the job's marker is
+            // this app's and is replaced; one without it is not touched.
+            const QString dest4 = m_root.filePath(QStringLiteral("vx/extracted4"));
+            QVERIFY(put(dest4 + QStringLiteral(".part"), QStringLiteral("half.bin"), "an earlier run"));
+            QVERIFY(put(QFileInfo(dest4).absolutePath(), QStringLiteral("extracted4.part.extracting"), ""));
+            FpkgExtractJob x4(requestFrom<ExtractRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest4}}));
+            auto r4 = run(x4);
+            QVERIFY2(r4.result.ok(), qPrintable(errorOf(r4.result).toLogString()));
+            QVERIFY(!QFileInfo::exists(QDir(dest4).filePath(QStringLiteral("half.bin"))));
+            QVERIFY(QFileInfo::exists(QDir(dest4).filePath(QStringLiteral("eboot.bin"))));
+            const QString dest5 = m_root.filePath(QStringLiteral("vx/extracted5"));
+            QVERIFY(put(dest5 + QStringLiteral(".part"), QStringLiteral("theirs.txt"), "theirs"));
+            FpkgExtractJob x5(requestFrom<ExtractRequest>({{QStringLiteral("package"), pkg}, {QStringLiteral("destination"), dest5}}));
+            QCOMPARE(errorOf(run(x5).result).code, ErrorCode::AlreadyExists);
+            QCOMPARE(readAll(dest5 + QStringLiteral(".part/theirs.txt")), QByteArray("theirs"));
+            QVERIFY(!QFileInfo::exists(dest5));
         }
     }
 
@@ -1373,7 +1728,7 @@ private slots:
         QVERIFY(job.ok());
         QCOMPARE(job.value()->parameters(), params);
         QCOMPARE(job.value()->title(), QStringLiteral("Test Game (PPSA01234)"));
-        QCOMPARE(job.value()->phases().size(), 9);
+        QCOMPARE(job.value()->phases().size(), 8);
         QVERIFY(!m_env.jobs.create(QStringLiteral("fpkg.build"), {}).ok());
         QVERIFY(!m_env.jobs.create(QStringLiteral("fpkg.build"), {{QStringLiteral("source"), game}, {QStringLiteral("updateOutput"), QStringLiteral("x")}}).ok());
         QVERIFY(m_env.jobs.create(QStringLiteral("fpkg.verify"), {{QStringLiteral("package"), QStringLiteral("x.pkg")}}).ok());

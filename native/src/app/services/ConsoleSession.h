@@ -10,6 +10,10 @@
 // run after the current one instead of re-entering the client (a nested
 // disconnect would otherwise destroy the client under the running command).
 // disconnect() stops the running request and drops the ones that wait.
+//
+// While connected, a connection that has been idle for a minute gets a NOOP
+// (only between requests), so the console's FTP server does not close it; a
+// NOOP that finds the link gone ends the session as Failed.
 
 #include "connect/ps5/FtpListing.h"
 #include "core/Result.h"
@@ -63,6 +67,9 @@ public:
     // SITE AVAIL, answered with freeSpace(). No console FTP server implements
     // it today: the page shows free space from the ShadowMount+ API instead.
     void siteAvail();
+
+    // Idle time before a keep-alive NOOP (60 s; tests shorten it). 0 restores the default.
+    static void setKeepAliveIntervalForTests(int ms);
 
 signals:
     // Every transition, with the welcome line (Connected) or the reason (Failed).

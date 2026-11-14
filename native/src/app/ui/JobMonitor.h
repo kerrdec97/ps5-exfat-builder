@@ -66,9 +66,10 @@ class MetricTile : public Card {
 public:
     MetricTile(const QString& overline, QWidget* parent = nullptr);
     void setValue(const QString& value, const QColor& color = theme::color::fg_0);
-    void setHint(const QString& hint); // "" hides the line
+    void setHint(const QString& hint); // "" leaves the line empty
     QString value() const;
-    RateSparkline* sparkline(); // created on first use, right of the value
+    QString hint() const;
+    RateSparkline* sparkline(); // created on first use, under the value (the hint at its start)
 
 private:
     QLabel* m_value;
@@ -77,7 +78,9 @@ private:
     RateSparkline* m_spark = nullptr;
 };
 
+class MetaLine;  // the kind · format · size → destination line (JobRows.h)
 class StageMark; // a row's state glyph (JobMonitor.cpp)
+class StageName; // a row's name: one line, or two for a long translation (JobMonitor.cpp)
 
 // The stage timeline: one row per phase with its state glyph and time.
 class StageList : public QWidget {
@@ -98,7 +101,7 @@ private:
     struct Row {
         QWidget* widget;
         StageMark* icon;
-        ElideLabel* name;
+        StageName* name;
         QLabel* time;
         QString status;
         QString shown; // what the row currently paints (icon, colours, time): skip unchanged updates
@@ -140,6 +143,9 @@ public:
     // success-tinted plate of a job that succeeded.
     QWidget* resultBlock() const { return m_result; }
     QStringList metricValues() const; // elapsed, remaining, speed, done, stage
+    QStringList metricHints() const;  // the line under each value, same order
+    // "182 lines · 2 warnings · 1 error": the job's log so far, beside "Live log".
+    QString logCountText() const;
     LogConsole* console() const { return m_console; }
     QPushButton* cancelButton() const { return m_cancel; }
     QPushButton* pauseButton() const { return m_pause; }
@@ -172,6 +178,11 @@ private:
     void updateTick(const JobRecord* r);
     void sample(const JobRecord& r);
     void retry();
+    // The warnings and errors in the followed job's log (all of them, also
+    // while the console shows only the newest lines).
+    void recountLog();
+    void countLog(int fromRow, int toRow);
+    void updateLogCaption();
 
     AppContext& m_ctx;
     LogModel& m_logs;
@@ -185,11 +196,14 @@ private:
     QString m_phasesKey;
     bool m_stagesSet = false; // the stage list shows the phases of m_id
     qint64 m_lastSampleMs = 0;
+    int m_logLines = 0;
+    int m_logWarnings = 0;
+    int m_logErrors = 0;
     QTimer m_tick;
 
     IconTile* m_tile;
     ElideLabel* m_title;
-    ElideLabel* m_meta;
+    MetaLine* m_meta;
     Badge* m_badge;
     ProgressBar* m_bar;
     QLabel* m_percent;
@@ -206,7 +220,7 @@ private:
     IconButton* m_copy;
     Link* m_openLogs;
     Link* m_jump;
-    QLabel* m_lineCount;
+    ElideLabel* m_lineCount;
     QWidget* m_result;
     QVBoxLayout* m_resultLayout;
     QPushButton* m_pause;

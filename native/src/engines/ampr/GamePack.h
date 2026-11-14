@@ -70,6 +70,9 @@ struct PackGameReport {
     RuntimeInfo previousRuntime;
     QString runtime;           // "ampr-emu-ng 0.3.3"
     bool amprIndexWritten = false;
+    // The packs were written but the check that reads them back was cancelled:
+    // the folder is complete (its ampr_emu.index too) and not verified.
+    bool verifyCancelled = false;
     QStringList looseSummary;  // "executable or module: 12 files, 80.1 MB"
     QStringList warnings;
     int threads = 1;
@@ -79,6 +82,10 @@ struct PackGameReport {
     QString summary() const;   // "4,810 files packed (38.4 GB from 90.6 GB, zstd level 5), 312 loose"
 };
 
+// A cancel while the written packs are checked (options.verify) does not
+// throw the finished folder away: it is completed as with the check turned
+// off and the report says so (verifyCancelled). A pack that does not read
+// back as written fails as always.
 Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString& outFolder, const PackGameOptions& options,
                                 const CancellationToken& token, ProgressReporter* progress, const Log& log);
 
@@ -134,12 +141,23 @@ public:
     // Checks the final folder again (it must still be absent or empty) and
     // renames the staged folder to it.
     Status commit();
+    // commit(); when that fails (the chosen folder got files meanwhile, or is
+    // open in another program) the finished work is not deleted: it moves to
+    // a free name next to it, "<final>.new" (or stays as "<final>.part"), and
+    // the returned error says where (never as an IoError: a retry would only
+    // make another copy). `what` starts that message, for example
+    // "The game was packed".
+    Status commitOrKeep(const QString& what);
+    // The staged folder is left where it is when this object goes. Its marker
+    // is removed, so a later begin() refuses it instead of replacing it.
+    void keep() { m_kept = true; }
 
 private:
     StagedFolder() = default;
     QString m_final, m_stage, m_marker, m_parent;
     bool m_owned = false;
     bool m_committed = false;
+    bool m_kept = false;
 };
 
 } // namespace fw::ampr

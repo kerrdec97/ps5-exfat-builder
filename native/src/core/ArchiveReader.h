@@ -92,10 +92,16 @@ struct ExtractResult {
 
 // Unpacks the entries under `onlyUnder` into `destination` (created if
 // needed) in one pass through the archive, files through .part files, with
-// their modification times. Fails on the first entry that is damaged, is
-// larger than listed or was not listed.
+// their modification times, never over a file that is there already. Fails on
+// the first entry that is damaged, is larger than listed or was not listed.
 Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QString& destination,
                                      const QString& onlyUnder, const CancellationToken& token,
                                      ProgressReporter* progress = nullptr);
+
+// Tests only: how many characters the names of one list may have together
+// (listArchive, checkExtractable) and how many folders and files they may
+// make (checkExtractable); -1 puts the app's limit back (64 Mi characters,
+// 4,000,000 names).
+void setListLimitsForTesting(qint64 nameCharacters, qsizetype names);
 
 } // namespace fw::archive

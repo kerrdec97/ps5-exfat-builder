@@ -73,7 +73,12 @@ pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mod
         if (!n.isDir && pfs::isAmprPackIndexName(n.name))
             state.hasAssetPacks = true;
     }
-    const auto fresh = [&files] { return pfs::buildAmprIndex(pfs::amprToolRows(files).rows); };
+    QStringList leftOut;
+    const auto fresh = [&files, &leftOut] {
+        pfs::AmprToolRows rows = pfs::amprToolRows(files);
+        leftOut = rows.skippedRuntime;
+        return pfs::buildAmprIndex(rows.rows);
+    };
     const auto dumpIndex = [&]() -> Result<QByteArray> {
         const SourceNode& n = tree.nodes[size_t(own)];
         QFile f(toLongPath(n.absolutePath));
@@ -82,7 +87,10 @@ pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mod
                          f.errorString());
         return f.read(n.size + 1);
     };
-    return pfs::decideAmprIndex(mode, state, fresh, dumpIndex);
+    pfs::AmprIndexDecision d = pfs::decideAmprIndex(mode, state, fresh, dumpIndex);
+    if (pfs::amprActionChangesImage(d.action))
+        d.leftOut = leftOut;
+    return d;
 }
 
 void placeAmprIndex(SourceTree& tree, const QString& indexFile)
@@ -130,6 +138,7 @@ Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const
     out.action = d.action;
     if (!pfs::amprActionChangesImage(d.action))
         return out;
+    out.leftOut = d.leftOut;
     FW_TRY_ASSIGN(out.indexFile, saveIndex(tempDir, d.index));
     placeAmprIndex(tree, out.indexFile);
     return out;

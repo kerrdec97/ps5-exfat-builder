@@ -12,8 +12,8 @@
 
 #include "app/pages/ps5/ConsoleToolTab.h"
 
+class QComboBox;
 class QPlainTextEdit;
-class QSpinBox;
 
 namespace fw::ui {
 class DropZone;
@@ -59,7 +59,7 @@ private:
     void setWatching(bool on);
     bool m_watching = false;
     ui::PathField* m_folder;
-    QSpinBox* m_minutes;
+    QComboBox* m_minutes; // "Until stopped" (0) or a time, in minutes as item data
     QPushButton* m_start;
     QPushButton* m_stop;
     ui::MessageRow* m_status;

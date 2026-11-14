@@ -1,8 +1,10 @@
 #include "app/services/AppStores.h"
 
+#include "app/AppContext.h"
 #include "core/FileUtil.h"
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "engines/gameinfo/Module.h"
 
 #include <QDir>
 #include <QFile>
@@ -18,6 +20,25 @@ namespace fw::ui {
 
 namespace {
 
+// A copy of the damaged store `bytes` next to it: <name>.bad, or
+// "<name> (2).bad"... when that holds an earlier damaged version, which is
+// never replaced. The same bytes read again are not copied again.
+QString keepDamagedCopy(const QString& path, const QByteArray& bytes, bool& kept)
+{
+    QString bad = path + QStringLiteral(".bad");
+    for (int n = 2; QFileInfo::exists(bad) && n < 10000; ++n) {
+        QFile earlier(bad);
+        if (earlier.open(QIODevice::ReadOnly) && earlier.size() == bytes.size() && earlier.readAll() == bytes) {
+            kept = true;
+            return bad;
+        }
+        const QFileInfo fi(path + QStringLiteral(".bad"));
+        bad = fi.dir().filePath(QStringLiteral("%1 (%2).bad").arg(fi.completeBaseName(), QString::number(n)));
+    }
+    kept = QFile::copy(path, bad);
+    return bad;
+}
+
 // A store file as JSON. One that cannot be parsed is not lost to the next
 // save: it is kept next to the store as <name>.bad, and the log says so.
 std::optional<QJsonObject> readStoreFile(const QString& path)
@@ -31,9 +52,8 @@ std::optional<QJsonObject> readStoreFile(const QString& path)
     const QJsonDocument doc = QJsonDocument::fromJson(bytes, &err);
     if (err.error == QJsonParseError::NoError && doc.isObject())
         return doc.object();
-    const QString bad = path + QStringLiteral(".bad");
-    QFile::remove(bad);
-    const bool kept = QFile::copy(path, bad);
+    bool kept = false;
+    const QString bad = keepDamagedCopy(path, bytes, kept);
     Log(QStringLiteral("app")).warn(QStringLiteral("%1 could not be read (%2); %3")
                                         .arg(QDir::toNativeSeparators(path), err.error == QJsonParseError::NoError ? QStringLiteral("not a JSON object") : err.errorString(),
                                              kept ? QStringLiteral("a copy was kept as %1").arg(QFileInfo(bad).fileName()) : QStringLiteral("no copy could be kept")));
@@ -54,33 +74,126 @@ bool sameFolder(const QString& a, const QString& b)
     return QDir::cleanPath(a).compare(QDir::cleanPath(b), Qt::CaseInsensitive) == 0;
 }
 
+// A folder as the store keeps it ("D:/Games"), or "" for a blank entry.
+QString cleanFolder(const QString& raw)
+{
+    const QString t = raw.trimmed();
+    return t.isEmpty() ? QString() : QDir::cleanPath(QDir::fromNativeSeparators(t));
+}
+
+bool containsFolder(const QStringList& list, const QString& folder)
+{
+    return std::any_of(list.cbegin(), list.cend(), [&folder](const QString& have) { return sameFolder(have, folder); });
+}
+
+// The same folders in the same order.
+bool sameFolders(const QStringList& a, const QStringList& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (qsizetype i = 0; i < a.size(); ++i)
+        if (a.at(i) != b.at(i))
+            return false;
+    return true;
+}
+
 } // namespace
 
-LibraryStore::LibraryStore(QObject* parent) : QObject(parent), m_path(QDir(Paths::dataDir()).filePath(QStringLiteral("library.json")))
+LibraryStore::LibraryStore(QObject* parent)
+    : LibraryStore(AppContext::instance() ? &AppContext::instance()->settings() : nullptr, parent)
+{
+}
+
+LibraryStore::LibraryStore(SettingsStore* settings, QObject* parent)
+    : QObject(parent), m_path(QDir(Paths::dataDir()).filePath(QStringLiteral("library.json")))
 {
     load();
+    bindFolderSetting(settings);
+}
+
+void LibraryStore::bindFolderSetting(SettingsStore* settings)
+{
+    if (!settings || !settings->schema().contains(gameinfo::keys::kLibraryFolders))
+        return;
+    m_settings = settings;
+    // Folders typed in Settings or imported from version 4 join the ones the
+    // Library page added (5.0.2 and earlier kept the two apart).
+    const QStringList fromSetting = settingFolders();
+    bool added = false;
+    for (const QString& f : fromSetting)
+        if (!containsFolder(m_folders, f)) {
+            m_folders << f;
+            added = true;
+        }
+    if (added)
+        save();
+    writeFolderSetting();
+    connect(settings, &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
+        if (key == gameinfo::keys::kLibraryFolders)
+            takeFolderSetting();
+    });
+}
+
+QStringList LibraryStore::settingFolders() const
+{
+    QStringList out;
+    if (!m_settings)
+        return out;
+    for (const QString& raw : m_settings->value(gameinfo::keys::kLibraryFolders).toStringList()) {
+        const QString f = cleanFolder(raw);
+        if (!f.isEmpty() && !containsFolder(out, f))
+            out << f;
+    }
+    return out;
+}
+
+void LibraryStore::takeFolderSetting()
+{
+    if (m_writingSetting || !m_settings)
+        return;
+    const QStringList now = settingFolders();
+    if (sameFolders(now, m_folders))
+        return;
+    m_folders = now;
+    save();
+    emit changed();
+}
+
+void LibraryStore::writeFolderSetting()
+{
+    if (!m_settings || sameFolders(settingFolders(), m_folders))
+        return;
+    QStringList native;
+    for (const QString& f : m_folders)
+        native << QDir::toNativeSeparators(f); // as the Settings page writes folders
+    m_writingSetting = true;
+    const Status st = m_settings->setValue(gameinfo::keys::kLibraryFolders, native);
+    m_writingSetting = false;
+    if (!st.ok())
+        Log(QStringLiteral("app")).warn(QStringLiteral("The library folders could not be saved in the settings: %1").arg(st.error().toLogString()));
 }
 
 void LibraryStore::setScanFolders(const QStringList& folders)
 {
     m_folders.clear();
     for (const QString& folder : folders) {
-        const QString f = QDir::cleanPath(folder);
-        const bool known = std::any_of(m_folders.cbegin(), m_folders.cend(), [&f](const QString& have) { return sameFolder(have, f); });
-        if (!folder.trimmed().isEmpty() && !known)
+        const QString f = cleanFolder(folder);
+        if (!f.isEmpty() && !containsFolder(m_folders, f))
             m_folders << f;
     }
     save();
+    writeFolderSetting();
     emit changed();
 }
 
 void LibraryStore::addScanFolder(const QString& folder)
 {
-    const QString f = QDir::cleanPath(folder);
-    if (folder.trimmed().isEmpty() || std::any_of(m_folders.cbegin(), m_folders.cend(), [&f](const QString& have) { return sameFolder(have, f); }))
+    const QString f = cleanFolder(folder);
+    if (f.isEmpty() || containsFolder(m_folders, f))
         return;
     m_folders << f;
     save();
+    writeFolderSetting();
     emit changed();
 }
 
@@ -88,6 +201,7 @@ void LibraryStore::removeScanFolder(const QString& folder)
 {
     if (m_folders.removeIf([&folder](const QString& have) { return sameFolder(have, folder); }) > 0) {
         save();
+        writeFolderSetting();
         emit changed();
     }
 }

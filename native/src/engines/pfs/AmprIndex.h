@@ -15,6 +15,21 @@
 //   hash slots "<QII": FNV-1a 64 of the lower-cased path (0 → 1), row+1, flags
 //           (open addressing, linear probing, 2^n >= 2 * rows slots; bit 0
 //           marks a slot whose 64-bit hash is shared by a later row)
+//
+// What the bundled runtime (ampr-emu-ng 0.3.3, read from its loader) does
+// with it. It checks the header (magic, version, record and slot sizes, 1 to
+// 2,000,000 rows, a power-of-two slot count >= rows, a path blob of at most
+// 256 MiB, the hash table at an 8-byte boundary after the blob and inside the
+// file), every row (path inside the blob and NUL-terminated, "/app0/" then
+// components that are not empty, "." or "..", without a backslash, at most
+// 255 bytes each and 1023 in all) and every slot (an empty one all zero, flags
+// 0 or 1, the hash of its row's path, each row found at its own slot); one
+// failed check sets the whole index aside. A file's ID for the game is its
+// row number, its size is what the resolve-with-sizes calls and fstat
+// report, and its time is st_atime, st_mtime and st_ctime in the fstat of a
+// file opened through the emulator. The case-insensitive lookup compares the
+// full path and ignores the flags. Never read: the padding before the hash
+// table and anything after the table.
 
 #include "core/Cancellation.h"
 #include "core/Result.h"
@@ -43,7 +58,9 @@ quint64 amprPathHash(const QByteArray& path);
 QByteArray buildAmprIndex(const std::vector<AmprRow>& rows);
 
 // True when two indexes list the same paths with the same sizes and differ
-// at most in the files' modification times.
+// at most in the files' modification times. For verifying an image against a
+// folder whose files were copied or touched since the build; a build keeps
+// only an identical index (decideAmprIndex).
 bool amprIndexesDifferOnlyInTimes(const QByteArray& a, const QByteArray& b);
 
 // ---- the stand-alone AMPR index tool (local folder or console folder) -------------------
@@ -56,7 +73,9 @@ bool amprIndexesDifferOnlyInTimes(const QByteArray& a, const QByteArray& b);
 // skipped with a warning; of paths that differ only in ASCII case the first
 // (in byte order of the relative path) is kept with a warning — the legacy
 // tool ran with collisions allowed. The same rules apply to a local folder
-// and to a folder on the console, so both give the same bytes.
+// and to a folder on the console, so both give the same bytes. Paths the
+// bundled runtime refuses (amprRuntimeAccepts) are left out with a warning
+// too: one such row would make it set the whole index aside.
 
 inline const QString kAmprIndexName = QStringLiteral("ampr_emu.index");
 
@@ -70,12 +89,20 @@ struct AmprToolRows {
     std::vector<AmprRow> rows;
     QStringList skippedOwn;      // the index, its temporaries, the emulator's files
     QStringList skippedControl;  // paths with a tab, CR or LF
+    QStringList skippedRuntime;  // paths the runtime cannot list (amprRuntimeAccepts)
     QStringList collisions;      // "kept <- dropped" for case-only differences
 };
 
 // True for the /app0 paths the tool never indexes (ASCII case-insensitive).
 bool amprToolSkips(const QByteArray& indexedPath);
+// True when the bundled runtime accepts `indexedPath` ("/app0/...") as a row:
+// components that are not empty, "." or "..", of at most 255 bytes each, no
+// backslash or NUL, at most 1023 bytes in all (the loader's checks above).
+bool amprRuntimeAccepts(const QByteArray& indexedPath);
 AmprToolRows amprToolRows(std::vector<AmprFile> files);
+// The job-log warning for the files a build's index leaves out because the
+// runtime cannot list them (AmprToolRows::skippedRuntime). Empty when none.
+QString amprLeftOutLogLine(const QStringList& leftOut);
 
 struct AmprLocalScan {
     std::vector<AmprFile> files;
@@ -128,13 +155,16 @@ struct AmprIndexState {
 struct AmprIndexDecision {
     AmprIndexAction action = AmprIndexAction::Off;
     QByteArray index; // amprActionChangesImage(action): the bytes of the image's ampr_emu.index
+    QStringList leftOut; // the same: files it does not list because the runtime cannot (amprLeftOutLogLine)
 };
 
 // `fresh` builds the index for the files the image will hold; `existing`
 // reads the dump's own index (asked for only when it could match: Auto, same
-// size as the fresh one). An index that differs from the fresh one only in
-// file times is up to date (amprIndexesDifferOnlyInTimes), so a dump that
-// was copied or saved again is not "outdated".
+// size as the fresh one). The dump's index is up to date only when it is byte
+// for byte the fresh one: other file times are a difference the game sees
+// (fstat), and the builder writes the same bytes for the same files. An
+// index that differs only in bytes the runtime never reads (padding, a tail)
+// is rebuilt as well; the image then gets an equivalent one.
 AmprIndexDecision decideAmprIndex(AmprMode mode, const AmprIndexState& state, const std::function<QByteArray()>& fresh,
                                   const std::function<Result<QByteArray>()>& existing);
 

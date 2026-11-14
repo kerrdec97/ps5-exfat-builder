@@ -9,6 +9,7 @@
 #include "app/ui/LibraryGrid.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "core/Log.h"
 #include "core/Tr.h"
 #include "engines/gameinfo/DumpRename.h"
 #include "engines/gameinfo/Module.h"
@@ -130,18 +131,20 @@ std::vector<LibraryGame> demoGames()
         const char* id;
         const char* version;
         qint64 bytes;
-        const char* status;
+        bool backported;
     };
-    const D d[] = {{"Astro Bot", "PPSA01325", "01.002.000", 48500000000LL, "Backported"},
-                   {"Demon's Souls", "PPSA01341", "01.004.000", 31600000000LL, ""},
-                   {"Ghost of Yōtei", "PPSA26344", "01.512.000", 74200000000LL, "Not backported"},
-                   {"Returnal", "PPSA01284", "01.007.000", 58900000000LL, ""},
-                   {"Ratchet & Clank: Rift Apart", "PPSA01474", "01.003.000", 39800000000LL, ""},
-                   {"Gran Turismo 7", "PPSA01316", "01.049.000", 98100000000LL, "Not backported"},
-                   {"Stellar Blade", "PPSA13198", "01.012.000", 41300000000LL, ""},
-                   {"Sackboy: A Big Adventure", "PPSA01383", "01.012.000", 27600000000LL, ""},
-                   {"Kena: Bridge of Spirits", "PPSA01535", "01.016.000", 21900000000LL, ""},
-                   {"Returnal", "PPSA01284", "01.000.000", 55100000000LL, ""}};
+    // The states the app stores (BackportPage): "Backported", or nothing, which
+    // the list shows as "—"; there is no stored "Not backported".
+    const D d[] = {{"Astro Bot", "PPSA01325", "01.002.000", 48500000000LL, true},
+                   {"Demon's Souls", "PPSA01341", "01.004.000", 31600000000LL, false},
+                   {"Ghost of Yōtei", "PPSA26344", "01.512.000", 74200000000LL, false},
+                   {"Returnal", "PPSA01284", "01.007.000", 58900000000LL, false},
+                   {"Ratchet & Clank: Rift Apart", "PPSA01474", "01.003.000", 39800000000LL, false},
+                   {"Gran Turismo 7", "PPSA01316", "01.049.000", 98100000000LL, false},
+                   {"Stellar Blade", "PPSA13198", "01.012.000", 41300000000LL, false},
+                   {"Sackboy: A Big Adventure", "PPSA01383", "01.012.000", 27600000000LL, false},
+                   {"Kena: Bridge of Spirits", "PPSA01535", "01.016.000", 21900000000LL, false},
+                   {"Returnal", "PPSA01284", "01.000.000", 55100000000LL, false}};
     std::vector<LibraryGame> out;
     for (const D& x : d) {
         LibraryGame g;
@@ -154,7 +157,7 @@ std::vector<LibraryGame> demoGames()
         g.info.exists = true;
         g.info.platform = QStringLiteral("PS5");
         g.info.kind = QStringLiteral("Game");
-        g.status = QString::fromLatin1(x.status);
+        g.status = x.backported ? FW_TR_NOOP("Backported") : QString(); // stored in English, translated where shown
         out.push_back(g);
     }
     return out;
@@ -262,13 +265,17 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
         rebuildGames();
     });
 
-    auto* add = button(FW_TR("Add folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), this);
+    m_headerActions = new QWidget(this);
+    auto* bar = hbox(m_headerActions, space::sm);
+    auto* add = button(FW_TR("Add folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), m_headerActions);
+    m_addFolder = add;
     add->setToolTip(FW_TR("Add a folder that holds game dumps (or one dump)"));
     connect(add, &QPushButton::clicked, this, &LibraryPage::addFolders);
-    auto* rescan = button(FW_TR("Rescan"), ButtonVariant::Secondary, QStringLiteral("refresh"), this);
+    auto* rescan = button(FW_TR("Rescan"), ButtonVariant::Secondary, QStringLiteral("refresh"), m_headerActions);
+    m_rescan = rescan;
     rescan->setToolTip(FW_TR("Look for games and images in the library folders again (F5)"));
     connect(rescan, &QPushButton::clicked, this, &LibraryPage::refresh);
-    auto* more = new IconButton(QStringLiteral("more"), FW_TR("More"), IconButton::Size::Regular, this);
+    auto* more = new IconButton(QStringLiteral("more"), FW_TR("More"), IconButton::Size::Regular, m_headerActions);
     more->setToolTip(FW_TR("More"));
     connect(more, &QToolButton::clicked, this, [this, more] {
         QMenu menu(this);
@@ -283,9 +290,10 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
         })->setEnabled(!m_images.isEmpty());
         menu.exec(menuAnchor(more));
     });
-    header()->addAction(more);
-    header()->addAction(rescan);
-    header()->addAction(add);
+    // The overflow menu last, as on every page.
+    for (QWidget* w : {static_cast<QWidget*>(rescan), static_cast<QWidget*>(add), static_cast<QWidget*>(more)})
+        bar->addWidget(w);
+    header()->addAction(m_headerActions);
 
     m_tabs = new QTabBar(this);
     m_tabs->addTab(FW_TR("Games"));
@@ -301,6 +309,7 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
     content()->addWidget(m_stack);
     connect(m_tabs, &QTabBar::currentChanged, this, [this](int i) {
         m_stack->setCurrentIndex(i);
+        updateHeaderActions();
         emit statusContextChanged();
     });
 
@@ -317,6 +326,10 @@ LibraryPage::LibraryPage(AppContext& ctx, JobQueueModel& queueModel, LibraryStor
             scanImages();
     });
     connect(&m_ctx.queue(), &JobQueue::jobFinished, this, &LibraryPage::onJobFinished);
+    connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
+        if (key == general::keys::kDefaultOutputDir)
+            updateHeaderActions(); // images are looked for there too
+    });
     rebuildGames();
     rebuildImages();
     rebuildLanguages();
@@ -526,7 +539,26 @@ void LibraryPage::rebuildGames()
     m_gamesCount->setToolTip(m_library.lastScan().isValid() ? FW_TR("Last scan %1").arg(relativeTime(m_library.lastScan())) : FW_TR("Not scanned yet"));
     rebuildFolders();
     updateGameSelection();
+    updateHeaderActions();
     emit statusContextChanged();
+}
+
+void LibraryPage::updateHeaderActions()
+{
+    if (!m_headerActions)
+        return;
+    // Rescan and Add folder… act on the games and the images; the Languages
+    // and DLC emulator tabs have their own folder and buttons.
+    const int tab = m_tabs ? m_tabs->currentIndex() : int(GamesTab);
+    m_headerActions->setVisible(tab == GamesTab || tab == ImagesTab);
+    // An empty library: adding a folder is the first step, the page's main
+    // button; with nowhere to look, Rescan has nothing to do.
+    const bool empty = !m_demo && m_library.scanFolders().isEmpty() && m_library.games().empty();
+    setButtonVariant(m_addFolder, empty ? ButtonVariant::Primary : ButtonVariant::Secondary);
+    const bool nothingToScan = empty && imageFolders().isEmpty();
+    m_rescan->setEnabled(!nothingToScan);
+    m_rescan->setToolTip(nothingToScan ? FW_TR("Add a folder of game dumps first.")
+                                       : FW_TR("Look for games and images in the library folders again (F5)"));
 }
 
 void LibraryPage::rebuildFolders()
@@ -735,8 +767,7 @@ int LibraryPage::checkDumps(const QStringList& folders)
         else
             failed << QStringLiteral("%1: %2").arg(QFileInfo(f).fileName(), r.error().message);
     }
-    for (auto it = started.crbegin(); it != started.crend(); ++it)
-        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
+    m_ctx.queue().startNow(started); // in this order; a paused queue stays paused for the rest
     // One check says what it found soon enough; for several, say that they are on their way.
     if (started.size() > 1)
         emit toastRequested(Tone::Info, plural(started.size(), FW_TR("Checking %1 dump"), FW_TR("Checking %1 dumps")),
@@ -826,8 +857,7 @@ void LibraryPage::buildSelected()
             failed << QStringLiteral("%1: %2").arg(QFileInfo(f).fileName(), r.error().message);
     }
     // These jobs run now, in this order, ahead of other waiting jobs; a paused queue stays paused for the rest.
-    for (auto it = started.crbegin(); it != started.crend(); ++it)
-        m_ctx.queue().startNow(*it);
+    m_ctx.queue().startNow(started);
     if (!failed.isEmpty())
         emit toastRequested(Tone::Err, plural(failed.size(), FW_TR("%1 build not queued"), FW_TR("%1 builds not queued")), failed.join(u'\n'));
     if (queued > 0)
@@ -1253,8 +1283,7 @@ void LibraryPage::verifyImages(const QStringList& paths)
             failed << QStringLiteral("%1: %2").arg(QFileInfo(p).fileName(), r.error().message);
         }
     }
-    for (auto it = started.crbegin(); it != started.crend(); ++it)
-        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
+    m_ctx.queue().startNow(started); // in this order; a paused queue stays paused for the rest
     if (queued > 0)
         emit toastRequested(Tone::Info, plural(queued, FW_TR("%1 verify job queued"), FW_TR("%1 verify jobs queued")), QString());
     if (!failed.isEmpty())
@@ -1312,6 +1341,11 @@ QString LibraryPage::imageFileName(const ImageSummary& s, const QString& preset,
 int LibraryPage::renameImages(const QList<QPair<QString, QString>>& renames, QStringList* skipped)
 {
     int done = 0;
+    // This runs on the UI thread: one quick retry for a scanner that still has
+    // a new image open, and none once the system refused one, so a batch over
+    // images another program holds (or a read-only share) does not freeze the
+    // window for a second each.
+    int attempts = 2;
     for (const auto& [from, name] : renames) {
         const QFileInfo fi(from);
         const QString to = fi.absolutePath() + u'/' + name;
@@ -1322,7 +1356,16 @@ int LibraryPage::renameImages(const QList<QPair<QString, QString>>& renames, QSt
                 *skipped << FW_TR("%1: %2 exists").arg(fi.fileName(), name);
             continue;
         }
-        if (!QFile::rename(from, to)) {
+        // Never QFile::rename(): it answers a file held open (an upload, a
+        // verify or a convert reading it) by copying the whole image to the
+        // new name, here on the UI thread, uncancellably. A job's image is not
+        // even tried.
+        QString why;
+        if (m_ctx.queue().isPathInUse(from) || !renameWithoutCopying(from, to, &why, attempts)) {
+            if (!why.isEmpty()) {
+                Log(QStringLiteral("library")).info(QStringLiteral("Rename refused: %1").arg(why));
+                attempts = 1;
+            }
             if (skipped)
                 *skipped << FW_TR("%1: in use or read-only").arg(fi.fileName());
             continue;
@@ -1814,8 +1857,7 @@ void LibraryPage::stripLanguages()
         ++queued;
         started << r.value();
     }
-    for (auto it = started.crbegin(); it != started.crend(); ++it)
-        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
+    m_ctx.queue().startNow(started); // in this order; a paused queue stays paused for the rest
     if (queued > 0)
         emit toastRequested(Tone::Info, FW_TR("Removing languages"), plural(queued, FW_TR("%1 job queued; each one backs up first."), FW_TR("%1 jobs queued; each one backs up first.")));
     if (!failed.isEmpty())

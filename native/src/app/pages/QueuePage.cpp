@@ -4,8 +4,10 @@
 #include "app/models/JobQueueModel.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Icons.h"
+#include "app/ui/SettingRow.h"
 #include "app/ui/Sheet.h"
 #include "core/FileUtil.h"
+#include "core/Power.h"
 #include "core/Tr.h"
 #include "engines/general/Module.h"
 
@@ -155,7 +157,8 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     m_pauseQueue = button(FW_TR("Pause queue"), ButtonVariant::Secondary, QStringLiteral("pause"), this);
     auto* more = new IconButton(QStringLiteral("more"), FW_TR("More queue actions"), IconButton::Size::Regular, this);
     more->setToolTip(FW_TR("More queue actions"));
-    // One right-aligned bar: buttons keep their size when one of them hides.
+    // One right-aligned bar, the same buttons whatever the queue holds (a
+    // button with nothing to do rests disabled), the overflow menu last.
     auto* bar = new QWidget(this);
     auto* bl = hbox(bar, space::sm);
     bl->addStretch(1);
@@ -180,6 +183,38 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     connect(m_clearFinished, &QPushButton::clicked, this, [this] { m_ctx.queue().clearFinished(); });
     connect(m_pauseQueue, &QPushButton::clicked, this, [this] { m_ctx.queue().holdQueue(!m_ctx.queue().isHeld()); });
 
+    // ---- When the queue finishes: the setting of Settings › General, here
+    // where the run is started and watched, so it is seen and changed for
+    // each run (GitHub #96). Shown with and without jobs.
+    if (const SettingDef* def = m_ctx.schema().find(general::keys::kAfterQueueAction)) {
+        auto* after = new Card(this);
+        after->setObjectName(QStringLiteral("queue-after"));
+        after->body()->setSpacing(space::sm);
+        auto* row = new QWidget(after);
+        auto* rl = hbox(row, space::md);
+        auto* name = label(shownSection(def->group), TextStyle::BodyStrong, color::fg_0, row); // "When the queue finishes"
+        rl->addWidget(name);
+        m_afterAction = new SettingEditor(*def, row);
+        m_afterAction->widget()->setObjectName(QStringLiteral("queue-after-action"));
+        m_afterAction->widget()->setAccessibleName(name->text());
+        m_afterAction->widget()->setToolTip(plainTip(shownDescription(*def)));
+        rl->addWidget(m_afterAction->widget());
+        rl->addStretch(1);
+        after->body()->addWidget(row);
+        m_afterNote = new MessageRow(after);
+        m_afterNote->setObjectName(QStringLiteral("queue-after-note"));
+        after->body()->addWidget(m_afterNote);
+        content()->addWidget(after);
+        connect(m_afterAction, &SettingEditor::edited, this, [this](const QVariant& v) {
+            (void)m_ctx.settings().setValue(general::keys::kAfterQueueAction, v);
+        });
+        connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
+            if (key == general::keys::kAfterQueueAction || key == general::keys::kAfterQueueDelay)
+                updateAfterQueue();
+        });
+        updateAfterQueue();
+    }
+
     // ---- Nothing queued: one inviting state instead of two empty panels.
     m_emptyCard = new Card(this);
     m_emptyCard->setObjectName(QStringLiteral("queue-empty"));
@@ -203,9 +238,12 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
         m_filter->addSegment(s);
     m_filter->setAccessibleName(QStringLiteral("Filter jobs"));
     h->addWidget(m_filter);
-    h->addStretch(1);
+    // The time left takes the rest of the row, at its end: one line while it
+    // fits ("Running job: about 3 min left" wrapped after "3" when it had only
+    // its size hint), two in a long language.
     m_eta = caption({}, card);
-    h->addWidget(m_eta);
+    m_eta->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    h->addWidget(m_eta, 1);
     connect(m_filter, &Segmented::currentChanged, this, &QueuePage::applyFilter);
     m_list = new JobList(ctx, queueModel, JobRow::Variant::Queue, card);
     m_list->setFilter(visibleJob);
@@ -263,19 +301,46 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     updateDetail();
 }
 
+void QueuePage::updateAfterQueue()
+{
+    if (!m_afterAction)
+        return;
+    const QString value = m_ctx.settings().value(general::keys::kAfterQueueAction).toString();
+    m_afterAction->setValue(value);
+    const int seconds = int(m_ctx.settings().value(general::keys::kAfterQueueDelay).toInt());
+    QString note;
+    switch (power::actionFromName(value)) {
+    case power::Action::Sleep: note = FW_TR("When the last job ends, the computer goes to sleep after a %1 s countdown that you can cancel."); break;
+    case power::Action::Hibernate: note = FW_TR("When the last job ends, the computer hibernates after a %1 s countdown that you can cancel."); break;
+    case power::Action::Shutdown: note = FW_TR("When the last job ends, the computer shuts down after a %1 s countdown that you can cancel."); break;
+    case power::Action::Restart: note = FW_TR("When the last job ends, the computer restarts after a %1 s countdown that you can cancel."); break;
+    case power::Action::None: break;
+    }
+    m_afterNote->set(note.isEmpty() ? QString() : note.arg(seconds), Tone::Warn);
+}
+
+std::vector<const JobRecord*> QueuePage::listedJobs() const
+{
+    std::vector<const JobRecord*> out;
+    if (m_demoRecord)
+        out.push_back(&*m_demoRecord);
+    for (int r = 0; r < m_model.rowCount(); ++r)
+        if (const JobRecord* rec = m_model.recordAt(r); rec && visibleJob(*rec))
+            out.push_back(rec);
+    return out;
+}
+
 void QueuePage::updateEta()
 {
     int running = 0, queued = 0;
     qint64 eta = -1;
-    for (int r = 0; r < m_model.rowCount(); ++r) {
-        const JobRecord* rec = m_model.recordAt(r);
-        if (!rec || !visibleJob(*rec))
-            continue;
+    for (const JobRecord* rec : listedJobs()) {
         if (rec->isActive()) {
             ++running;
-            // Jobs that run at the same time end together: the longest one, not the sum.
-            if (rec->progress.etaMs >= 0)
-                eta = std::max<qint64>(eta, rec->progress.etaMs);
+            // Jobs that run at the same time end together: the longest one, not
+            // the sum; each job's whole time left, not its current stage's.
+            if (const qint64 left = jobTimeLeftMs(*rec); left >= 0)
+                eta = std::max<qint64>(eta, left);
         } else if (rec->state == JobState::Queued) {
             ++queued;
         }
@@ -304,8 +369,8 @@ void QueuePage::applyFilter(int index)
 
 void QueuePage::ensureSelection()
 {
-    if (!m_selected.isEmpty() && m_ctx.queue().record(m_selected))
-        return;
+    if (m_demo || (!m_selected.isEmpty() && m_ctx.queue().record(m_selected)))
+        return; // a demo keeps its made-up job selected
     const QStringList ids = m_list->visibleIds();
     QString pick;
     for (const QString& id : ids)
@@ -332,10 +397,7 @@ void QueuePage::updateCounts()
     // The "Not finished" tab lists failed, interrupted and cancelled jobs
     // (applyFilter), and its number counts what it lists.
     int all = 0, running = 0, queued = 0, done = 0, failed = 0, cancelled = 0;
-    for (int r = 0; r < m_model.rowCount(); ++r) {
-        const JobRecord* rec = m_model.recordAt(r);
-        if (!rec || !visibleJob(*rec))
-            continue;
+    for (const JobRecord* rec : listedJobs()) {
         ++all;
         switch (rec->state) {
         case JobState::Running:
@@ -362,11 +424,15 @@ void QueuePage::updateCounts()
                           : next == QueueSwitch::Resume ? FW_TR("Resume queue") : FW_TR("Pause queue"));
     setButtonIcon(m_pauseQueue, held ? QStringLiteral("play") : QStringLiteral("pause"));
     setButtonVariant(m_pauseQueue, held ? ButtonVariant::Primary : ButtonVariant::Secondary);
-    m_pauseQueue->setToolTip(next == QueueSwitch::Start ? FW_TR("Run the waiting jobs, one after another.")
+    // Nothing runs or waits and nothing holds the queue: there is nothing to
+    // pause. The header keeps both buttons in place and says why they rest.
+    const bool canSwitch = held || running > 0 || queued > 0;
+    m_pauseQueue->setEnabled(canSwitch);
+    m_pauseQueue->setToolTip(!canSwitch ? FW_TR("Nothing in the queue")
+                             : next == QueueSwitch::Start ? FW_TR("Run the waiting jobs, one after another.")
                              : next == QueueSwitch::Resume ? FW_TR("Start the next waiting job when the current one ends.")
                                                            : FW_TR("Finish the running job, then wait. Nothing is cancelled."));
     m_clearFinished->setEnabled(done + failed + cancelled > 0);
-    m_clearFinished->setVisible(all > 0);
     updateEta();
     m_columns->setVisible(all > 0 || m_demo);
     m_emptyCard->setVisible(all == 0 && !m_demo);
@@ -450,10 +516,7 @@ QString QueuePage::statusContext() const
 {
     // The jobs this page lists (update checks and other system jobs stay out).
     int running = 0, queued = 0, done = 0, failed = 0, cancelled = 0;
-    for (int r = 0; r < m_model.rowCount(); ++r) {
-        const JobRecord* rec = m_model.recordAt(r);
-        if (!rec || !visibleJob(*rec))
-            continue;
+    for (const JobRecord* rec : listedJobs()) {
         switch (rec->state) {
         case JobState::Running:
         case JobState::Paused:
@@ -471,25 +534,28 @@ QString QueuePage::statusContext() const
 
 void QueuePage::applyDemoState(const QString& name)
 {
-    if (name == QLatin1String("job-running") || name == QLatin1String("job-done")) {
-        // The details column with a made-up job (the list stays as it is).
-        QStringList lines;
-        const JobRecord rec = JobMonitor::demoRecord(name == QLatin1String("job-running") ? QStringLiteral("running") : QStringLiteral("done"), &lines);
-        m_demo = true;
-        m_columns->show();
-        m_emptyCard->hide();
-        m_detail->show();
-        m_monitor->setDemoRecord(rec, lines);
+    const bool cancelSheet = name == QLatin1String("cancel-dialog");
+    if (name != QLatin1String("job-running") && name != QLatin1String("job-done") && !cancelSheet)
         return;
-    }
-    if (name != QLatin1String("cancel-dialog"))
+    // A made-up job: listed first and selected, counted, and in the details column.
+    QStringList lines;
+    const JobRecord rec = JobMonitor::demoRecord(name == QLatin1String("job-done") ? QStringLiteral("done") : QStringLiteral("running"), &lines);
+    m_demo = true;
+    m_demoRecord = rec;
+    m_list->setDemoRecord(rec);
+    m_list->setSelectedId(rec.id);
+    m_selected = rec.id;
+    m_detail->show();
+    m_monitor->setDemoRecord(rec, lines);
+    updateCounts();
+    if (!cancelSheet)
         return;
-    auto* s = new Sheet(window(), QStringLiteral("Cancel the running build?"), Sheet::Icon::Warning);
-    s->addText(QStringLiteral("Ghost of Yotei is 63 % copied. Cancelling deletes the partial image %1 and leaves the dump untouched.")
-                   .arg(Sheet::monoSpan(QStringLiteral("PPSA01325_Ghost_of_Yotei_v01.000.000.exfat"))));
+    // Over it, the sheet Cancel shows for a running job (jobs::cancelWithConfirm), with its texts.
+    auto* s = new Sheet(window(), FW_TR("Cancel the running job?"), Sheet::Icon::Warning);
+    s->addPlainText(FW_TR("%1 is %2 done. The job stops at its next safe point.").arg(rec.title, thinPercent(rec.progress.overallFraction)));
     s->addCheckbox(FW_TR("Also remove the job from the queue"));
-    s->addButton(QStringLiteral("Keep building"), Sheet::Role::Safe);
-    s->addButton(QStringLiteral("Cancel build"), Sheet::Role::Destructive);
+    s->addButton(FW_TR("Keep running"), Sheet::Role::Safe);
+    s->addButton(FW_TR("Cancel job"), Sheet::Role::Destructive);
     s->open();
     m_demoSheet = s;
 }
@@ -500,6 +566,9 @@ void QueuePage::clearDemoState()
         s->close(0);
     if (m_demo) {
         m_demo = false;
+        m_demoRecord.reset();
+        m_list->setDemoRecord(std::nullopt);
+        m_selected.clear();
         m_monitor->setJobId({});
         m_settingsFor.clear();
         updateCounts();

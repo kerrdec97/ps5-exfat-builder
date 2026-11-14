@@ -25,6 +25,7 @@
 #include "engines/pfs/PfsSource.h"
 #include "engines/ufs2/Module.h"
 #include "jobs/JobQueue.h"
+#include "support/ProgressAudit.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
@@ -32,11 +33,13 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 
 #include <atomic>
+#include <cmath>
 #include <cstring>
 
 using namespace fw;
@@ -77,17 +80,33 @@ struct Env {
     }
     // Runs a job on this thread, so a test can watch its progress and act
     // (cancel, change a file) at a chosen moment.
+    // `audit` watches the progress and gets the last state at the end.
     Result<JobOutcome> runDirect(const QString& kind, const QJsonObject& params,
                                  const std::function<void(const ProgressSnapshot&)>& watch = {},
-                                 const CancellationToken& token = {})
+                                 const CancellationToken& token = {}, fwtest::ProgressAudit* audit = nullptr)
     {
         FW_TRY_ASSIGN(auto job, jobs.create(kind, params));
         QTemporaryDir temp;
-        ProgressReporter reporter(watch ? ProgressReporter::Sink(watch) : ProgressReporter::Sink(), 0);
-        reporter.setPhases(job->phases(), job->phaseWeights());
+        ProgressReporter reporter(
+            [&](const ProgressSnapshot& s) {
+                if (audit)
+                    audit->report(s);
+                if (watch)
+                    watch(s);
+            },
+            0);
+        if (audit)
+            audit->watch(&reporter);
         JobContext ctx{QStringLiteral("direct"), token, &reporter, Log(QStringLiteral("test")), store->snapshot(), temp.path()};
+        reporter.setPhases(job->phases(), job->phaseWeights(ctx.settings)); // as the queue declares them
         FW_TRY(job->validate(ctx.settings));
-        return job->run(ctx);
+        auto r = job->run(ctx);
+        if (audit) {
+            reporter.finish();
+            audit->finish(reporter.snapshot(), r.ok() && r->verification != Verification::Failed);
+            audit->watch(nullptr);
+        }
+        return r;
     }
 };
 
@@ -208,6 +227,28 @@ bool renameExfatEntry(const QString& image, const QString& from, const QString& 
     return false;
 }
 
+// Stands for an image job whose verification the user cancels: it waits in
+// its verification stage for the cancel, then returns its outcome, as the
+// engines do (GitHub #97).
+class VerificationCancelledJob final : public Job {
+public:
+    QString kind() const override { return QStringLiteral("test.verificationCancelled"); }
+    QString title() const override { return QStringLiteral("verification cancelled"); }
+    QStringList phases() const override { return {QStringLiteral("Writing"), QStringLiteral("Verifying")}; }
+    QJsonObject parameters() const override { return {}; }
+    Result<JobOutcome> run(JobContext& ctx) override
+    {
+        ctx.progress->beginPhase(1, 0);
+        for (int i = 0; i < 2000 && ctx.token.sleepFor(10); ++i) {
+        }
+        JobOutcome o;
+        o.verification = ctx.token.isCancelled() ? Verification::Skipped : Verification::Passed;
+        o.verificationDetail = QStringLiteral("Verification was cancelled, so the output is not verified.");
+        o.summary = QStringLiteral("kept");
+        return o;
+    }
+};
+
 } // namespace
 
 class TestIntegrationSafety : public QObject {
@@ -324,7 +365,8 @@ private slots:
         QVERIFY(QFile::remove(packed));
 
         // The (empty) output gains a file while the job is packing: the job
-        // fails at the end and the folder with the user's file is untouched.
+        // fails at the end, the folder with the user's file is untouched, and
+        // the finished packed folder is kept next to it, not deleted.
         QVERIFY(QDir().mkpath(packed));
         // The sink may run on any of the job's threads: one of them does the deed.
         std::atomic<bool> dropped{false};
@@ -336,6 +378,10 @@ private slots:
         QVERIFY(dropped.load());
         QVERIFY(!late.ok());
         QCOMPARE(late.error().code, ErrorCode::AlreadyExists);
+        const QString keptPack = packed + QStringLiteral(".new");
+        QVERIFY2(late.error().message.contains(QDir::toNativeSeparators(keptPack)), qPrintable(late.error().toLogString()));
+        QVERIFY(QFile::exists(keptPack + QStringLiteral("/ampr_zstd.index")));
+        QVERIFY(removeTreeSafely(keptPack).ok());
         QCOMPARE(listAll(base), QStringList({QStringLiteral("packed"), QStringLiteral("packed/keep.txt")}));
         QCOMPARE(fileBytes(packed + QStringLiteral("/keep.txt")), QByteArray("mine"));
         // And before it starts: run() checks again after validate().
@@ -637,6 +683,476 @@ private slots:
         QVERIFY2(unboxed.ok(), unboxed.ok() ? "" : qPrintable(unboxed.error().toLogString()));
         QCOMPARE(fileBytes(back), fileBytes(exfat));
         QCOMPARE(listAll(dir), sorted(QStringList(before) << QStringLiteral("back.exfat") << QStringLiteral("box.ffpfsc")));
+    }
+
+    // Jobs that run other jobs: the bar runs once from start to end (it never
+    // falls back to start a child's bar again, never stands full while a
+    // child still works) and the stages are the job's own. A conversion shows
+    // each child as one stage (the child's stage leads the current item); the
+    // zstd build enters the image build's stages, steps included, in turn.
+    void compositeJobsRunTheirBarOnce()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("composite"));
+        QVERIFY(QDir().mkpath(dir));
+        const QString exfat = dir + QStringLiteral("/game.exfat");
+        auto built = m_env->run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), exfat}});
+        QVERIFY2(built && built->state == JobState::Succeeded, qPrintable(describe(built)));
+        struct Case {
+            QString what, kind;
+            QJsonObject params;
+            QStringList stages;   // the stages the job shows (empty: not checked)
+            double buildingAt;    // the bar when Building begins (-1: not checked)
+        };
+        const QString box = dir + QStringLiteral("/box.ffpfsc");
+        const std::vector<Case> cases = {
+            {QStringLiteral("repack"), integration::kConvertJob,
+             {{QStringLiteral("image"), exfat}, {QStringLiteral("format"), QStringLiteral("ffpkg")}, {QStringLiteral("output"), dir + QStringLiteral("/r.ffpkg")}},
+             {QStringLiteral("Extracting"), QStringLiteral("Building")}, 0.5},
+            {QStringLiteral("direct"), integration::kConvertJob,
+             {{QStringLiteral("image"), exfat}, {QStringLiteral("format"), QStringLiteral("ffpfsc")}, {QStringLiteral("output"), box}},
+             {QStringLiteral("Scanning"), QStringLiteral("Packing"), QStringLiteral("Verifying")}, -1},
+            {QStringLiteral("container back"), integration::kConvertJob,
+             {{QStringLiteral("image"), box}, {QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("output"), dir + QStringLiteral("/back.exfat")}},
+             {QStringLiteral("Extracting"), QStringLiteral("Saving"), QStringLiteral("Verifying")}, -1},
+            {QStringLiteral("container repacked"), integration::kConvertJob,
+             {{QStringLiteral("image"), box}, {QStringLiteral("format"), QStringLiteral("ffpkg")}, {QStringLiteral("output"), dir + QStringLiteral("/c.ffpkg")}},
+             {QStringLiteral("Extracting"), QStringLiteral("Building")}, 0.5},
+            {QStringLiteral("zstd exFAT"), integration::kZstdBuildJob,
+             {{QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("source"), m_game}, {QStringLiteral("output"), dir + QStringLiteral("/z.exfat")}},
+             {}, -1},
+            {QStringLiteral("zstd FFPKG"), integration::kZstdBuildJob,
+             {{QStringLiteral("format"), QStringLiteral("ffpkg")}, {QStringLiteral("source"), m_game}, {QStringLiteral("output"), dir + QStringLiteral("/z.ffpkg")}},
+             {}, -1},
+        };
+        for (const Case& c : cases) {
+            fwtest::ProgressAudit audit;
+            auto r = m_env->runDirect(c.kind, c.params, {}, {}, &audit);
+            QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(c.what + u' ' + r.error().toLogString()));
+            QVERIFY2(r->verification != Verification::Failed, qPrintable(c.what + u' ' + r->verificationDetail));
+            QVERIFY2(audit.problems().isEmpty(), qPrintable(c.what + QStringLiteral(": ") + audit.problems().join(u'\n')));
+            const auto seen = audit.seen();
+            QVERIFY(!seen.empty());
+            if (!c.stages.isEmpty())
+                for (const ProgressSnapshot& s : seen)
+                    QVERIFY2(s.phaseNames == c.stages, qPrintable(c.what + QStringLiteral(": ") + s.phaseNames.join(QStringLiteral(", "))));
+            if (c.buildingAt >= 0) {
+                const double at = audit.fractionWhen([](const ProgressSnapshot& s) { return s.phaseIndex == 1; });
+                QVERIFY2(std::abs(at - c.buildingAt) < 0.02, qPrintable(c.what + u' ' + QString::number(at)));
+            }
+            if (c.kind == integration::kConvertJob && c.what != QLatin1String("direct")) {
+                // A child shown as one stage shows its own counts there (bytes,
+                // files), never the stage's units ("537 of 1,000"); a new name in
+                // Saving has nothing to count ("0 of 1").
+                bool bytesShown = false;
+                for (const ProgressSnapshot& s : seen) {
+                    QVERIFY2(s.unitIsBytes || s.total == 0 || (s.total != 1000 && (s.total != 1 || s.phase != QLatin1String("Saving"))),
+                             qPrintable(c.what + QStringLiteral(": %1 · %2 of %3 units").arg(s.phase).arg(s.done).arg(s.total)));
+                    bytesShown = bytesShown || (s.phaseIndex == 1 && s.phase == QLatin1String("Building") && s.unitIsBytes && s.total > 0);
+                }
+                if (c.stages.contains(QStringLiteral("Building")))
+                    QVERIFY2(bytesShown, qPrintable(c.what + QStringLiteral(": the build's bytes were never shown")));
+            }
+            if (c.kind == integration::kZstdBuildJob) {
+                // The image build's files done are the zstd job's too, not "0 of N files".
+                QVERIFY2(std::any_of(seen.begin(), seen.end(), [](const ProgressSnapshot& s) {
+                             return s.phaseIndex >= 3 && s.filesTotal > 0 && s.filesDone > 0;
+                         }),
+                         qPrintable(c.what + QStringLiteral(": no files done were shown")));
+            }
+            if (c.kind == integration::kZstdBuildJob && c.params.value(QStringLiteral("format")).toString() == u"ffpkg") {
+                // The FFPKG build's structure check, a step of its Verifying, is the zstd job's step too.
+                const double checking = audit.fractionWhen([](const ProgressSnapshot& s) { return s.phase == QLatin1String("Checking structure"); });
+                QVERIFY2(checking > 0.5 && checking < 0.95, qPrintable(QString::number(checking)));
+            }
+        }
+    }
+
+    // With verification turned off the zstd build's bar still runs to the end:
+    // the image build's Verifying, which does not run, takes no share (the
+    // shares are declared for the job's settings, as the queue declares them).
+    void zstdBuildWithVerificationOffRunsToTheEnd()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("zstd-noverify"));
+        QVERIFY(QDir().mkpath(dir));
+        const QString exfat = dir + QStringLiteral("/game.exfat");
+        auto built = m_env->run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), exfat}});
+        QVERIFY2(built && built->state == JobState::Succeeded, qPrintable(describe(built)));
+        const QVariant before = m_env->store->value(general::keys::kVerifyAfterBuild);
+        QVERIFY(m_env->store->setValue(general::keys::kVerifyAfterBuild, false).ok());
+        const auto restore = qScopeGuard([&] { (void)m_env->store->setValue(general::keys::kVerifyAfterBuild, before); });
+        struct Case {
+            QString kind;
+            QJsonObject params;
+        };
+        std::vector<Case> cases;
+        for (const QString format : {QStringLiteral("exfat"), QStringLiteral("ffpkg"), QStringLiteral("ffpfs"), QStringLiteral("ffpfsc")})
+            cases.push_back({integration::kZstdBuildJob, {{QStringLiteral("format"), format}, {QStringLiteral("source"), m_game},
+                                                          {QStringLiteral("output"), dir + QStringLiteral("/z.") + format}}});
+        // A repack conversion's build (the PFS one has no Verifying then either).
+        for (const QString format : {QStringLiteral("ffpfs"), QStringLiteral("ffpfsc")})
+            cases.push_back({integration::kConvertJob, {{QStringLiteral("image"), exfat}, {QStringLiteral("format"), format},
+                                                        {QStringLiteral("method"), QStringLiteral("repack")},
+                                                        {QStringLiteral("output"), dir + QStringLiteral("/c.") + format}}});
+        for (const Case& c : cases) {
+            const QString what = c.kind + u' ' + c.params.value(QStringLiteral("format")).toString();
+            fwtest::ProgressAudit audit;
+            auto r = m_env->runDirect(c.kind, c.params, {}, {}, &audit);
+            QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(what + u' ' + r.error().toLogString()));
+            QCOMPARE(r->verification, Verification::Skipped);
+            QVERIFY2(audit.problems().isEmpty(), qPrintable(what + QStringLiteral(": ") + audit.problems().join(u'\n')));
+        }
+    }
+
+    // A zipped dump is unpacked in Preparing first: that gets a share of the
+    // bar like the image builds give it, not 1 % of it (which also made the
+    // job's time left about a hundred times too long).
+    void zstdBuildFromAZipGivesTheUnpackingItsShare()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("zstd-zip"));
+        const QString zip = dir + QStringLiteral("/PPSA01234.zip");
+        QVERIFY(QDir().mkpath(dir));
+        QVERIFY(zipFolder(m_game, zip, QStringLiteral("PPSA01234/")));
+        fwtest::ProgressAudit audit;
+        auto r = m_env->runDirect(integration::kZstdBuildJob,
+                                  {{QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("source"), zip},
+                                   {QStringLiteral("output"), dir + QStringLiteral("/z.exfat")}},
+                                  {}, {}, &audit);
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QVERIFY2(audit.problems().isEmpty(), qPrintable(audit.problems().join(u'\n')));
+        const double packing = audit.fractionWhen([](const ProgressSnapshot& s) { return s.phase == QLatin1String("Packing"); });
+        QVERIFY2(packing >= 0.25 && packing < 0.5, qPrintable(QString::number(packing)));
+    }
+
+    // With "Check the packs" off the pack job's bar runs to the end: Checking
+    // packs, which does not run, takes no share.
+    void packWithoutCheckingRunsToTheEnd()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("pack-nocheck"));
+        QVERIFY(QDir().mkpath(dir));
+        fwtest::ProgressAudit audit;
+        auto r = m_env->runDirect(ampr::kPackJob,
+                                  {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), dir + QStringLiteral("/packed")},
+                                   {QStringLiteral("verifyPacks"), false}},
+                                  {}, {}, &audit);
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QCOMPARE(r->verification, Verification::NotRun);
+        QVERIFY2(audit.problems().isEmpty(), qPrintable(audit.problems().join(u'\n')));
+        QVERIFY(audit.fractionWhen([](const ProgressSnapshot& s) { return s.phase == QLatin1String("Checking packs"); }) < 0.0);
+    }
+
+    // A conversion that unpacks the image a container holds never takes a
+    // file of the user's called "<output>.part" for its own. What an
+    // interrupted run left is its own and goes: its working file, and that of
+    // the copy into it from another drive ("<output>.fw.part.fw.part"), which
+    // must not be counted as used space nor be left behind.
+    void containerBackLeavesTheUsersPartFile()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("container-part"));
+        QVERIFY(QDir().mkpath(dir));
+        const QString exfat = dir + QStringLiteral("/g.exfat");
+        auto built = m_env->run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), exfat}});
+        QVERIFY2(built && built->state == JobState::Succeeded, qPrintable(describe(built)));
+        const QString box = dir + QStringLiteral("/g.ffpfsc");
+        auto boxed = m_env->runDirect(integration::kConvertJob, {{QStringLiteral("image"), exfat}, {QStringLiteral("format"), QStringLiteral("ffpfsc")},
+                                                               {QStringLiteral("output"), box}});
+        QVERIFY2(boxed.ok(), boxed.ok() ? "" : qPrintable(boxed.error().toLogString()));
+        const QString back = dir + QStringLiteral("/back.exfat");
+        QVERIFY(fwtest::writeTextFile(back + QStringLiteral(".part"), "mine"));
+        const QString working = PartFile::partPathFor(back), copying = PartFile::partPathFor(working);
+        QVERIFY(fwtest::writeTextFile(working, "left by a crash"));
+        QVERIFY(fwtest::writeTextFile(copying, "left by a crash while copying"));
+        auto r = m_env->runDirect(integration::kConvertJob, {{QStringLiteral("image"), box}, {QStringLiteral("format"), QStringLiteral("exfat")},
+                                                           {QStringLiteral("output"), back}});
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QCOMPARE(r->verification, Verification::Passed);
+        QCOMPARE(fileBytes(back), fileBytes(exfat));
+        QCOMPARE(fileBytes(back + QStringLiteral(".part")), QByteArray("mine"));
+        QVERIFY(!QFileInfo::exists(working));
+        QVERIFY(!QFileInfo::exists(copying));
+    }
+
+    // GitHub #97 for the jobs of this module: a cancel while finished work is
+    // verified keeps it as with verification turned off, and the job still
+    // ends with an outcome that says it is not verified. A conversion that is
+    // cancelled while its first half (the extraction) is checked is cancelled:
+    // its image is not made yet, and an existing output stays as it was.
+    void cancelDuringVerificationKeepsFinishedWork()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("vcancel"));
+        QVERIFY(QDir().mkpath(dir));
+        const auto cancelAt = [](CancellationSource& cancel, bool& cancelled, const std::function<bool(const ProgressSnapshot&)>& when) {
+            return [&cancel, &cancelled, when](const ProgressSnapshot& s) {
+                if (!cancelled && when(s)) {
+                    cancelled = true;
+                    cancel.cancel();
+                }
+            };
+        };
+
+        // game.extract
+        {
+            const QString out = dir + QStringLiteral("/extracted");
+            CancellationSource cancel;
+            bool cancelled = false;
+            auto r = m_env->runDirect(integration::kGameExtractJob, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out}},
+                                      cancelAt(cancel, cancelled, [](const ProgressSnapshot& s) { return s.phaseIndex == 2; }), cancel.token());
+            QVERIFY(cancelled);
+            QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+            QCOMPARE(r->verification, Verification::Skipped);
+            QVERIFY2(r->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(r->verificationDetail));
+            QCOMPARE(r->outputs, QStringList{out});
+            QCOMPARE(fileBytes(out + QStringLiteral("/data/level1.bin")), fileBytes(m_game + QStringLiteral("/data/level1.bin")));
+            QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+            QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part.extracting")));
+        }
+        // game.extract, a difference found while the cancel is pending: it
+        // still fails, and the wrong files are not kept as the output.
+        {
+            const QString out = dir + QStringLiteral("/extracted-wrong");
+            CancellationSource cancel;
+            bool cancelled = false;
+            auto r = m_env->runDirect(integration::kGameExtractJob, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out}},
+                                      [&](const ProgressSnapshot& s) {
+                                          if (cancelled || s.phaseIndex != 2)
+                                              return;
+                                          cancelled = true;
+                                          // Every extracted file is cut short: the first one compared differs.
+                                          QDirIterator it(out + QStringLiteral(".part"), QDir::Files, QDirIterator::Subdirectories);
+                                          while (it.hasNext())
+                                              (void)QFile::resize(it.next(), 1);
+                                          cancel.cancel();
+                                      },
+                                      cancel.token());
+            QVERIFY(cancelled);
+            QVERIFY(!r.ok());
+            QCOMPARE(r.error().code, ErrorCode::VerificationFailed);
+            QVERIFY(!QFileInfo::exists(out));
+            QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+            QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part.extracting")));
+        }
+
+        const QString exfat = dir + QStringLiteral("/game.exfat");
+        auto built = m_env->run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), exfat}});
+        QVERIFY2(built && built->state == JobState::Succeeded, qPrintable(describe(built)));
+        const QByteArray previous("the previous image");
+
+        // The conversion shows each child as one stage of its own (Extracting,
+        // Building); the child's own stage leads the current item.
+        const auto childStage = [](const ProgressSnapshot& s, int stage, QLatin1String childStage) {
+            return s.phaseIndex == stage && s.currentItem.startsWith(childStage);
+        };
+
+        // Repack, cancelled while the extraction is checked: cancelled.
+        {
+            const QString out = dir + QStringLiteral("/half.ffpkg");
+            QVERIFY(fwtest::writeTextFile(out, previous));
+            CancellationSource cancel;
+            bool cancelled = false;
+            auto r = m_env->runDirect(integration::kConvertJob,
+                                      {{QStringLiteral("image"), exfat}, {QStringLiteral("format"), QStringLiteral("ffpkg")}, {QStringLiteral("output"), out},
+                                       {QStringLiteral("method"), QStringLiteral("repack")}, {QStringLiteral("replaceExisting"), true}},
+                                      cancelAt(cancel, cancelled, [&](const ProgressSnapshot& s) { return childStage(s, 0, QLatin1String("Verifying")); }),
+                                      cancel.token());
+            QVERIFY(cancelled);
+            QVERIFY(!r.ok());
+            QVERIFY2(r.error().isCancelled(), qPrintable(r.error().toLogString()));
+            QCOMPARE(fileBytes(out), previous);
+            QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+        }
+
+        // Repack, cancelled while the new image is verified: saved, not verified.
+        {
+            const QString out = dir + QStringLiteral("/converted.ffpkg");
+            QVERIFY(fwtest::writeTextFile(out, previous));
+            CancellationSource cancel;
+            // The build's Verifying, in the conversion's Building.
+            bool cancelled = false;
+            auto r = m_env->runDirect(integration::kConvertJob,
+                                      {{QStringLiteral("image"), exfat}, {QStringLiteral("format"), QStringLiteral("ffpkg")}, {QStringLiteral("output"), out},
+                                       {QStringLiteral("method"), QStringLiteral("repack")}, {QStringLiteral("replaceExisting"), true}},
+                                      cancelAt(cancel, cancelled, [&](const ProgressSnapshot& s) { return childStage(s, 1, QLatin1String("Verifying")); }),
+                                      cancel.token());
+            QVERIFY(cancelled);
+            QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+            QCOMPARE(r->verification, Verification::Skipped);
+            QVERIFY2(r->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(r->verificationDetail));
+            QCOMPARE(r->outputs, QStringList{out});
+            QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+            auto check = m_env->runDirect(QStringLiteral("image.ffpkg.verify"), {{QStringLiteral("image"), out}, {QStringLiteral("source"), m_game}});
+            QVERIFY2(check.ok() && check->verification == Verification::Passed,
+                     check.ok() ? qPrintable(check->verificationDetail) : qPrintable(check.error().toLogString()));
+        }
+
+        // A container back to the image it holds, cancelled while that is checked: saved, not verified.
+        {
+            const QString box = dir + QStringLiteral("/box.ffpfsc");
+            auto boxed = m_env->runDirect(integration::kConvertJob, {{QStringLiteral("image"), exfat}, {QStringLiteral("format"), QStringLiteral("ffpfsc")},
+                                                                   {QStringLiteral("output"), box}});
+            QVERIFY2(boxed.ok(), boxed.ok() ? "" : qPrintable(boxed.error().toLogString()));
+            const QString back = dir + QStringLiteral("/back.exfat");
+            QVERIFY(fwtest::writeTextFile(back, previous));
+            CancellationSource cancel;
+            bool cancelled = false;
+            auto r = m_env->runDirect(integration::kConvertJob,
+                                      {{QStringLiteral("image"), box}, {QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("output"), back},
+                                       {QStringLiteral("replaceExisting"), true}},
+                                      // The check's first stage, in the conversion's Verifying (its third stage here).
+                                      cancelAt(cancel, cancelled, [&](const ProgressSnapshot& s) { return childStage(s, 2, QLatin1String("Reading image")); }),
+                                      cancel.token());
+            QVERIFY(cancelled);
+            QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+            QCOMPARE(r->verification, Verification::Skipped);
+            QCOMPARE(fileBytes(back), fileBytes(exfat));
+            QVERIFY(!QFileInfo::exists(PartFile::partPathFor(back)));
+
+            // Cancelled while it is saved next to the output (before its check
+            // began): cancelled, and the existing output stays as it was.
+            QVERIFY(fwtest::writeTextFile(back, previous));
+            CancellationSource early;
+            bool saving = false;
+            auto stopped = m_env->runDirect(integration::kConvertJob,
+                                            {{QStringLiteral("image"), box}, {QStringLiteral("format"), QStringLiteral("exfat")},
+                                             {QStringLiteral("output"), back}, {QStringLiteral("replaceExisting"), true}},
+                                            cancelAt(early, saving, [](const ProgressSnapshot& s) { return s.phase == QLatin1String("Saving"); }),
+                                            early.token());
+            QVERIFY(saving);
+            QVERIFY(!stopped.ok());
+            QVERIFY2(stopped.error().isCancelled(), qPrintable(stopped.error().toLogString()));
+            QCOMPARE(fileBytes(back), previous);
+            QVERIFY(!QFileInfo::exists(PartFile::partPathFor(back)));
+        }
+    }
+
+    // ampr.pack cancelled while the written packs are checked: the packed
+    // folder is kept as with the check turned off, and not called verified.
+    void packCancelledWhileThePacksAreCheckedKeepsTheFolder()
+    {
+        const QString out = m_root.filePath(QStringLiteral("pack-vcancel/packed"));
+        CancellationSource cancel;
+        std::atomic<bool> cancelled{false};
+        auto r = m_env->runDirect(ampr::kPackJob, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out}},
+                                  [&](const ProgressSnapshot& s) {
+                                      if (s.phase == u"Checking packs" && !cancelled.exchange(true))
+                                          cancel.cancel();
+                                  },
+                                  cancel.token());
+        QVERIFY(cancelled);
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        QCOMPARE(r->verification, Verification::Skipped);
+        QVERIFY2(r->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(r->verificationDetail));
+        QVERIFY(r->details.value(QStringLiteral("verificationCancelled")).toBool());
+        QCOMPARE(r->outputs, QStringList{out});
+        QVERIFY(QFile::exists(out + QStringLiteral("/ampr_zstd.index")));
+        QVERIFY(QFile::exists(out + QStringLiteral("/ampr_emu.index")));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part.writing")));
+        // Unpacked again, it is the game.
+        const QString back = m_root.filePath(QStringLiteral("pack-vcancel/unpacked"));
+        auto u = m_env->runDirect(ampr::kUnpackJob, {{QStringLiteral("source"), out}, {QStringLiteral("output"), back}});
+        QVERIFY2(u.ok(), u.ok() ? "" : qPrintable(u.error().toLogString()));
+        QCOMPARE(fileBytes(back + QStringLiteral("/data/level1.bin")), fileBytes(m_game + QStringLiteral("/data/level1.bin")));
+    }
+
+    // The chosen (empty) folder cannot be replaced because a program has it
+    // open: the extracted, verified files are kept under "<folder>.new"
+    // instead of being deleted with the staged folder.
+    void extractedGameIsKeptWhenTheFolderCannotBeUsed()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("A folder in use can be removed on this platform.");
+#endif
+        const QString dest = m_root.filePath(QStringLiteral("held-game"));
+        QVERIFY(QDir().mkpath(dest));
+        const QString before = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(dest)); // the current folder of a process cannot be removed
+        auto r = m_env->runDirect(integration::kGameExtractJob, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), dest}});
+        QVERIFY(QDir::setCurrent(before));
+        QVERIFY(!r.ok());
+        const QString kept = dest + QStringLiteral(".new");
+        QVERIFY2(r.error().message.contains(QStringLiteral("extracted and verified")), qPrintable(r.error().toLogString()));
+        QVERIFY2(r.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(r.error().toLogString()));
+        QCOMPARE(fileBytes(kept + QStringLiteral("/data/level1.bin")), fileBytes(m_game + QStringLiteral("/data/level1.bin")));
+        QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part.extracting")));
+        QVERIFY(QDir(dest).isEmpty());
+    }
+
+    // The queue does not retry a failure that kept the finished files: a
+    // retry would only extract (and verify) it all again into another copy.
+    void aFailureThatKeptTheFilesIsNotRetried()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("A folder in use can be removed on this platform.");
+#endif
+        Env env(m_root.filePath(QStringLiteral("kept-retry-env")));
+        QVERIFY(env.store->setValue(QStringLiteral("general.autoRetryCount"), 2).ok());
+        QVERIFY(env.store->setValue(QStringLiteral("general.autoRetryDelaySeconds"), 0).ok());
+        const QString parent = m_root.filePath(QStringLiteral("kept-retry"));
+        const QString dest = parent + QStringLiteral("/held");
+        QVERIFY(QDir().mkpath(dest));
+        const QString before = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(dest)); // the current folder of a process cannot be removed
+        const auto r = env.run(integration::kGameExtractJob, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), dest}});
+        QVERIFY(QDir::setCurrent(before));
+        QVERIFY(r);
+        QCOMPARE(r->state, JobState::Failed);
+        QVERIFY(r->error);
+        QVERIFY2(r->error->message.contains(QStringLiteral("extracted and verified")), qPrintable(describe(r)));
+        QVERIFY(r->error->code != ErrorCode::IoError);
+        QCOMPARE(r->attempt, 1);
+        QCOMPARE(QDir(parent).entryList(QDir::Dirs | QDir::NoDotAndDotDot), (QStringList{QStringLiteral("held"), QStringLiteral("held.new")}));
+    }
+
+    // What a power cut leaves: "<output>.part" with the job's marker next to
+    // it is this app's and is replaced by the next run; one without the marker
+    // is somebody else's and is refused, not touched.
+    void leftoversOfAnInterruptedRunAreOursOnlyWithTheMarker()
+    {
+        const QString dir = m_root.filePath(QStringLiteral("leftovers"));
+        QVERIFY(QDir().mkpath(dir));
+        struct Case {
+            QString kind, marker;
+        };
+        for (const Case& c : {Case{integration::kGameExtractJob, QStringLiteral(".part.extracting")}, Case{ampr::kPackJob, QStringLiteral(".part.writing")}}) {
+            const QString ours = dir + u'/' + c.kind + QStringLiteral("-ours");
+            QVERIFY(fwtest::writeTextFile(ours + QStringLiteral(".part/half.bin"), "half of an earlier run"));
+            QVERIFY(fwtest::writeTextFile(ours + c.marker, ""));
+            auto r = m_env->runDirect(c.kind, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), ours}});
+            QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(c.kind + u' ' + r.error().toLogString()));
+            QVERIFY(!QFileInfo::exists(ours + QStringLiteral("/half.bin")));
+            QVERIFY(!QFileInfo::exists(ours + QStringLiteral(".part")));
+            QVERIFY(!QFileInfo::exists(ours + c.marker));
+
+            const QString theirs = dir + u'/' + c.kind + QStringLiteral("-theirs");
+            QVERIFY(fwtest::writeTextFile(theirs + QStringLiteral(".part/theirs.txt"), "theirs"));
+            r = m_env->runDirect(c.kind, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), theirs}});
+            QVERIFY(!r.ok());
+            QCOMPARE(r.error().code, ErrorCode::AlreadyExists);
+            QCOMPARE(fileBytes(theirs + QStringLiteral(".part/theirs.txt")), QByteArray("theirs"));
+            QVERIFY(!QFileInfo::exists(theirs));
+        }
+    }
+
+    // The queue's side of it: a job that returns its outcome after Cancel
+    // (verification cancelled, work kept) is a finished job, not a cancelled
+    // or failed one, and its outcome is kept.
+    void anOutcomeAfterCancelIsAFinishedJob()
+    {
+        Env env(m_root.filePath(QStringLiteral("vcancel-queue-env")));
+        const QString kind = QStringLiteral("test.verificationCancelled");
+        env.jobs.add(kind, QStringLiteral("Test"), [](const QJsonObject&) -> Result<std::unique_ptr<Job>> {
+            return std::unique_ptr<Job>(new VerificationCancelledJob);
+        });
+        auto id = env.queue->enqueue(kind, {});
+        QVERIFY2(id.ok(), id.ok() ? "" : qPrintable(id.error().toLogString()));
+        QVERIFY(QTest::qWaitFor([&] { auto r = env.queue->record(*id); return r && r->state == JobState::Running; }, 10000));
+        env.queue->cancel(*id);
+        QVERIFY(QTest::qWaitFor([&] { auto r = env.queue->record(*id); return r && isTerminal(r->state); }, 20000));
+        const auto r = env.queue->record(*id);
+        QCOMPARE(r->state, JobState::Succeeded);
+        QVERIFY(!r->error);
+        QVERIFY(r->outcome);
+        QCOMPARE(r->outcome->verification, Verification::Skipped);
     }
 
     // ---- upload after a build ------------------------------------------------------------------

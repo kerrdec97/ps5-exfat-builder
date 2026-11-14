@@ -122,7 +122,7 @@ private slots:
         QFETCH(bool, zip64);
         const QString z = makeSample(zip64 ? QStringLiteral("a64.zip") : QStringLiteral("a.zip"), zip64);
         QVERIFY(!z.isEmpty());
-        QVERIFY(!QFile::exists(z + QStringLiteral(".part")));
+        QVERIFY(!QFile::exists(PartFile::partPathFor(z)));
         zip::Reader r;
         QVERIFY(r.open(z).ok());
         QCOMPARE(int(r.entries().size()), 5);
@@ -145,7 +145,7 @@ private slots:
         QVERIFY(w.open(z).ok());
         QVERIFY(w.addData(QStringLiteral("a.txt"), QByteArray(100000, 'v')).ok());
         QVERIFY(w.finish(true).ok());
-        QVERIFY(QFile::exists(z) && !QFile::exists(z + QStringLiteral(".part")));
+        QVERIFY(QFile::exists(z) && !QFile::exists(PartFile::partPathFor(z)));
     }
 
     void neverOverwritesWithoutConsent()
@@ -167,7 +167,7 @@ private slots:
             QVERIFY(w.addData(QStringLiteral("a.txt"), "hello").ok());
         }
         QVERIFY(!QFile::exists(z));
-        QVERIFY(!QFile::exists(z + QStringLiteral(".part")));
+        QVERIFY(!QFile::exists(PartFile::partPathFor(z)));
     }
 
     void cancellationStopsAndLeavesNothing()
@@ -182,7 +182,7 @@ private slots:
             auto st = w.addFile(QStringLiteral("big.bin"), m_root.filePath(QStringLiteral("c/big.bin")), zip::Method::Deflate, cs.token());
             QVERIFY(!st.ok() && st.error().isCancelled());
         }
-        QVERIFY(!QFile::exists(z) && !QFile::exists(z + QStringLiteral(".part")));
+        QVERIFY(!QFile::exists(z) && !QFile::exists(PartFile::partPathFor(z)));
     }
 
     void corruptionIsDetected()
@@ -465,6 +465,41 @@ private slots:
         QVERIFY(!r.open(z).ok());
     }
 
+    // A central directory of 2,000,001 entries (46 bytes each, all pointing at
+    // one local header) is refused as a 7z or RAR with as many is, before its
+    // entries fill the memory: a 512 MiB directory would be eleven million.
+    void moreThanTwoMillionEntriesAreRefused()
+    {
+        const auto le = [](quint64 v, int bytes) {
+            QByteArray b(bytes, '\0');
+            for (int i = 0; i < bytes; ++i)
+                b[i] = char((v >> (8 * i)) & 0xFF);
+            return b;
+        };
+        const quint64 n = 2'000'001;
+        QByteArray local = QByteArray("PK\x03\x04", 4) + le(20, 2) + QByteArray(24, '\0');
+        QByteArray entry = QByteArray("PK\x01\x02", 4) + le(20, 2) + le(20, 2) + QByteArray(38, '\0');
+        QCOMPARE(local.size(), 30);
+        QCOMPARE(entry.size(), 46);
+        const quint64 cdOffset = quint64(local.size()), cdSize = n * quint64(entry.size());
+        QByteArray bytes = local + entry.repeated(qsizetype(n));
+        const quint64 record = quint64(bytes.size());
+        bytes += QByteArray("PK\x06\x06", 4) + le(44, 8) + le(45, 2) + le(45, 2) + le(0, 4) + le(0, 4) + le(n, 8) + le(n, 8)
+            + le(cdSize, 8) + le(cdOffset, 8);
+        bytes += QByteArray("PK\x06\x07", 4) + le(0, 4) + le(record, 8) + le(1, 4);
+        bytes += QByteArray("PK\x05\x06", 4) + le(0, 2) + le(0, 2) + le(0xFFFF, 2) + le(0xFFFF, 2) + le(0xFFFFFFFF, 4)
+            + le(0xFFFFFFFF, 4) + le(0, 2);
+        const QString z = m_root.filePath(QStringLiteral("entries.zip"));
+        QVERIFY(fwtest::writeTextFile(z, bytes));
+        bytes.clear();
+        zip::Reader r;
+        const Status st = r.open(z);
+        QVERIFY(!st.ok());
+        QCOMPARE(st.error().code, ErrorCode::Unsupported);
+        QVERIFY2(st.error().message.contains(QStringLiteral("entries.zip holds more than 2,000,000 entries")), qPrintable(st.error().message));
+        QVERIFY(QFile::remove(z));
+    }
+
     // readAll's limit also holds for a declared size of 2^63 or more.
     void readAllLimitIsUnsigned()
     {
@@ -492,7 +527,7 @@ private slots:
         const Status st = w.finish(true, cs.token());
         QVERIFY(!st.ok());
         QVERIFY2(st.error().isCancelled(), qPrintable(st.error().toLogString()));
-        QVERIFY(!QFile::exists(z) && !QFile::exists(z + QStringLiteral(".part")));
+        QVERIFY(!QFile::exists(z) && !QFile::exists(PartFile::partPathFor(z)));
     }
 
     void interoperatesWithPythonAndUnzip()

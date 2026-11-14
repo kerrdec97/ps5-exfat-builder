@@ -105,8 +105,22 @@ QString CompareReport::summary(CompareDepth depth) const
         parts << QStringLiteral("%1 unexpected (%2)").arg(extra.size()).arg(formatList(extra));
     if (!changed.isEmpty())
         parts << QStringLiteral("%1 different (%2)").arg(changed.size()).arg(formatList(changed));
-    return parts.join(QStringLiteral("; ")) + u'.';
+    QString s = parts.join(QStringLiteral("; ")) + u'.';
+    if (cancelled)
+        s += QStringLiteral(" Verification was cancelled after that, so there may be more.");
+    return s;
 }
+
+namespace {
+// A cancel ends a comparison; a difference it found before still fails it.
+Result<CompareReport> cancelledWith(CompareReport& rep)
+{
+    if (rep.ok())
+        return Error::cancelled();
+    rep.cancelled = true;
+    return std::move(rep);
+}
+} // namespace
 
 Result<CompareReport> compareImage(const Ufs2Reader& image, const SourceTree& expected, CompareDepth depth,
                                    const CancellationToken& token, ProgressReporter* progress, qint64 bufferBytes,
@@ -133,7 +147,7 @@ Result<CompareReport> compareImage(const Ufs2Reader& image, const SourceTree& ex
                 rep.extra << joinPath(it.rel, img.nodes[size_t(c)].name) + QStringLiteral(" (listed twice)");
         for (int ec : expected.liveChildren(it.exp)) {
             if ((++n & 0xFF) == 0 && !token.checkpoint())
-                return Error::cancelled();
+                return cancelledWith(rep);
             const TreeNode& e = expected.nodes[size_t(ec)];
             const QString rel = joinPath(it.rel, e.name);
             auto found = byName.find(e.rawName);
@@ -154,15 +168,18 @@ Result<CompareReport> compareImage(const Ufs2Reader& image, const SourceTree& ex
                 continue;
             }
             ++rep.filesCompared;
+            // A compare of names and sizes is counted in files: one unit each.
             if (e.size != i.size) {
                 rep.changed << QStringLiteral("%1 (%2 bytes, expected %3)").arg(rel).arg(i.size).arg(e.size);
-                if (progress && depth == CompareDepth::Full)
-                    progress->advance(e.size);
+                if (progress)
+                    progress->advance(depth == CompareDepth::Full ? e.size : 1);
                 continue;
             }
             if (depth == CompareDepth::Structure) {
-                if (progress)
+                if (progress) {
+                    progress->advance(1);
                     progress->advanceFiles(1);
+                }
                 continue;
             }
             auto se = openContent(expected, ec);
@@ -175,9 +192,11 @@ Result<CompareReport> compareImage(const Ufs2Reader& image, const SourceTree& ex
                 rep.changed << QStringLiteral("%1 (could not be read back: %2)").arg(rel, si.error().message);
                 continue;
             }
-            FW_TRY_ASSIGN(QString diff, compareStreams(*se.value(), *si.value(), e.size, ba, bb, token, progress, &rep.bytesCompared));
-            if (!diff.isEmpty())
-                rep.changed << QStringLiteral("%1 (%2)").arg(rel, diff);
+            auto diff = compareStreams(*se.value(), *si.value(), e.size, ba, bb, token, progress, &rep.bytesCompared);
+            if (!diff.ok())
+                return diff.error().isCancelled() ? cancelledWith(rep) : Result<CompareReport>(diff.takeError());
+            if (!diff->isEmpty())
+                rep.changed << QStringLiteral("%1 (%2)").arg(rel, *diff);
             if (progress)
                 progress->advanceFiles(1);
         }
@@ -373,7 +392,7 @@ Result<CompareReport> verifyExtracted(const SourceTree& tree, const ExtractRepor
     QByteArray ba(qsizetype(bufferBytes), '\0'), bb(qsizetype(bufferBytes), '\0');
     for (const auto& [node, path] : report.written) {
         if (!token.checkpoint())
-            return Error::cancelled();
+            return cancelledWith(rep);
         const TreeNode& n = tree.nodes[size_t(node)];
         const QString rel = tree.relativePath(node);
         const QFileInfo fi(toLongPath(path));
@@ -382,13 +401,18 @@ Result<CompareReport> verifyExtracted(const SourceTree& tree, const ExtractRepor
             rep.missing << rel;
             continue;
         }
+        // A compare of names and sizes is counted in files: one unit each.
         if (fi.size() != n.size) {
             rep.changed << QStringLiteral("%1 (%2 bytes, expected %3)").arg(rel).arg(fi.size()).arg(n.size);
+            if (progress && depth == CompareDepth::Structure)
+                progress->advance(1);
             continue;
         }
         if (depth == CompareDepth::Structure) {
-            if (progress)
+            if (progress) {
+                progress->advance(1);
                 progress->advanceFiles(1);
+            }
             continue;
         }
         FW_TRY_ASSIGN(auto img, openContent(tree, node));
@@ -397,9 +421,11 @@ Result<CompareReport> verifyExtracted(const SourceTree& tree, const ExtractRepor
             rep.changed << QStringLiteral("%1 (could not be read back)").arg(rel);
             continue;
         }
-        FW_TRY_ASSIGN(QString diff, compareStreams(*img, disk, n.size, ba, bb, token, progress, &rep.bytesCompared));
-        if (!diff.isEmpty())
-            rep.changed << QStringLiteral("%1 (%2)").arg(rel, diff);
+        auto diff = compareStreams(*img, disk, n.size, ba, bb, token, progress, &rep.bytesCompared);
+        if (!diff.ok())
+            return diff.error().isCancelled() ? cancelledWith(rep) : Result<CompareReport>(diff.takeError());
+        if (!diff->isEmpty())
+            rep.changed << QStringLiteral("%1 (%2)").arg(rel, *diff);
         if (progress)
             progress->advanceFiles(1);
     }

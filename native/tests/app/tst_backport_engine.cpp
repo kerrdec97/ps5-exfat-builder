@@ -8,16 +8,23 @@
 //    job, and the protocol (progress events, result, cancel + tree kill).
 //  * With FW_BACKPORT_E2E_GAME=<a real, unmodified game dump folder> as well:
 //    a full backport (Apply off) into temporary folders, then an AMPR / PlayGo
-//    switch and an SDK 5 rebuild of the produced ZIP. The game folder is only
-//    read. The user's own PS5 Backport settings and ledger are never touched:
+//    switch and an SDK 5 rebuild of the produced ZIP. The game folder is
+//    copied into a temporary folder the first time one of these tests needs
+//    it (under FW_BACKPORT_E2E_COPY_DIR when set, else the system's temporary
+//    folder) and only the copy is given to the engine; the other tests never
+//    wait for the copy. Too little free space for it skips these tests; a
+//    link in the dump fails them (the copy would not be that dump). The
+//    user's own PS5 Backport settings and ledger are never touched:
 //    D97BETA_CONFIG_DIR / D97BETA_DATA_DIR point at temporary folders.
 
 #include "app/backport/BackportCore.h"
 #include "app/backport/BackportHost.h"
+#include "core/FsLinks.h"
 #include "support/TestSupport.h"
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
@@ -25,8 +32,11 @@
 #include <QProcess>
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QTest>
+
+#include <memory>
 
 using namespace fw::bp;
 
@@ -37,6 +47,43 @@ bool writeFile(const QString& path, const QByteArray& data)
     QDir().mkpath(QFileInfo(path).absolutePath());
     QFile f(path);
     return f.open(QIODevice::WriteOnly) && f.write(data) == data.size();
+}
+
+// Copies the folder `from` (files and sub-folders) into `to`. A symbolic link
+// or junction in it is refused, not left out: the copy would not be the dump
+// the test says it uses. `why` then names what stopped the copy.
+bool copyTree(const QString& from, const QString& to, QString& why)
+{
+    if (!QDir().mkpath(to)) {
+        why = QStringLiteral("could not create %1").arg(QDir::toNativeSeparators(to));
+        return false;
+    }
+    const QDir src(from);
+    for (const QFileInfo& fi : src.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)) {
+        if (fi.isSymbolicLink() || fi.isJunction()) {
+            why = QStringLiteral("the game folder holds a link: %1").arg(QDir::toNativeSeparators(fi.absoluteFilePath()));
+            return false;
+        }
+        const QString target = QDir(to).filePath(fi.fileName());
+        if (fi.isDir()) {
+            if (!copyTree(fi.absoluteFilePath(), target, why))
+                return false;
+        } else if (!QFile::copy(fi.absoluteFilePath(), target)) {
+            why = QStringLiteral("could not copy %1 to %2").arg(QDir::toNativeSeparators(fi.absoluteFilePath()), QDir::toNativeSeparators(target));
+            return false;
+        }
+    }
+    return true;
+}
+
+// The bytes of the files below `folder` (links are not followed).
+qint64 treeBytes(const QString& folder)
+{
+    qint64 bytes = 0;
+    QDirIterator it(folder, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+    while (it.hasNext())
+        bytes += it.nextFileInfo().size();
+    return bytes;
 }
 
 struct Run {
@@ -74,11 +121,74 @@ Run runJob(const QJsonObject& job, int timeoutMs, const std::function<void(Worke
 
 } // namespace
 
+// In an end-to-end test: the copy of the game folder (m_game), or a skip or a
+// failure of this test only when there is none.
+#define FW_NEED_GAME_COPY()                                                                                            \
+    do {                                                                                                               \
+        prepareGameCopy();                                                                                             \
+        if (!m_gameSkip.isEmpty())                                                                                     \
+            QSKIP(qPrintable(m_gameSkip));                                                                             \
+        QVERIFY2(m_gameFailure.isEmpty(), qPrintable(m_gameFailure));                                                  \
+        QVERIFY(QFileInfo(m_game).isDir());                                                                            \
+    } while (false)
+
 class TestBackportEngine : public QObject {
     Q_OBJECT
 private:
     QTemporaryDir m_cfg, m_data, m_home;
+    std::unique_ptr<QTemporaryDir> m_gameCopy; // made by the first end-to-end test
     QString m_engine, m_game;
+    bool m_gameTried = false;
+    QString m_gameSkip, m_gameFailure; // why there is no copy
+
+    // The engine only ever sees a copy: the dump named by FW_BACKPORT_E2E_GAME
+    // is read once, here, and never handed to a worker. The copy is made when
+    // an end-to-end test first asks for it (a dump is tens of GB; the other
+    // tests run without it), on the drive of FW_BACKPORT_E2E_COPY_DIR when set.
+    void prepareGameCopy()
+    {
+        if (m_gameTried)
+            return;
+        m_gameTried = true;
+        const QString original = qEnvironmentVariable("FW_BACKPORT_E2E_GAME");
+        if (m_engine.isEmpty() || original.isEmpty()) {
+            m_gameSkip = QStringLiteral("set FW_BACKPORT_ENGINE and FW_BACKPORT_E2E_GAME (an unmodified game dump; the engine works on a copy)");
+            return;
+        }
+        if (!QFileInfo(original).isDir()) {
+            m_gameFailure = QStringLiteral("FW_BACKPORT_E2E_GAME is not a folder: %1").arg(original);
+            return;
+        }
+        const QString parent = qEnvironmentVariable("FW_BACKPORT_E2E_COPY_DIR", QDir::tempPath());
+        if (!QFileInfo(parent).isDir()) {
+            m_gameFailure = QStringLiteral("FW_BACKPORT_E2E_COPY_DIR is not a folder: %1").arg(parent);
+            return;
+        }
+        const qint64 needed = treeBytes(original) + 1024LL * 1024 * 1024; // and a margin for the engine's own files
+        const QStorageInfo volume(parent);
+        if (volume.isValid() && volume.bytesAvailable() < needed) {
+            m_gameSkip = QStringLiteral("not enough free space in %1 for a copy of the game folder (%2 MB needed, %3 MB free); "
+                                        "set FW_BACKPORT_E2E_COPY_DIR to a folder on a drive with room")
+                             .arg(QDir::toNativeSeparators(parent))
+                             .arg(needed / (1024 * 1024))
+                             .arg(volume.bytesAvailable() / (1024 * 1024));
+            return;
+        }
+        m_gameCopy = std::make_unique<QTemporaryDir>(QDir(parent).filePath(QStringLiteral("fw-backport-e2e-XXXXXX")));
+        if (!m_gameCopy->isValid()) {
+            m_gameFailure = QStringLiteral("could not create a temporary folder in %1").arg(QDir::toNativeSeparators(parent));
+            return;
+        }
+        const QString copy = QDir(m_gameCopy->path()).filePath(QFileInfo(QDir::cleanPath(original)).fileName());
+        QString why;
+        if (!copyTree(original, copy, why)) {
+            m_gameFailure = QStringLiteral("could not copy the game folder: %1").arg(why);
+            m_gameCopy.reset(); // what was copied goes
+            return;
+        }
+        m_game = copy;
+        qInfo() << "the end-to-end tests work on a copy:" << QDir::toNativeSeparators(m_game);
+    }
 
 private slots:
     void initTestCase()
@@ -90,8 +200,31 @@ private slots:
         // the one the installed app and the standalone program use.
         qputenv("D97BETA_ENGINE_HOME", QDir::toNativeSeparators(m_home.path()).toUtf8());
         m_engine = qEnvironmentVariable("FW_BACKPORT_ENGINE");
-        m_game = qEnvironmentVariable("FW_BACKPORT_E2E_GAME");
         QVERIFY(folders().configDir.startsWith(QDir::fromNativeSeparators(m_cfg.path()), Qt::CaseInsensitive));
+    }
+
+    // The copy the end-to-end tests work on is the dump or nothing: files and
+    // folders as they are, and a link in it refused by name (never left out).
+    void gameCopyRefusesLinks()
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const QString dump = root.filePath(QStringLiteral("dump"));
+        QVERIFY(writeFile(dump + QStringLiteral("/eboot.bin"), "elf"));
+        QVERIFY(writeFile(dump + QStringLiteral("/sce_sys/param.json"), "{}"));
+        QCOMPARE(treeBytes(dump), qint64(5));
+        QString why;
+        QVERIFY2(copyTree(dump, root.filePath(QStringLiteral("copy")), why), qPrintable(why));
+        QVERIFY(QFileInfo(root.filePath(QStringLiteral("copy/sce_sys/param.json"))).isFile());
+        QCOMPARE(treeBytes(root.filePath(QStringLiteral("copy"))), qint64(5));
+
+        const QString outside = root.filePath(QStringLiteral("outside"));
+        QVERIFY(writeFile(outside + QStringLiteral("/other.bin"), "x"));
+        fw::JunctionGuard link(dump + QStringLiteral("/sce_sys/linked"));
+        if (const fw::Status made = fw::createDirectoryJunction(link.path(), outside); !made.ok())
+            QSKIP(qPrintable(QStringLiteral("No folder link can be made here (%1)").arg(made.error().message)));
+        QVERIFY(!copyTree(dump, root.filePath(QStringLiteral("copy2")), why));
+        QVERIFY2(why.contains(QStringLiteral("holds a link")) && why.contains(QStringLiteral("linked")), qPrintable(why));
     }
 
     void nameFromFolder()
@@ -458,9 +591,7 @@ private slots:
 
     void realBackportEndToEnd()
     {
-        if (m_engine.isEmpty() || m_game.isEmpty())
-            QSKIP("set FW_BACKPORT_ENGINE and FW_BACKPORT_E2E_GAME (an unmodified game dump; it is only read)");
-        QVERIFY(QFileInfo(m_game).isDir());
+        FW_NEED_GAME_COPY();
         const Game g = readGame(m_game);
         QVERIFY2(!g.alreadyBackported, "use an unmodified game folder");
         qInfo() << "game" << g.titleId << g.title << g.version << "sdk" << g.sdk << "fw" << g.fw << g.notes;
@@ -535,8 +666,7 @@ private slots:
 
     void cancelKillsTheTree()
     {
-        if (m_engine.isEmpty() || m_game.isEmpty())
-            QSKIP("set FW_BACKPORT_ENGINE and FW_BACKPORT_E2E_GAME");
+        FW_NEED_GAME_COPY();
         QTemporaryDir root;
         const Game g = readGame(m_game);
         QElapsedTimer t;

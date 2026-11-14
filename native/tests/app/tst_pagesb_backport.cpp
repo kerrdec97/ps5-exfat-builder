@@ -25,6 +25,7 @@
 #include "support/TestSupport.h"
 
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -32,12 +33,16 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSortFilterProxyModel>
+#include <QSpinBox>
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTextEdit>
 #include <QTimer>
+#include <QUrl>
 
 #include <functional>
 
@@ -52,8 +57,16 @@ const char* const kFakeEngine =
     "copy /y \"%~2\" \"%~dp0last-job.json\" >nul 2>&1\r\n"
     "echo start>>\"%~dp0starts.log\"\r\n"
     "echo {\"event\":\"progress\",\"stage\":\"BASELINE\",\"label\":\"Working\",\"detail\":\"\",\"pct\":10,\"phase\":\"engine\"}\r\n"
+    "if exist \"%~dp0hold.flag\" goto hold\r\n"
     "set /p LINE=\r\n"
     "echo {\"event\":\"result\",\"status\":\"CANCELLED\",\"headline\":\"Cancelled by the test\"}\r\n"
+    "exit /b 0\r\n"
+    // hold.flag: this job waits for go.flag instead of stdin and then ends DONE
+    // (the next job of the run starts as usual).
+    ":hold\r\n"
+    "if not exist \"%~dp0go.flag\" goto hold\r\n"
+    "del \"%~dp0hold.flag\" \"%~dp0go.flag\" >nul 2>&1\r\n"
+    "echo {\"event\":\"result\",\"status\":\"DONE\",\"headline\":\"Done by the test\"}\r\n"
     "exit /b 0\r\n"
     ":selftest\r\n"
     "echo {\"event\":\"result\",\"status\":\"DONE\",\"revision\":\"fake-0001\"}\r\n"
@@ -526,6 +539,63 @@ private slots:
         QVERIFY(!page()->isBusy());
     }
 
+    // Every game of a run goes to the folders its check approved: a folder
+    // changed on the page or in the shared settings while the run goes on is
+    // not used for the games still to come (it was never checked).
+    void aRunKeepsTheDestinationsItChecked()
+    {
+        auto* m = model();
+        int ticked = 0;
+        QString second;
+        for (auto& r : m->rows()) {
+            r.checked = r.game.titleId == QLatin1String("PPSA10001") || r.game.titleId == QLatin1String("PPSA10002");
+            ticked += r.checked ? 1 : 0;
+            if (r.game.titleId == QLatin1String("PPSA10002"))
+                second = r.game.path;
+        }
+        m->allChanged();
+        QCOMPARE(ticked, 2);
+        const QString hold = m_root.filePath(QStringLiteral("engine/hold.flag"));
+        const QString go = m_root.filePath(QStringLiteral("engine/go.flag"));
+        QVERIFY(fwtest::writeTextFile(hold, "1"));
+        const int before = starts();
+        page()->primaryAction();
+        QTRY_COMPARE_WITH_TIMEOUT(starts(), before + 1, 30000);
+        const auto fields = page()->findChildren<ui::PathField*>();
+        QVERIFY(fields.size() >= 2);
+        QVERIFY(!fields[0]->isEnabled()); // nothing to edit while the run goes on
+        QVERIFY(!fields[1]->isEnabled());
+        QSpinBox* depth = nullptr;
+        for (auto* s : page()->findChildren<QSpinBox*>())
+            if (s->accessibleName() == QLatin1String("Subfolder depth"))
+                depth = s;
+        QVERIFY(depth);
+
+        // Changed anyway: on the page, and by the standalone program (re-read on the next save).
+        fields[0]->setPath(m_root.filePath(QStringLiteral("elsewhere/Backports")));
+        QJsonObject o = readJson(m_settingsFile);
+        o.insert(QStringLiteral("backup_dir"), QDir::toNativeSeparators(m_root.filePath(QStringLiteral("elsewhere/Originals"))));
+        QVERIFY(fwtest::writeTextFile(m_settingsFile, QJsonDocument(o).toJson()));
+        depth->setValue(7);
+
+        QVERIFY(fwtest::writeTextFile(go, "1")); // the first game ends
+        QTRY_COMPARE_WITH_TIMEOUT(starts(), before + 2, 30000);
+        const QJsonObject job = readJson(m_root.filePath(QStringLiteral("engine/last-job.json")));
+        QCOMPARE(job.value(QStringLiteral("game")).toObject().value(QStringLiteral("path")).toString(), second);
+        QCOMPARE(job.value(QStringLiteral("output_root")).toString(), QDir::toNativeSeparators(m_out));
+        QCOMPARE(job.value(QStringLiteral("backup_root")).toString(), QDir::toNativeSeparators(m_bak));
+        QVERIFY(cancelRun());
+        QVERIFY(fields[0]->isEnabled());
+
+        // Back as the tests that follow expect them.
+        fields[0]->setPath(m_out);
+        fields[1]->setPath(m_bak);
+        depth->setValue(6);
+        o = readJson(m_settingsFile);
+        QCOMPARE(o.value(QStringLiteral("output_dir")).toString(), QDir::toNativeSeparators(m_out));
+        QCOMPARE(o.value(QStringLiteral("backup_dir")).toString(), QDir::toNativeSeparators(m_bak));
+    }
+
     // The question guards the scan locations: it is asked although no game is listed.
     void clearListAsksWhenTheListIsEmpty()
     {
@@ -562,6 +632,122 @@ private slots:
         QVERIFY(o.value(QStringLiteral("future_key")).toObject().value(QStringLiteral("keep")).toBool()); // only the locations went
         QCOMPARE(o.value(QStringLiteral("output_dir")).toString(), QDir::toNativeSeparators(m_out));
     }
+
+    // The options column is the 400 px aside of the other pages; the
+    // black-screen tip is one sentence, its details a click away.
+    void theAsideIsTheUsualOne()
+    {
+        m_window->navigate(QStringLiteral("backport"));
+        auto* tip = page()->findChild<ui::InfoBar*>(QStringLiteral("black-screen-tip"));
+        QVERIFY(tip);
+        // Side by side on a wide window (this platform's stand-in fonts are
+        // wider than the app's, so 1440 px may stack the columns here).
+        m_window->resize(1920, 1000);
+        const auto back = qScopeGuard([this] { m_window->resize(1440, 920); });
+        QTRY_COMPARE(tip->parentWidget()->width(), theme::size::dock);
+        QStringList shown;
+        for (auto* l : tip->findChildren<QLabel*>())
+            shown << l->text();
+        QVERIFY2(shown.contains(QStringLiteral("Set Target SDK to 5 or higher and backport the unmodified game again.")), qPrintable(shown.join(u'|')));
+        QVERIFY2(tip->toolTip().contains(QStringLiteral("Keep the FW 4xx ZIP")), qPrintable(tip->toolTip()));
+        ui::Link* details = nullptr;
+        for (auto* l : tip->findChildren<ui::Link*>())
+            if (l->text() == QLatin1String("Show details"))
+                details = l;
+        QVERIFY(details);
+        QString said;
+        expectSheet(QStringLiteral("OK"), [&](ui::Sheet* sheet) {
+            said = texts(sheet).join(u'|');
+            sheetButton(sheet, QStringLiteral("OK"))->click();
+        });
+        QMetaObject::invokeMethod(details, &ui::Link::activated, Qt::QueuedConnection);
+        QTRY_VERIFY_WITH_TIMEOUT(m_expectMet, 10000);
+        QVERIFY2(said.contains(QStringLiteral("right-click rebuild")), qPrintable(said));
+        QTRY_VERIFY_WITH_TIMEOUT(!openSheet(), 10000);
+    }
+
+    // A game's details are an information sheet: Close is its plain default
+    // button, and Esc closes it without opening anything (Esc used to answer
+    // its first button, "Open game folder").
+    void gameDetailsCloseQuietly()
+    {
+        m_window->navigate(QStringLiteral("backport"));
+        page()->applyDemoState(QStringLiteral("library"));
+        const auto leave = qScopeGuard([this] { page()->clearDemoState(); });
+        m_opened.clear();
+        QDesktopServices::setUrlHandler(QStringLiteral("file"), this, "recordOpened");
+        const auto unhook = qScopeGuard([] { QDesktopServices::unsetUrlHandler(QStringLiteral("file")); });
+        QVERIFY(rows() > 0);
+        QString closeVariant = QStringLiteral("none");
+        expectSheet(QStringLiteral("Open game folder"), [&](ui::Sheet* sheet) {
+            if (QPushButton* close = sheetButton(sheet, QStringLiteral("Close")))
+                closeVariant = close->property("variant").toString();
+            QTest::keyClick(sheet, Qt::Key_Escape);
+        });
+        const QModelIndex first = table()->model()->index(0, pages::BackportGameModel::TitleCol);
+        QMetaObject::invokeMethod(table(), [this, first] { emit table()->doubleClicked(first); }, Qt::QueuedConnection);
+        QTRY_VERIFY_WITH_TIMEOUT(m_expectMet, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!openSheet(), 10000);
+        QTest::qWait(100);
+        QVERIFY2(closeVariant != QLatin1String("primary") && closeVariant != QLatin1String("none"), qPrintable(closeVariant));
+        QVERIFY2(m_opened.isEmpty(), qPrintable(m_opened.isEmpty() ? QString() : m_opened.first().toString()));
+    }
+
+    // The "running" screenshot is a run as the page shows one (Cancel in the
+    // header, the run's line in the status bar) without a worker: nothing is
+    // started or written, and the page is idle again afterwards. Before a run
+    // the Progress card and the Activity well say what will appear in them.
+    void theRunningDemoIsARunWithoutAWorker()
+    {
+        m_window->navigate(QStringLiteral("backport"));
+        const int before = starts();
+        const QByteArray settings = readAll(m_settingsFile);
+        const QString idleLine = page()->statusContext(); // the engine badge between runs
+        QVERIFY2(!idleLine.endsWith(QLatin1String("Running")), qPrintable(idleLine));
+        page()->applyDemoState(QStringLiteral("running"));
+        auto leave = qScopeGuard([this] { page()->clearDemoState(); });
+        QVERIFY(headerButton(QStringLiteral("Cancel")));
+        QVERIFY(!headerButton(QStringLiteral("Start Backport")));
+        QVERIFY(page()->isBusy());
+        QVERIFY2(page()->statusContext().startsWith(QStringLiteral("Processing: Ghost Song (PPSA09232)")), qPrintable(page()->statusContext()));
+        // Another demo state starts from idle.
+        page()->applyDemoState(QStringLiteral("library"));
+        QVERIFY(headerButton(QStringLiteral("Start Backport")));
+        QVERIFY(!page()->isBusy());
+        QVERIFY2(!page()->statusContext().endsWith(QLatin1String("Running")), qPrintable(page()->statusContext()));
+        page()->applyDemoState(QStringLiteral("running"));
+        QVERIFY(page()->isBusy());
+        leave.dismiss();
+        page()->clearDemoState();
+        QVERIFY(!page()->isBusy());
+        QVERIFY(headerButton(QStringLiteral("Start Backport")));
+        // The engine badge (and the status bar's line with it) says again what
+        // it said before the run, as after a real run.
+        QCOMPARE(page()->statusContext(), idleLine);
+        for (auto* b : page()->findChildren<ui::Badge*>())
+            QVERIFY2(b->text() != QLatin1String("Running"), qPrintable(b->text()));
+        QTest::qWait(300);
+        QCOMPARE(starts(), before);
+        QCOMPARE(readAll(m_settingsFile), settings);
+
+        bool progressSaysWhatComes = false;
+        for (auto* l : page()->findChildren<ui::ElideLabel*>())
+            progressSaysWhatComes = progressSaysWhatComes || l->fullText() == QLatin1String("Each game's progress appears here once a run starts.");
+        QVERIFY(progressSaysWhatComes);
+        QTextEdit* activity = nullptr;
+        for (auto* t : page()->findChildren<QTextEdit*>())
+            if (t->accessibleName() == QLatin1String("Activity"))
+                activity = t;
+        QVERIFY(activity);
+        QCOMPARE(activity->placeholderText(), QStringLiteral("Each run's steps and results appear here."));
+    }
+
+public slots:
+    // QDesktopServices hands a file URL here while a test listens.
+    void recordOpened(const QUrl& url) { m_opened << url; }
+
+private:
+    QList<QUrl> m_opened;
 };
 
 QTEST_MAIN(TstPagesbBackport)

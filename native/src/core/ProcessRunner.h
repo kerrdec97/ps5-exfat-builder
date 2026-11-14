@@ -3,8 +3,10 @@
 // Runs external tools (user-supplied Sony Publishing Tools, UFS2Tool, ...)
 // from a worker thread with line-by-line output, timeouts and cancellation that
 // stops the whole process tree (Windows job object + taskkill fallback; POSIX
-// process group). Output is decoded as UTF-8 unless the spec asks for the OEM
-// or ANSI code page (Sony's tools and fpkg-cli print UTF-8).
+// process group). While the token is paused the whole tree is suspended
+// (resumed with the job; a cancel ends it suspended) and the timeout does not
+// count. Output is decoded as UTF-8 unless the spec asks for the OEM or ANSI
+// code page (Sony's tools and fpkg-cli print UTF-8).
 
 #include "core/Cancellation.h"
 #include "core/Result.h"
@@ -25,7 +27,7 @@ struct ProcessSpec {
     QStringList arguments;
     QString workingDirectory;
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    std::chrono::milliseconds timeout{0}; // 0 = none
+    std::chrono::milliseconds timeout{0}; // 0 = none; time spent paused does not count
     bool mergeStderr = true;
     OutputEncoding encoding = OutputEncoding::Utf8;
     bool keepOutput = true;       // collect output into ProcessResult

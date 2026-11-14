@@ -13,6 +13,7 @@
 #include "engines/exfat/ExfatVerify.h"
 #include "engines/exfat/Pipeline.h"
 #include "engines/exfat/PlatformFs.h"
+#include "support/ProgressAudit.h"
 #include "support/TestSupport.h"
 
 #include <QDirIterator>
@@ -20,6 +21,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <atomic>
 #include <mutex>
 
 using namespace fw;
@@ -138,7 +140,8 @@ private slots:
         QVERIFY2(n.ok(), qPrintable(n.ok() ? QString() : err(n.error())));
         QCOMPARE(n.value(), 11);
         QCOMPARE(store.value(keys::kClusterSize).toString(), QStringLiteral("65536"));
-        QCOMPARE(store.value(keys::kSectorSize).toString(), QStringLiteral("4096"));
+        // The old app never applied its sector choice: its images were 512.
+        QCOMPARE(store.value(keys::kSectorSize).toString(), QStringLiteral("512"));
         QCOMPARE(store.value(keys::kImageSizeGiB).toDouble(), 90.0);
         QCOMPARE(store.value(keys::kExcludeHidden).toBool(), true);
         QCOMPARE(store.value(keys::kOpenRetries).toInt(), 5);
@@ -173,7 +176,7 @@ private slots:
         QCOMPARE(o.outputs.size(), 1);
         QCOMPARE(o.outputs.first(), outDir + QStringLiteral("/Astro PPSA01325.exfat"));
         QVERIFY(QFileInfo::exists(o.outputs.first()));
-        QVERIFY(!QFileInfo::exists(o.outputs.first() + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(o.outputs.first())));
         QCOMPARE(o.details.value(QStringLiteral("label")).toString(), QStringLiteral("OSFIMG"));
         QCOMPARE(o.details.value(QStringLiteral("files")).toInt(), 61);
         // Phases ran in order; the write phase counted every file and byte.
@@ -305,7 +308,7 @@ private slots:
         QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
         QVERIFY(ExfatReader::open(out).ok());
         QVERIFY(!QFileInfo::exists(out + QStringLiteral(".old")));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
     }
 
     // The old image is open in another program (mounted, being uploaded), so
@@ -328,7 +331,7 @@ private slots:
         QVERIFY2(r.error().message.contains(QStringLiteral("in use")), qPrintable(err(r.error())));
         QVERIFY2(r.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(err(r.error())));
         QCOMPARE(readAllOf(out), QByteArray("OLD IMAGE"));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         {
             CancellationToken token;
             auto reader = ExfatReader::open(kept);
@@ -366,18 +369,172 @@ private slots:
         QVERIFY(!r.ok());
         QVERIFY(r.error().isCancelled());
         QCOMPARE(readAllOf(out), QByteArray("PREVIOUS IMAGE"));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+    }
 
-        // Cancelling during verification also keeps the previous image.
-        CancellationSource cancel2;
-        auto r2 = m_env.run(kJobBuild, buildParams(src, out), {}, &cancel2, [&](const ProgressSnapshot& s) {
-            if (s.phaseIndex == 2 && s.done > 8 * kMiB)
-                cancel2.cancel();
-        });
-        QVERIFY(!r2.ok());
-        QVERIFY(r2.error().isCancelled());
+    // GitHub #97: Cancel while the finished image is being verified saves it
+    // exactly as with verification turned off: it replaces the previous image
+    // only now, the job does not fail, and it says the image is not verified.
+    // The source is never deleted for an unverified image.
+    void cancelDuringVerificationSavesTheImageUnverified()
+    {
+        const QString src = makeGame(QStringLiteral("vcancel"), 5);
+        QVERIFY(writeRandom(src + QStringLiteral("/data/large1.bin"), 48 * kMiB, 81));
+        QVERIFY(writeRandom(src + QStringLiteral("/data/large2.bin"), 48 * kMiB, 82));
+        const QString out = path(QStringLiteral("vcancel.exfat"));
+        QVERIFY(writeBytes(out, "PREVIOUS IMAGE"));
+        // Cancelled while the folder is scanned again, and while the bytes are compared.
+        for (const qint64 after : {qint64(-1), qint64(8 * kMiB)}) {
+            CancellationSource cancel;
+            std::atomic<bool> cancelled{false}; // reports come from several threads while comparing
+            auto r = m_env.run(kJobBuild, buildParams(src, out), {{keys::kDeleteSourceAfterVerify, true}}, &cancel,
+                               [&](const ProgressSnapshot& s) {
+                                   if (s.phaseIndex == 2 && s.done > after && !cancelled.exchange(true))
+                                       cancel.cancel();
+                               });
+            QVERIFY(cancelled);
+            QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+            QCOMPARE(r->verification, Verification::Skipped);
+            QVERIFY2(r->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(r->verificationDetail));
+            QVERIFY(r->details.value(QStringLiteral("verificationCancelled")).toBool());
+            QCOMPARE(r->outputs, QStringList{out});
+            QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+            QVERIFY(readAllOf(out) != QByteArray("PREVIOUS IMAGE"));
+            // The saved image is the whole build.
+            auto check = m_env.run(kJobVerify, {{QStringLiteral("image"), out}, {QStringLiteral("source"), src}});
+            QVERIFY2(check.ok() && check->verification == Verification::Passed,
+                     qPrintable(check.ok() ? check->verificationDetail : err(check.error())));
+            QVERIFY(QFileInfo::exists(src + QStringLiteral("/eboot.bin")));
+            QVERIFY(!r->details.contains(QStringLiteral("sourceDeleted")));
+            QVERIFY(r->warnings.join(u' ').contains(QStringLiteral("kept")));
+            QVERIFY(writeBytes(out, "PREVIOUS IMAGE"));
+        }
+    }
+
+    // Closing the app is no Cancel: the image that was being verified is
+    // discarded and the previous one stays, as the close dialog says (the
+    // queue cannot record an unverified save once the app closes, and brings
+    // the job back as interrupted).
+    void closingDuringVerificationDiscardsTheImage()
+    {
+        const QString src = makeGame(QStringLiteral("vclose"), 5);
+        QVERIFY(writeRandom(src + QStringLiteral("/data/large1.bin"), 48 * kMiB, 85));
+        const QString out = path(QStringLiteral("vclose.exfat"));
+        QVERIFY(writeBytes(out, "PREVIOUS IMAGE"));
+        CancellationSource cancel;
+        std::atomic<bool> cancelled{false};
+        auto r = m_env.run(kJobBuild, buildParams(src, out), {{keys::kDeleteSourceAfterVerify, true}}, &cancel,
+                           [&](const ProgressSnapshot& s) {
+                               if (s.phaseIndex == 2 && s.done > 8 * kMiB && !cancelled.exchange(true))
+                                   cancel.cancel(CancellationToken::shutdownReason());
+                           });
+        QVERIFY(cancelled);
+        QVERIFY(!r.ok()); // the queue reports any failure under a cancelled token as the cancel
         QCOMPARE(readAllOf(out), QByteArray("PREVIOUS IMAGE"));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+        QVERIFY(QFileInfo::exists(src + QStringLiteral("/eboot.bin")));
+    }
+
+    // GitHub #97 for an edit: Cancel while the edited image is verified keeps
+    // the edit (the engine checked names, sizes and the structure instead),
+    // and the job says the image is not verified rather than "Verified".
+    void editCancelledDuringVerificationIsKeptUnverified()
+    {
+        const QString src = makeGame(QStringLiteral("edit-vcancel"), 5);
+        const QString img = path(QStringLiteral("edit-vcancel.exfat"));
+        auto built = m_env.run(kJobBuild, buildParams(src, img));
+        QVERIFY2(built.ok() && built->verification == Verification::Passed, qPrintable(built.ok() ? built->verificationDetail : err(built.error())));
+        const QByteArray before = fileHash(img);
+        const QString local = path(QStringLiteral("edit-vcancel-local/added.bin"));
+        QVERIFY(writeRandom(local, 24 * kMiB, 84));
+        const QJsonArray ops{QJsonObject{{QStringLiteral("op"), QStringLiteral("add")},
+                                         {QStringLiteral("imagePath"), QStringLiteral("data/added.bin")},
+                                         {QStringLiteral("localPath"), local}}};
+        CancellationSource cancel;
+        std::atomic<bool> cancelled{false}; // reports come from several threads while comparing
+        auto r = m_env.run(kJobEdit, {{QStringLiteral("image"), img}, {QStringLiteral("operations"), ops}},
+                           {{general::keys::kIoBufferMiB, 1}}, &cancel, [&](const ProgressSnapshot& s) {
+                               if (s.phaseIndex == 2 && s.done > 2 * kMiB && !cancelled.exchange(true))
+                                   cancel.cancel();
+                           });
+        QVERIFY(cancelled);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->verification, Verification::Skipped);
+        QVERIFY2(r->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(r->verificationDetail));
+        QVERIFY(r->details.value(QStringLiteral("verificationCancelled")).toBool());
+        QCOMPARE(r->details.value(QStringLiteral("verification")).toObject().value(QStringLiteral("mode")).toString(),
+                 QStringLiteral("structure"));
+        QCOMPARE(r->outputs, QStringList{img});
+        QCOMPARE(r->details.value(QStringLiteral("added")).toDouble(), 1.0);
+        QVERIFY(fileHash(img) != before);
+        QVERIFY(!QFileInfo::exists(editJournalPath(img)));
+        // The kept edit is a sound image.
+        auto check = m_env.run(kJobVerify, {{QStringLiteral("image"), img}});
+        QVERIFY2(check.ok() && check->verification == Verification::Passed,
+                 qPrintable(check.ok() ? check->verificationDetail : err(check.error())));
+    }
+
+    // Closing the app while the edited image is verified undoes the edit, so
+    // the job, brought back as interrupted, can simply run again.
+    void editClosedDuringVerificationIsUndone()
+    {
+        const QString src = makeGame(QStringLiteral("edit-vclose"), 5);
+        const QString img = path(QStringLiteral("edit-vclose.exfat"));
+        auto built = m_env.run(kJobBuild, buildParams(src, img));
+        QVERIFY2(built.ok() && built->verification == Verification::Passed, qPrintable(built.ok() ? built->verificationDetail : err(built.error())));
+        const QByteArray before = fileHash(img);
+        const QString local = path(QStringLiteral("edit-vclose-local/added.bin"));
+        QVERIFY(writeRandom(local, 24 * kMiB, 86));
+        const QJsonArray ops{QJsonObject{{QStringLiteral("op"), QStringLiteral("add")},
+                                         {QStringLiteral("imagePath"), QStringLiteral("data/added.bin")},
+                                         {QStringLiteral("localPath"), local}}};
+        CancellationSource cancel;
+        std::atomic<bool> cancelled{false};
+        auto r = m_env.run(kJobEdit, {{QStringLiteral("image"), img}, {QStringLiteral("operations"), ops}},
+                           {{general::keys::kIoBufferMiB, 1}}, &cancel, [&](const ProgressSnapshot& s) {
+                               if (s.phaseIndex == 2 && s.done > 2 * kMiB && !cancelled.exchange(true))
+                                   cancel.cancel(CancellationToken::shutdownReason());
+                           });
+        QVERIFY(cancelled);
+        QVERIFY(!r.ok());
+        QCOMPARE(fileHash(img), before);
+        QVERIFY(!QFileInfo::exists(editJournalPath(img)));
+        // Run again (Retry), the edit is made.
+        auto again = m_env.run(kJobEdit, {{QStringLiteral("image"), img}, {QStringLiteral("operations"), ops}});
+        QVERIFY2(again.ok() && again->verification == Verification::Passed,
+                 qPrintable(again.ok() ? again->verificationDetail : err(again.error())));
+    }
+
+    // A difference found before the cancel still fails the build: the new
+    // image is not saved (not even unverified) and the previous one stays.
+    void aMismatchFoundBeforeTheCancelFailsTheBuild()
+    {
+        const QString src = makeGame(QStringLiteral("vcancel-bad"), 5);
+        QVERIFY(writeRandom(src + QStringLiteral("/data/large1.bin"), 48 * kMiB, 83));
+        const QString out = path(QStringLiteral("vcancel-bad.exfat"));
+        QVERIFY(writeBytes(out, "PREVIOUS IMAGE"));
+        CancellationSource cancel;
+        std::atomic<bool> added{false}, cancelled{false};
+        auto r = m_env.run(kJobBuild, buildParams(src, out), {}, &cancel, [&](const ProgressSnapshot& s) {
+            if (s.phaseIndex != 2)
+                return;
+            // The first report comes before the folder is scanned again: a
+            // file the image does not have is found then, before any byte is
+            // compared; the cancel comes while the bytes are.
+            if (!added.exchange(true))
+                (void)writeBytes(src + QStringLiteral("/added-after-the-build.txt"), "x");
+            else if (s.done > 8 * kMiB && !cancelled.exchange(true))
+                cancel.cancel();
+        });
+        QVERIFY(cancelled);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->verification, Verification::Failed);
+        QVERIFY2(r->verificationDetail.contains(QStringLiteral("added-after-the-build.txt")), qPrintable(r->verificationDetail));
+        QVERIFY2(r->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(r->verificationDetail));
+        QVERIFY(r->details.value(QStringLiteral("verification")).toObject().value(QStringLiteral("cancelled")).toBool());
+        QVERIFY(r->outputs.isEmpty());
+        QCOMPARE(readAllOf(out), QByteArray("PREVIOUS IMAGE"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
     }
 
     // A file changes (same size, other bytes) after it was written into the
@@ -410,7 +567,7 @@ private slots:
         QVERIFY2(r->verificationDetail.contains(QStringLiteral("1 problem")), qPrintable(r->verificationDetail));
         QVERIFY(r->outputs.isEmpty());
         QCOMPARE(readAllOf(out), QByteArray("PREVIOUS IMAGE"));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         QVERIFY(QFileInfo::exists(src + QStringLiteral("/eboot.bin")));
         QVERIFY(!r->details.contains(QStringLiteral("sourceDeleted")));
     }
@@ -426,7 +583,29 @@ private slots:
         QVERIFY2(r.error().message.contains(QStringLiteral("Free ")) && r.error().message.contains(QStringLiteral("choose another output folder")),
                  qPrintable(r.error().message));
         QVERIFY(!QFileInfo::exists(out));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+    }
+
+    // What an interrupted build left ("<image>.fw.part", up to the image's
+    // size) is removed before the free space is checked, so a drive with room
+    // for one image is not short of it (the refusal shows the order), and the
+    // retry leaves nothing behind.
+    void aBuildRemovesItsLeftoverBeforeTheSpaceCheck()
+    {
+        const QString src = makeGame(QStringLiteral("leftover"), 2);
+        const QString out = path(QStringLiteral("leftover.exfat"));
+        const QString leftover = PartFile::partPathFor(out);
+        QVERIFY(writeBytes(leftover, QByteArray(1024 * 1024, 'x')));
+        auto r = m_env.run(kJobBuild, buildParams(src, out), {{keys::kImageSizeGiB, 100000.0}});
+        FWTEST_COMPARE_ERROR(r, ErrorCode::InsufficientSpace);
+        QVERIFY(!QFileInfo::exists(leftover));
+        QVERIFY(!QFileInfo::exists(out));
+
+        QVERIFY(writeBytes(leftover, "half of an image"));
+        r = m_env.run(kJobBuild, buildParams(src, out));
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY(QFileInfo(out).size() > 1024 * 1024);
+        QVERIFY(!QFileInfo::exists(leftover));
     }
 
     void sourceIsDeletedOnlyAfterFullVerification()
@@ -630,6 +809,60 @@ private slots:
         QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part")));
     }
 
+    // GitHub #97: "after cancel verify automatically remove all the extracted
+    // files". Cancel during verification keeps every extracted file under the
+    // chosen name, as with verification turned off, and says they are not
+    // verified; the job does not fail. An empty folder that was chosen as the
+    // destination is used.
+    void extractCancelDuringVerificationKeepsTheFiles()
+    {
+        const QString src = makeGame(QStringLiteral("xvcancel"), 5);
+        QVERIFY(writeRandom(src + QStringLiteral("/data/large.bin"), 64 * kMiB, 6));
+        const QString img = path(QStringLiteral("xvcancel.exfat"));
+        QVERIFY(m_env.run(kJobBuild, buildParams(src, img)).ok());
+        // While the extracted folder is scanned, and while the bytes are compared.
+        int n = 0;
+        for (const qint64 after : {qint64(-1), qint64(8 * kMiB)}) {
+            const QString dest = path(QStringLiteral("xvcancel-out%1").arg(++n));
+            QVERIFY(QDir().mkpath(dest));
+            CancellationSource cancel;
+            std::atomic<bool> cancelled{false};
+            auto r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest}}, {}, &cancel,
+                               [&](const ProgressSnapshot& s) {
+                                   if (s.phaseIndex == 2 && s.done > after && !cancelled.exchange(true))
+                                       cancel.cancel();
+                               });
+            QVERIFY(cancelled);
+            QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+            QCOMPARE(r->verification, Verification::Skipped);
+            QVERIFY2(r->verificationDetail.contains(QStringLiteral("cancelled")) && r->verificationDetail.contains(QStringLiteral("not verified")),
+                     qPrintable(r->verificationDetail));
+            QCOMPARE(r->outputs, QStringList{dest});
+            QCOMPARE(listing(dest), listing(src));
+            QCOMPARE(fileHash(dest + QStringLiteral("/data/large.bin")), fileHash(src + QStringLiteral("/data/large.bin")));
+            QVERIFY(!QFileInfo::exists(dest + QStringLiteral(".part")));
+            QVERIFY(!QFileInfo::exists(dest + QStringLiteral("/.fw-extract-in-progress")));
+        }
+    }
+
+    // Verification switched off for the job (Image tools' "Verify after
+    // extracting"): nothing is compared and the files are not called verified.
+    void extractWithVerificationOffSaysSo()
+    {
+        const QString src = makeGame(QStringLiteral("xvoff"), 3);
+        const QString img = path(QStringLiteral("xvoff.exfat"));
+        QVERIFY(m_env.run(kJobBuild, buildParams(src, img)).ok());
+        const QString dest = path(QStringLiteral("xvoff-out"));
+        bool sawVerifying = false;
+        auto r = m_env.run(kJobExtract, {{QStringLiteral("image"), img}, {QStringLiteral("output"), dest}},
+                           {{general::keys::kVerifyAfterBuild, false}}, nullptr,
+                           [&](const ProgressSnapshot& s) { sawVerifying |= s.phaseIndex == 2; });
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY(!sawVerifying);
+        QCOMPARE(r->verification, Verification::Skipped);
+        QCOMPARE(listing(dest), listing(src));
+    }
+
     void extractRefusesADamagedImage()
     {
         const QString src = makeGame(QStringLiteral("xbad"), 2);
@@ -721,6 +954,83 @@ private slots:
         QVERIFY(!r->details.contains(QStringLiteral("sourceDeleted")));
         QVERIFY2(r->warnings.join(u'\n').contains(QStringLiteral("was kept: only folders are deleted")),
                  qPrintable(r->warnings.join(u'\n')));
+    }
+
+    // What the job monitor is given for every job kind here, with every
+    // verification setting: the bar never falls back, never stands full while
+    // a stage still has work to do, and has reached the end of the work when
+    // the job ends, so the queue's 100 % is no jump (a verification that is
+    // off, or compares names and sizes only, takes no or only a small share).
+    // A zipped dump's unpacking is the first part of Scanning, whose share is
+    // declared before it begins.
+    void progressRunsToTheEndAndNeverFallsBack()
+    {
+        const QString src = makeGame(QStringLiteral("progress-src"), 20);
+        const QString outDir = path(QStringLiteral("progress-out"));
+        QVERIFY(QDir().mkpath(outDir));
+        const auto audited = [&](const QString& kind, const QJsonObject& params, const QVariantMap& overrides,
+                                 fwtest::ProgressAudit& audit) -> QString {
+            auto r = m_env.run(kind, params, overrides, nullptr, {}, &audit);
+            if (!r.ok())
+                return err(r.error());
+            if (r->verification == Verification::Failed)
+                return r->verificationDetail;
+            return audit.problems().join(u'\n');
+        };
+        const QVariantMap off{{general::keys::kVerifyAfterBuild, false}};
+        const QVariantMap structure{{general::keys::kVerifyMode, QStringLiteral("structure")}};
+        const QString img = outDir + QStringLiteral("/full.exfat");
+        for (const auto& [name, overrides] : {std::pair{"full", QVariantMap()}, std::pair{"off", off}, std::pair{"structure", structure}}) {
+            fwtest::ProgressAudit audit;
+            const QString out = outDir + QStringLiteral("/%1.exfat").arg(QLatin1String(name));
+            const QString problems = audited(kJobBuild, buildParams(src, out), overrides, audit);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("build, verification %1: %2").arg(QLatin1String(name), problems)));
+            const double atWrite = audit.fractionWhen([](const ProgressSnapshot& s) { return s.phaseIndex == 1; });
+            QVERIFY2(atWrite > 0.0 && atWrite <= 0.06, qPrintable(QString::number(atWrite)));
+        }
+        for (const auto& [name, overrides] : {std::pair{"full", QVariantMap()}, std::pair{"off", off}, std::pair{"structure", structure}}) {
+            fwtest::ProgressAudit audit;
+            const QJsonObject p{{QStringLiteral("image"), img}, {QStringLiteral("output"), outDir + QStringLiteral("/x-%1").arg(QLatin1String(name))}};
+            const QString problems = audited(kJobExtract, p, overrides, audit);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("extract, verification %1: %2").arg(QLatin1String(name), problems)));
+        }
+        for (const auto& [name, overrides] : {std::pair{"full", QVariantMap()}, std::pair{"structure", structure}}) {
+            fwtest::ProgressAudit withFolder, alone;
+            QString problems = audited(kJobVerify, {{QStringLiteral("image"), img}, {QStringLiteral("source"), src}}, overrides, withFolder);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("verify, %1: %2").arg(QLatin1String(name), problems)));
+            problems = audited(kJobVerify, {{QStringLiteral("image"), img}}, overrides, alone);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("verify alone, %1: %2").arg(QLatin1String(name), problems)));
+        }
+        {
+            const QString local = path(QStringLiteral("progress-local/added.bin"));
+            QVERIFY(writeRandom(local, 256 * 1024, 9));
+            const QJsonArray ops{QJsonObject{{QStringLiteral("op"), QStringLiteral("add")},
+                                             {QStringLiteral("imagePath"), QStringLiteral("data/added.bin")},
+                                             {QStringLiteral("localPath"), local}}};
+            fwtest::ProgressAudit audit;
+            const QString problems = audited(kJobEdit, {{QStringLiteral("image"), img}, {QStringLiteral("operations"), ops}}, {}, audit);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("edit: ") + problems));
+        }
+
+        // A zipped dump: the unpacking and the scan fill Scanning's larger share.
+        const QString zipPath = path(QStringLiteral("progress.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(zipPath, true).ok());
+            QDirIterator it(src, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString p = it.next();
+                QVERIFY(w.addFile(QDir(src).relativeFilePath(p), p, zip::Method::Store, {}).ok());
+            }
+            QVERIFY(w.finish(false).ok());
+        }
+        fwtest::ProgressAudit zipped;
+        const QString problems = audited(kJobBuild, buildParams(zipPath, outDir + QStringLiteral("/zipped.exfat")), {}, zipped);
+        QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("zipped build: ") + problems));
+        const double unpacked = zipped.fractionWhen([](const ProgressSnapshot& s) { return s.phase == QLatin1String("Scanning") && s.phaseProgress >= 0.49; });
+        const double atWrite = zipped.fractionWhen([](const ProgressSnapshot& s) { return s.phaseIndex == 1; });
+        QVERIFY2(unpacked >= 0.14 && unpacked <= 0.16, qPrintable(QString::number(unpacked)));
+        QVERIFY2(atWrite >= 0.29 && atWrite <= 0.31, qPrintable(QString::number(atWrite)));
     }
 
     void summariesCountInTheSingularAndEndWithOneFullStop()

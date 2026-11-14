@@ -10,6 +10,7 @@
 #include "app/pages/DlcPage.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "core/Tr.h"
 #include "engines/dlc/DlcIdentity.h"
 #include "engines/dlc/DlcPackage.h"
 #include "engines/dlc/DlcSettings.h"
@@ -18,6 +19,10 @@
 #include <QAction>
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPlainTextEdit>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
@@ -221,6 +226,62 @@ private slots:
         remove->trigger();
         QCOMPARE(m_page->rowCount(), 0);
         QCOMPARE(m_page->table()->rowCount(), 0);
+    }
+
+    // A package read while fpkg-cli cannot be used: the page's line says why
+    // in the interface language, as the DLC engine row does; the log keeps the
+    // English text.
+    void packageWithoutTheEngineSaysWhyInTheInterfaceLanguage()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString res = dir.filePath(QStringLiteral("res")), user = dir.filePath(QStringLiteral("user"));
+        QVERIFY(QDir().mkpath(res) && QDir().mkpath(user));
+        const QJsonObject strings{
+            {QStringLiteral("%1 could not be read: %2"), QStringLiteral("%1 konnte nicht gelesen werden: %2")},
+            {QStringLiteral("%1 was not found at %2 (%3). Choose your own copy in Settings > Tools."), QStringLiteral("%1 fehlt in %2 (%3).")},
+            {QStringLiteral("Settings > Tools"), QStringLiteral("Einstellungen > Tools")}};
+        const QJsonObject catalogue{{QStringLiteral("code"), QStringLiteral("de")}, {QStringLiteral("name"), QStringLiteral("Deutsch")},
+                                    {QStringLiteral("englishName"), QStringLiteral("German")}, {QStringLiteral("strings"), strings}};
+        QVERIFY(fwtest::writeTextFile(res + QStringLiteral("/de.json"), QJsonDocument(catalogue).toJson()));
+        const QString oldRes = i18n::resourceDir(), oldUser = i18n::userDir();
+        i18n::configure(res, user);
+        const auto english = qScopeGuard([&] {
+            i18n::load(QStringLiteral("en"));
+            i18n::configure(oldRes, oldUser);
+        });
+        QVERIFY(i18n::load(QStringLiteral("de")));
+
+        // fpkg-cli is looked for in a folder without it; a package that is not
+        // a PS4 one is read with it.
+        const QString noCli = dir.filePath(QStringLiteral("no-cli"));
+        QVERIFY(QDir().mkpath(noCli));
+        const QString oldCli = m_ctx->settings().value(dlc::keys::kFpkgCliPath).toString();
+        QVERIFY(m_ctx->settings().setValue(dlc::keys::kFpkgCliPath, noCli).ok());
+        const auto cli = qScopeGuard([&] { (void)m_ctx->settings().setValue(dlc::keys::kFpkgCliPath, oldCli); });
+        const QString pkg = dir.filePath(QStringLiteral("Extra content.pkg"));
+        QVERIFY(fwtest::writeTextFile(pkg, QByteArray("not a package")));
+
+        m_page->clearList();
+        m_page->addInputs({pkg});
+        ui::MessageRow* line = nullptr;
+        QVERIFY(QTest::qWaitFor([&] {
+            for (auto* row : m_page->findChildren<ui::MessageRow*>())
+                if (row->text().startsWith(QStringLiteral("Extra content.pkg")))
+                    line = row;
+            return line != nullptr;
+        }, 10000));
+        const QString where = QDir::toNativeSeparators(noCli);
+        QCOMPARE(line->text(),
+                 QStringLiteral("Extra content.pkg konnte nicht gelesen werden: fpkg-cli.exe fehlt in %1 (Einstellungen > Tools).").arg(where));
+        QCOMPARE(m_page->rowCount(), 0);
+        const QString logLine = QStringLiteral("LOAD FAILED: %1 — fpkg-cli.exe was not found at %2 (Settings > Tools). Choose your own "
+                                               "copy in Settings > Tools.")
+                                    .arg(QDir::toNativeSeparators(pkg), where);
+        bool logged = false;
+        for (auto* log : m_page->findChildren<QPlainTextEdit*>())
+            logged = logged || log->toPlainText().contains(logLine);
+        QVERIFY2(logged, "the log has no English line for the package");
     }
 };
 

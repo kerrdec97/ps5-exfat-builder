@@ -53,6 +53,7 @@ class ConsoleHero : public QWidget {
     Q_OBJECT
 public:
     enum class State { Offline, Connecting, Connected, Failed };
+    Q_ENUM(State)
 
     ConsoleHero(AppContext& ctx, QWidget* parent = nullptr);
     QLineEdit* hostEdit() { return m_host; }
@@ -74,6 +75,7 @@ public:
 signals:
     void chipClicked(const QString& key);
     void checkServicesRequested();
+    void stateChanged(ConsoleHero::State state); // setState() was called
 
 protected:
     void paintEvent(QPaintEvent* e) override;
@@ -89,6 +91,8 @@ private:
     ui::Badge* m_badge;
     ui::ElideLabel* m_subtitle;
     QWidget* m_controls;
+    QLabel* m_hostLabel;
+    QLabel* m_portLabel;
     QLineEdit* m_host;
     QLineEdit* m_port;
     FindConsoleButton* m_find;

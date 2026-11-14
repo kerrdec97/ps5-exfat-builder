@@ -382,9 +382,13 @@ void registerModule(ModuleContext& ctx)
                                           QStringLiteral("1048576")};
         return known.contains(t) ? std::optional<QVariant>(t) : std::nullopt;
     });
+    // The old app only logged its sector choice: OSFMount and format.com never
+    // got it, so every image it made had 512-byte sectors. A "4096" is taken
+    // over as what those images really had, not as a 4096-byte image the
+    // console's loader would not mount.
     s.addLegacyKey(QStringLiteral("adv_sector"), keys::kSectorSize, [](const QVariant& v) -> std::optional<QVariant> {
         const QString t = v.toString().trimmed();
-        return (t == u"512" || t == u"4096") ? std::optional<QVariant>(t) : std::nullopt;
+        return (t == u"512" || t == u"4096") ? std::optional<QVariant>(QStringLiteral("512")) : std::nullopt;
     });
     s.addLegacyKey(QStringLiteral("adv_img_size_override"), keys::kImageSizeGiB,
                    [](const QVariant& v) -> std::optional<QVariant> {

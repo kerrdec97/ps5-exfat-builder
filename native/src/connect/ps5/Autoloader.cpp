@@ -28,15 +28,18 @@ bool isDigits(const QString& s)
     return true;
 }
 
-// The backups save() made of `file`, oldest first: "<file>.bak" is number 1,
-// "<file>.bak.N" number N. Anything else next to it ("autoload.txt.bak.old",
-// "autoload.txt.backup") is the user's own and is not listed.
+// The backups save() made of `file`, oldest first: "<file>.fw.bak" is number
+// 1, "<file>.fw.bak.N" number N. ".fw" is a name only this app uses: a plain
+// "autoload.txt.bak" (or ".bak.2", ".bak.old"...) may be the user's own copy,
+// or one an older version made, and is never listed, so never removed.
 QList<QPair<int, QString>> backupsOf(const QString& file)
 {
     const QFileInfo fi(file);
-    const QString stem = fi.fileName() + QStringLiteral(".bak");
+    const QString stem = fi.fileName() + QStringLiteral(".fw.bak");
     QList<QPair<int, QString>> out;
     for (const QFileInfo& b : fi.absoluteDir().entryInfoList({stem, stem + QStringLiteral(".*")}, QDir::Files)) {
+        if (b.isSymLink())
+            continue;
         const QString tail = b.fileName().mid(stem.size());
         if (tail.isEmpty())
             out.append({1, b.absoluteFilePath()});
@@ -47,15 +50,18 @@ QList<QPair<int, QString>> backupsOf(const QString& file)
     return out;
 }
 
-// "<file>.bak", then ".bak.2", ".bak.3"...: the number after the newest
-// backup, so the numbers stay in the order the backups were made in and an
-// existing one is never overwritten.
+// "<file>.fw.bak", then ".fw.bak.2", ".fw.bak.3"...: the number after the
+// newest backup, so the numbers stay in the order the backups were made in
+// and an existing one is never overwritten.
 QString nextBackupName(const QString& file)
 {
     const auto existing = backupsOf(file);
-    if (existing.isEmpty())
-        return file + QStringLiteral(".bak");
-    return file + QStringLiteral(".bak.%1").arg(existing.last().first + 1);
+    QString name = existing.isEmpty() ? file + QStringLiteral(".fw.bak")
+                                      : file + QStringLiteral(".fw.bak.%1").arg(existing.last().first + 1);
+    // Not a backup by the rules above (a folder, a link) but the name is taken.
+    for (int n = existing.isEmpty() ? 2 : existing.last().first + 2; QFileInfo(name).exists() || QFileInfo(name).isSymLink(); ++n)
+        name = file + QStringLiteral(".fw.bak.%1").arg(n);
+    return name;
 }
 
 // Every changed save adds a backup to a folder the user copies to a USB

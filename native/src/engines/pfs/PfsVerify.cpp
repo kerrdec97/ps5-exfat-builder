@@ -190,6 +190,13 @@ Status compareTree(const PfsImage& img, const SourcePlan& plan, bool content, Ve
         if (!token.checkpoint())
             return Error::cancelled();
         const PfsEntry* e = img.findFile(f.relPath);
+        // The dump's own index is planned under the name the runtime opens; an
+        // image made before that has the folder's spelling (AMPR_EMU.INDEX).
+        if (!e && !f.generated && f.relPath == "ampr_emu.index") {
+            const QByteArray own = QFileInfo(f.absPath).fileName().toLatin1();
+            if (own != f.relPath && (e = img.findFile(own)))
+                planned.insert(own);
+        }
         if (!e) {
             rep.fail(QStringLiteral("Missing from the image: %1").arg(rel(f.relPath)));
             continue;
@@ -247,6 +254,10 @@ Result<Opened> openForVerify(const QString& image, const VerifyExpectation& expe
 
 QString summaryFor(const VerifyReport& rep, VerifyDepth depth)
 {
+    if (!rep.passed && rep.cancelled)
+        return QStringLiteral("%1 problem(s) found before verification was cancelled; first: %2")
+            .arg(rep.problemCount)
+            .arg(rep.problems.value(0));
     if (!rep.passed)
         return QStringLiteral("%1 problem(s) found; first: %2").arg(rep.problemCount).arg(rep.problems.value(0));
     QString s = depth == VerifyDepth::Full && rep.contentCompared
@@ -322,6 +333,10 @@ Result<VerifyReport> verifyImage(const QString& image, const VerifyExpectation& 
         return rep;
     }
     const bool full = depth == VerifyDepth::Full;
+    // A cancel ends the check; a problem it found before still fails it.
+    const auto stopped = [](const Status& st, const VerifyReport& found) {
+        return !st.ok() && (!st.error().isCancelled() || found.passed);
+    };
     switch (expect.kind) {
     case VerifyExpectation::Kind::Folder:
         if (!expect.plan)
@@ -330,7 +345,10 @@ Result<VerifyReport> verifyImage(const QString& image, const VerifyExpectation& 
             FW_TRY(decodeAll(*o.outer, rep, token, hooks));
         {
             VerifyReport tree;
-            FW_TRY(compareTree(o.target(), *expect.plan, full, tree, token, full ? hooks : ProgressHooks{}));
+            const Status compared = compareTree(o.target(), *expect.plan, full, tree, token, full ? hooks : ProgressHooks{});
+            if (stopped(compared, tree))
+                return compared.error();
+            rep.cancelled = !compared.ok();
             rep.passed = tree.passed;
             rep.problems = tree.problems;
             rep.problemCount = tree.problemCount;
@@ -355,7 +373,10 @@ Result<VerifyReport> verifyImage(const QString& image, const VerifyExpectation& 
         if (!full)
             FW_TRY(decodeAll(*o.outer, rep, token, hooks));
         const qint64 bytesBefore = rep.bytesChecked;
-        FW_TRY(compareFile(*o.outer, o.outer->files().front(), src, full, rep, token, full ? hooks : ProgressHooks{}));
+        const Status compared = compareFile(*o.outer, o.outer->files().front(), src, full, rep, token, full ? hooks : ProgressHooks{});
+        if (stopped(compared, rep))
+            return compared.error();
+        rep.cancelled = !compared.ok();
         if (!full)
             rep.bytesChecked = bytesBefore;
         rep.contentCompared = full;
@@ -451,7 +472,12 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
     // stay inside `root`. Folders come before their contents (sorted paths).
     std::map<QByteArray, QString> hostDirs{{QByteArray(), QString()}};
     std::map<QByteArray, QSet<QString>> taken;
-    const auto hostPath = [&](const QByteArray& path) -> Result<QString> {
+    // A file is written as its PartFile working name ("<name>.fw.part") until
+    // it is whole, and that name is removed first as a leftover: a file whose
+    // working name an extracted entry already has (any letter case on
+    // Windows, where the image's sorted order puts "A.BIN.FW.PART" before
+    // "a.bin") takes a free name instead, so that entry is not deleted.
+    const auto hostPath = [&](const QByteArray& path, bool isFile) -> Result<QString> {
         const qsizetype slash = path.lastIndexOf('/');
         const QByteArray parent = slash < 0 ? QByteArray() : path.left(slash);
         const auto dir = hostDirs.find(parent);
@@ -460,9 +486,12 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
         const QString name = rel(slash < 0 ? path : path.mid(slash + 1));
         QString local = hostEntryName(name);
         QSet<QString>& used = taken[parent];
-        if (used.contains(hostNameKey(local))) {
+        const auto clashes = [&](const QString& n) {
+            return used.contains(hostNameKey(n)) || (isFile && used.contains(hostNameKey(PartFile::partPathFor(n))));
+        };
+        if (clashes(local)) {
             const QString stem = local;
-            for (int k = 2; used.contains(hostNameKey(local)); ++k)
+            for (int k = 2; clashes(local); ++k)
                 local = QStringLiteral("%1 (%2)").arg(stem).arg(k);
         }
         used.insert(hostNameKey(local));
@@ -472,7 +501,7 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
     };
 
     for (const PfsEntry& d : img.dirs()) {
-        FW_TRY_ASSIGN(const QString dirRel, hostPath(d.path));
+        FW_TRY_ASSIGN(const QString dirRel, hostPath(d.path, false));
         hostDirs.emplace(d.path, dirRel);
         FW_TRY_ASSIGN(const QString p, childPathInside(root, dirRel));
         const QFileInfo fi(p);
@@ -488,7 +517,7 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
     for (const PfsEntry& e : img.files()) {
         if (!token.checkpoint())
             return Error::cancelled();
-        FW_TRY_ASSIGN(const QString fileRel, hostPath(e.path));
+        FW_TRY_ASSIGN(const QString fileRel, hostPath(e.path, true));
         FW_TRY_ASSIGN(const QString target, childPathInside(root, fileRel));
         if (QFileInfo(target).isDir())
             return Error(ErrorCode::AlreadyExists,
@@ -497,7 +526,7 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
             hooks.item(rel(e.path));
         PartFile part(target);
         QFile f(toLongPath(part.partPath()));
-        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        if (!f.open(QIODevice::WriteOnly | QIODevice::NewOnly))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(QDir::toNativeSeparators(target)),
                          f.errorString());
         FW_TRY(img.readFile(img.inodes()[e.inode], [&](const char* d, qint64 len) -> Status {
@@ -520,11 +549,43 @@ Result<ExtractReport> extractImage(const QString& image, const QString& outputDi
         ++rep.files;
     }
     if (staged) {
-        if (QFileInfo::exists(out) && !QDir().rmdir(out))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(QDir::toNativeSeparators(out)));
-        if (!QDir().rename(root, out))
-            return Error(ErrorCode::IoError,
-                         QStringLiteral("Could not rename %1 to %2.").arg(QDir::toNativeSeparators(root), QDir::toNativeSeparators(out)));
+        // What is at the final name now: files may have been put into the
+        // empty folder, or a file of that name created, while this ran.
+        const QFileInfo now(out);
+        const bool existed = now.isDir();
+        const bool notEmpty =
+            existed && !QDir(out).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).isEmpty();
+        const bool fileInTheWay = now.exists() && !existed;
+        // A virus scanner or the search indexer that still has a file of the
+        // folder open refuses a rename for a moment: renameWithoutCopying()
+        // tries again.
+        QString why;
+        if (notEmpty || fileInTheWay || (existed && !QDir().rmdir(out)) || !renameWithoutCopying(root, out, &why)) {
+            // The files are extracted: they are not deleted because the folder
+            // name could not be taken. They go to a free name next to it, as
+            // the other extractions keep theirs, or stay where they are.
+            if (existed && !QFileInfo::exists(out))
+                QDir().mkdir(out); // the user's empty folder, as it was
+            cleanup.active = false;
+            QString kept = uniquePath(out + QStringLiteral(".new"));
+            if (!renameWithoutCopying(root, kept))
+                kept = root;
+            const QString shownOut = QDir::toNativeSeparators(out), shownKept = QDir::toNativeSeparators(kept);
+            if (notEmpty)
+                return Error(ErrorCode::AlreadyExists,
+                             QStringLiteral("The files were extracted, but the folder %1 is no longer empty. They were saved in %2.")
+                                 .arg(shownOut, shownKept));
+            if (fileInTheWay)
+                return Error(ErrorCode::AlreadyExists,
+                             QStringLiteral("The files were extracted, but %1 exists and is not a folder. They were saved in %2.")
+                                 .arg(shownOut, shownKept));
+            // Not an IoError: a retry would only extract another full copy.
+            return Error(ErrorCode::PermissionDenied,
+                         QStringLiteral("The files were extracted, but the folder %1 could not be used because it is open in "
+                                        "another program. They were saved in %2.")
+                             .arg(shownOut, shownKept),
+                         why);
+        }
         cleanup.active = false;
     }
     return rep;

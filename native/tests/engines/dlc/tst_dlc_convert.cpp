@@ -5,6 +5,7 @@
 // package, read back with pkg-info). The app's own FW_FPKG_CLI is ignored: a
 // developer who has it set does not start the real tool by running the tests.
 
+#include "core/Tr.h"
 #include "engines/dlc/DlcConvert.h"
 #include "engines/dlc/DlcIdentity.h"
 #include "engines/dlc/DlcPackage.h"
@@ -13,11 +14,14 @@
 #include "engines/dlc/Module.h"
 #include "engines/fpkg/Module.h"
 #include "engines/general/Module.h"
+#include "core/Tr.h"
 #include "jobs/Module.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QtEndian>
 #include <QtTest>
@@ -354,6 +358,79 @@ private slots:
         QCOMPARE(info.engineVersion, QStringLiteral("1.2.0"));
         QVERIFY(info.debugKeysReady);
         QCOMPARE(info.componentLines.size(), 1);
+    }
+
+    // The DLC engine row (Settings > Tools, the DLC page) shows why fpkg-cli
+    // cannot be used in the interface language; the DLC jobs keep the English
+    // texts (their errors are English like every engine message).
+    void cliRowIsInTheInterfaceLanguage()
+    {
+        const QString res = dir(QStringLiteral("cli-language"));
+        const QJsonObject strings{
+            {QStringLiteral("Expected %1, but %2 was chosen."), QStringLiteral("Erwartet: %1, gewählt: %2.")},
+            {QStringLiteral("%1 is too small to be the self-contained fpkg-cli program."), QStringLiteral("%1 ist zu klein.")},
+            {QStringLiteral("%1 was not found at %2 (%3). Choose your own copy in Settings > Tools."),
+             QStringLiteral("%1 fehlt in %2 (%3).")},
+            {QStringLiteral("The DLC engine (fpkg-cli) is not set. Choose your own %1 in Settings > Tools."),
+             QStringLiteral("Die DLC-Engine ist nicht gewählt (%1).")},
+            {QStringLiteral("Settings > Tools"), QStringLiteral("Einstellungen > Tools")}};
+        QVERIFY(fwtest::writeTextFile(QDir(res).filePath(QStringLiteral("de.json")),
+                                      QJsonDocument(QJsonObject{{QStringLiteral("code"), QStringLiteral("de")},
+                                                                {QStringLiteral("name"), QStringLiteral("Deutsch")},
+                                                                {QStringLiteral("englishName"), QStringLiteral("German")},
+                                                                {QStringLiteral("strings"), strings}})
+                                          .toJson()));
+        i18n::configure(res, {});
+        const auto english = qScopeGuard([] {
+            i18n::load(QStringLiteral("en"));
+            i18n::configure({}, {});
+        });
+        QVERIFY(i18n::load(QStringLiteral("de")));
+
+        const QString tools = dir(QStringLiteral("cli-tools"));
+        const QString nowhere = QDir(tools).filePath(QStringLiteral("nowhere"));
+        const QString nowhereShown = QDir::toNativeSeparators(nowhere);
+        // Not found where Settings > Tools points: the place in the interface language too.
+        const FpkgCli notThere = locateFpkgCli(nowhere, QString());
+        QVERIFY(!notThere.ok());
+        QCOMPARE(notThere.problems, QStringList{QStringLiteral("fpkg-cli.exe was not found at %1 (Settings > Tools). Choose your own copy in "
+                                                                "Settings > Tools.")
+                                                     .arg(nowhereShown)});
+        QCOMPARE(notThere.shownProblems, QStringList{QStringLiteral("fpkg-cli.exe fehlt in %1 (Einstellungen > Tools).").arg(nowhereShown)});
+        // The environment variable is a name, spelt as it is in every language.
+        const FpkgCli fromEnv = locateFpkgCli(QString(), nowhere);
+        QCOMPARE(fromEnv.shownProblems, QStringList{QStringLiteral("fpkg-cli.exe fehlt in %1 (%2).").arg(nowhereShown, kFpkgCliEnvVar)});
+        // Another program chosen, or a stub of the right name.
+        const QString other = QDir(tools).filePath(QStringLiteral("other.exe"));
+        QVERIFY(fwtest::writeTextFile(other, "exe"));
+        const FpkgCli wrong = locateFpkgCli(other, QString());
+        QCOMPARE(wrong.problems, QStringList{QStringLiteral("Expected fpkg-cli.exe, but other.exe was chosen.")});
+        QCOMPARE(wrong.shownProblems, QStringList{QStringLiteral("Erwartet: fpkg-cli.exe, gewählt: other.exe.")});
+        const QString stub = QDir(tools).filePath(kFpkgCliExeName);
+        QVERIFY(fwtest::writeTextFile(stub, "exe"));
+        const FpkgCli small = locateFpkgCli(tools, QString());
+        QCOMPARE(small.problems.size(), 1);
+        QVERIFY(small.problems.first().endsWith(QStringLiteral("is too small to be the self-contained fpkg-cli program.")));
+        QCOMPARE(small.shownProblems, QStringList{QStringLiteral("%1 ist zu klein.").arg(QDir::toNativeSeparators(QFileInfo(stub).absoluteFilePath()))});
+        // Nothing chosen and none next to the app.
+        if (!QFileInfo::exists(QDir(bundledFpkgCliDir()).filePath(kFpkgCliExeName))) {
+            const FpkgCli unset = locateFpkgCli(QString(), QString());
+            QCOMPARE(unset.problems, QStringList{QStringLiteral("The DLC engine (fpkg-cli) is not set. Choose your own fpkg-cli.exe in Settings > Tools.")});
+            QCOMPARE(unset.shownProblems, QStringList{QStringLiteral("Die DLC-Engine ist nicht gewählt (fpkg-cli.exe).")});
+        }
+
+        // The row: the German text, without starting anything.
+        auto schema = std::make_shared<SettingsSchema>();
+        DependencyRegistry deps;
+        JobFactory jobs;
+        ModuleContext mc{*schema, deps, jobs};
+        general::registerModule(mc);
+        fpkg::registerModule(mc);
+        dlc::registerModule(mc);
+        const SettingsValues values(schema, QVariantMap{{keys::kFpkgCliPath, nowhere}}, {});
+        const DependencyInfo info = probeFpkgCli(values);
+        QCOMPARE(info.status, DependencyStatus::Missing);
+        QCOMPARE(info.detail, QStringLiteral("fpkg-cli.exe fehlt in %1 (Einstellungen > Tools).").arg(nowhereShown));
     }
 
     // ---- end to end with fpkg-cli (skipped without it) -----------------------------------

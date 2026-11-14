@@ -28,8 +28,9 @@ using namespace theme;
 
 namespace {
 
-// Wraps `text` into at most `maxLines` lines of `width` px, eliding the last.
-QStringList wrapLines(const QString& text, const QFont& font, int width, int maxLines)
+// Wraps `text` into at most `maxLines` lines of `width` px (the first of
+// `firstWidth` px when that is given), eliding the last.
+QStringList wrapLines(const QString& text, const QFont& font, int width, int maxLines, int firstWidth = -1)
 {
     QStringList out;
     if (text.isEmpty() || width <= 10)
@@ -40,11 +41,12 @@ QStringList wrapLines(const QString& text, const QFont& font, int width, int max
         QTextLine line = layout.createLine();
         if (!line.isValid())
             break;
-        line.setLineWidth(width);
+        const int w = out.isEmpty() && firstWidth > 10 ? firstWidth : width;
+        line.setLineWidth(w);
         const int start = line.textStart();
         const int len = line.textLength();
         if (out.size() == maxLines - 1 && start + len < text.size()) {
-            out << QFontMetrics(font).elidedText(text.mid(start), Qt::ElideRight, width);
+            out << QFontMetrics(font).elidedText(text.mid(start), Qt::ElideRight, w);
             break;
         }
         out << text.mid(start, len).trimmed();
@@ -312,11 +314,14 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         if (!it.icon.isEmpty())
             p.drawPixmap(vis(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18)).toRect(),
                          iconPixmap(it.icon, 18, sel ? color::on_accent : (it.enabled ? color::fg_2 : color::fg_5), dpr));
+        // The check of the chosen tile: on the icon's centre line, 14 px in
+        // from the end (as pages::OptionTiles has it). The title's line and
+        // the description's first line end before it, chosen or not, so the
+        // text does not move when the tile is chosen.
+        const QRectF check(r.right() - 14 - 20, ir.center().y() - 10, 20, 20);
+        const qreal right = check.left() - 8;
         // Title (+ tag).
         const qreal tx = ir.right() + 12;
-        qreal right = r.right() - 14;
-        if (sel)
-            right -= 26;
         p.setFont(font::bodyStrong());
         const QFontMetrics tfm(font::bodyStrong());
         QString title = it.title;
@@ -324,7 +329,7 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         title = tfm.elidedText(title, Qt::ElideRight, int(right - tx - (tagW ? tagW + 8 : 0)));
         p.setPen(fgTitle);
         const QRectF titleR(tx, ir.top(), right - tx, 20);
-        p.drawText(vis(titleR), Qt::AlignLeft | Qt::AlignVCenter, title);
+        p.drawText(vis(titleR), Qt::AlignLeft | Qt::AlignVCenter, isRightToLeft() ? bidiSafe(title) : title);
         if (tagW)
             paintBadge(p, vis(QRectF(tx + tfm.horizontalAdvance(title) + 8, ir.top() - 1, tagW, size::badge)), it.tag,
                        it.enabled ? Tone::Info : Tone::Neutral);
@@ -333,12 +338,12 @@ void ChoiceTiles::paintEvent(QPaintEvent*)
         p.setPen(fgText);
         const qreal dw = r.right() - 14 - tx;
         qreal y = ir.top() + 23;
-        for (const QString& l : wrapLines(it.description, font::caption(), int(dw), 3)) {
-            p.drawText(vis(QRectF(tx, y, dw, 16)), Qt::AlignLeft | Qt::AlignVCenter, l);
+        for (const QString& l : wrapLines(it.description, font::caption(), int(dw), 3, int(right - tx))) {
+            p.drawText(vis(QRectF(tx, y, dw, 16)), Qt::AlignLeft | Qt::AlignVCenter, isRightToLeft() ? bidiSafe(l) : l);
             y += 16;
         }
         if (sel)
-            paintCheckBubble(p, vis(QRectF(r.right() - 32, r.top() + 12, 20, 20)), dpr);
+            paintCheckBubble(p, vis(check), dpr);
         // Keyboard focus only, and inside the tile: outside it the widget's
         // own edge would cut the ring.
         if (sel && hasFocus() && (m_keyNav || hasKeyboardFocus(this))) {

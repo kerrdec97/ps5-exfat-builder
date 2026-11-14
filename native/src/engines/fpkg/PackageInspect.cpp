@@ -2,6 +2,7 @@
 
 #include "core/FileUtil.h"
 #include "engines/fpkg/ParamJson.h"
+#include "engines/fpkg/PlayGo.h"
 
 #include <QFile>
 #include <QRegularExpression>
@@ -249,7 +250,8 @@ Result<std::optional<QByteArray>> findPlayGoChunkDatInPackage(const QString& pat
                 return std::nullopt;
             const int chunks = qFromLittleEndian<quint16>(p + 10);
             const int scenarios = qFromLittleEndian<quint16>(p + 14);
-            if (chunks < 1 || chunks > 255 || scenarios < 1 || scenarios > 5)
+            // Packages built from a dump's own layout can have up to 800 chunks.
+            if (chunks < 1 || chunks > kMaxChunks || scenarios < 1 || scenarios > kMaxScriptScenarios)
                 return std::nullopt;
             return b.mid(at, total);
         });

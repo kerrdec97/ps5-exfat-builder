@@ -12,6 +12,7 @@
 #include <QComboBox>
 #include <QEvent>
 #include <QFocusEvent>
+#include <QHeaderView>
 #include <QHelpEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -25,11 +26,13 @@
 #include <QScrollBar>
 #include <QStyleFactory>
 #include <QStyleOption>
+#include <QStyledItemDelegate>
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QToolTip>
 
 #include <algorithm>
+#include <typeinfo>
 
 namespace fw::ui {
 
@@ -99,6 +102,42 @@ static void paintChevron(QPainter* p, const QRect& r, const QString& name, const
     p->drawPixmap(target, pm);
 }
 
+// Where a sorted section's chevron goes. Fusion (and the style sheet, which
+// places it itself once its rule gives it a size) puts it at the far end of the
+// section: in a wide column whose label is at the start (the FTP browser's
+// Name) it then reads as the next column's. It follows the label instead, 4 px
+// after it (before it right to left); `given` when the label leaves no room
+// or is not at the start.
+static QRect headerArrowRect(const QStyleOptionHeader* h, const QWidget* widget, const QRect& given)
+{
+    const auto* view = qobject_cast<const QHeaderView*>(widget);
+    if (!view || h->orientation != Qt::Horizontal || h->text.isEmpty() || h->section < 0 || !h->icon.isNull()
+        || (h->textAlignment & Qt::AlignHorizontal_Mask) != Qt::AlignLeft)
+        return given;
+    QStyleOptionHeader section(*h);
+    section.rect = QRect(view->sectionViewportPosition(h->section), 0, view->sectionSize(h->section), view->height());
+    section.sortIndicator = QStyleOptionHeader::None;
+    const QRect label = view->style()->subElementRect(QStyle::SE_HeaderLabel, &section, view);
+    // The label's font: the QHeaderView::section rule of the style sheet (12 px, 600).
+    QFont f = font::caption();
+    f.setWeight(QFont::DemiBold);
+    const int s = size::iconSm;
+    const int textW = QFontMetrics(f).horizontalAdvance(h->text);
+    if (!label.isValid() || textW + space::xs + s > label.width())
+        return given;
+    const int x = h->direction == Qt::RightToLeft ? label.right() + 1 - textW - space::xs - s : label.left() + textW + space::xs;
+    return QRect(x, label.center().y() - s / 2, s, s);
+}
+
+QRect FwStyle::subElementRect(SubElement element, const QStyleOption* option, const QWidget* widget) const
+{
+    const QRect r = QProxyStyle::subElementRect(element, option, widget);
+    if (element == SE_HeaderArrow)
+        if (const auto* h = qstyleoption_cast<const QStyleOptionHeader*>(option))
+            return headerArrowRect(h, widget, r);
+    return r;
+}
+
 void FwStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter,
                             const QWidget* widget) const
 {
@@ -128,9 +167,10 @@ void FwStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* option
         if (const auto* h = qstyleoption_cast<const QStyleOptionHeader*>(option)) {
             const QString name = h->sortIndicator == QStyleOptionHeader::SortDown ? QStringLiteral("chevron_down")
                                                                                   : QStringLiteral("chevron_up");
-            QRect r = option->rect;
+            const QRect place = headerArrowRect(h, widget, option->rect);
+            QRect r = place;
             r.setSize(QSize(size::iconSm, size::iconSm));
-            r.moveCenter(option->rect.center());
+            r.moveCenter(place.center());
             const qreal dpr = painter->device() ? painter->device()->devicePixelRatioF() : 1.0;
             painter->drawPixmap(r, iconPixmap(name, size::iconSm, color::fg_3, dpr));
         }
@@ -171,26 +211,18 @@ void FwStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* option
     QProxyStyle::drawPrimitive(element, option, painter, widget);
 }
 
-void FwStyle::drawControl(ControlElement element, const QStyleOption* option, QPainter* painter,
-                          const QWidget* widget) const
-{
-    if (element == CE_ItemViewItem) {
-        if (const auto* vi = qstyleoption_cast<const QStyleOptionViewItem*>(option)) {
-            // Keep the item text colour stable when selected (accent_lo is dark).
-            QStyleOptionViewItem o(*vi);
-            o.palette.setColor(QPalette::HighlightedText, o.palette.color(QPalette::Text));
-            QProxyStyle::drawControl(element, &o, painter, widget);
-            return;
-        }
-    }
-    QProxyStyle::drawControl(element, option, painter, widget);
-}
-
 int FwStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, const QWidget* widget) const
 {
     switch (metric) {
     case PM_ScrollBarExtent: return size::scrollBar;
     case PM_FocusFrameHMargin:
+        // Item views lay out an item's icon and its text with this margin
+        // (plus 1) on both sides of each: 3 gives the 8 px between an icon
+        // and its label that buttons have, instead of 2 px.
+        if (const auto* vi = qstyleoption_cast<const QStyleOptionViewItem*>(option);
+            vi && (vi->features & QStyleOptionViewItem::HasDecoration) && !vi->icon.isNull())
+            return space::xs - 1;
+        return 0;
     case PM_FocusFrameVMargin: return 0;
     case PM_IndicatorWidth:
     case PM_IndicatorHeight:
@@ -251,15 +283,19 @@ QSize FwStyle::sizeFromContents(ContentsType type, const QStyleOption* option, c
 }
 
 void FwStyle::drawItemText(QPainter* painter, const QRect& rect, int flags, const QPalette& pal, bool enabled,
-                           const QString& text, QPalette::ColorRole textRole) const
+                           const QString& givenText, QPalette::ColorRole textRole) const
 {
+    QString text = givenText;
     // The text of a dropdown that is narrower than it ends in an ellipsis
     // instead of being cut by the edge of the field (the stylesheet style
-    // only clips it).
-    if (qobject_cast<QComboBox*>(dynamic_cast<QWidget*>(painter->device()))) {
+    // only clips it). An item with a short form ("Title ID, title and
+    // version" for "… · PPSA01325 Astro Bot v01.003") shows that first.
+    if (auto* combo = qobject_cast<QComboBox*>(dynamic_cast<QWidget*>(painter->device()))) {
         const QRect room = painter->hasClipping() ? rect.intersected(painter->clipBoundingRect().toAlignedRect()) : rect;
         const QFontMetrics fm = painter->fontMetrics();
         if (room.width() > 0 && fm.horizontalAdvance(text) > room.width()) {
+            if (const QString brief = combo->currentData(kShortTextRole).toString(); !brief.isEmpty() && text == combo->currentText())
+                text = brief;
             QProxyStyle::drawItemText(painter, room, flags, pal, enabled, fm.elidedText(text, Qt::ElideRight, room.width()), textRole);
             return;
         }
@@ -274,6 +310,8 @@ void FwStyle::drawItemText(QPainter* painter, const QRect& rect, int flags, cons
         if (l->isRightToLeft()) {
             const int h = int(QStyle::visualAlignment(Qt::RightToLeft, l->alignment()) & Qt::AlignHorizontal_Mask);
             flags = (flags & ~int(Qt::AlignHorizontal_Mask)) | h;
+            if (!(flags & Qt::TextForceLeftToRight))
+                text = bidiSafe(text); // "… ShadowMount+ …" in an Arabic sentence
         }
     } else if (const QWidget* w = dynamic_cast<QWidget*>(painter->device());
                painter->layoutDirection() == Qt::RightToLeft || (w && w->isRightToLeft())) {
@@ -288,15 +326,74 @@ void FwStyle::drawItemText(QPainter* painter, const QRect& rect, int flags, cons
         flags = (flags & ~int(Qt::AlignHorizontal_Mask)) | (h & Qt::AlignHorizontal_Mask);
         if (!(flags & (Qt::TextForceLeftToRight | Qt::TextForceRightToLeft)) && (dir == Qt::LeftToRight || !text.isRightToLeft()))
             flags |= Qt::TextForceLeftToRight;
+        if (!(flags & Qt::TextForceLeftToRight))
+            text = bidiSafe(text);
     }
     QProxyStyle::drawItemText(painter, rect, flags, pal, enabled, text, textRole);
 }
+
+namespace {
+
+// A dropdown's list: Qt's own delegate still draws its separator rows.
+class DropdownItemDelegate final : public ItemDelegate {
+public:
+    DropdownItemDelegate(QAbstractItemDelegate* qtDelegate, QObject* parent) : ItemDelegate(parent), m_qt(qtDelegate) {}
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        if (m_qt && isSeparator(index))
+            m_qt->paint(painter, option, index);
+        else
+            ItemDelegate::paint(painter, option, index);
+    }
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        return m_qt && isSeparator(index) ? m_qt->sizeHint(option, index) : ItemDelegate::sizeHint(option, index);
+    }
+
+private:
+    // As QComboBox::insertSeparator() marks the row.
+    static bool isSeparator(const QModelIndex& index)
+    {
+        return index.data(Qt::AccessibleDescriptionRole).toString() == QLatin1String("separator");
+    }
+    QPointer<QAbstractItemDelegate> m_qt;
+};
+
+// The style sheet draws an item itself and never asks this style for its
+// text: Qt's own delegate of a view (a list, a tree, a table, a dropdown's
+// list) makes way for the app's, which prepares it (ItemDelegate). A view
+// with a delegate of its own keeps it.
+void useAppItemDelegate(QAbstractItemView* view)
+{
+    QAbstractItemDelegate* delegate = view->itemDelegate();
+    if (!delegate)
+        return;
+    if (typeid(*delegate) == typeid(QStyledItemDelegate))
+        view->setItemDelegate(new ItemDelegate(view));
+    else if (qstrcmp(delegate->metaObject()->className(), "QComboBoxDelegate") == 0)
+        view->setItemDelegate(new DropdownItemDelegate(delegate, view)); // Qt's stays the view's child
+}
+
+} // namespace
 
 // Controls whose value the mouse wheel changes.
 static bool wheelChangesValue(const QWidget* w)
 {
     return qobject_cast<const QComboBox*>(w) || qobject_cast<const QAbstractSpinBox*>(w)
         || (qobject_cast<const QAbstractSlider*>(w) && !qobject_cast<const QScrollBar*>(w));
+}
+
+// The style sheet has no direction: a dropdown laid out right to left is
+// marked, and its rule mirrors the padding that keeps the chevron's room
+// (Theme.cpp). True when the mark changed.
+static bool markDropdownDirection(QComboBox* combo)
+{
+    const QVariant was = combo->property("fwRtl");
+    const bool rtl = combo->layoutDirection() == Qt::RightToLeft;
+    if (was.isValid() && was.toBool() == rtl)
+        return false;
+    combo->setProperty("fwRtl", rtl);
+    return true;
 }
 
 void FwStyle::polish(QWidget* widget)
@@ -311,11 +408,15 @@ void FwStyle::polish(QWidget* widget)
         menu->setAttribute(Qt::WA_TranslucentBackground, true);
     }
     if (auto* combo = qobject_cast<QComboBox*>(widget)) {
+        // Before the style sheet reads its rules (it polishes this style first).
+        markDropdownDirection(combo);
         if (combo->view()) {
             combo->view()->window()->setWindowFlag(Qt::NoDropShadowWindowHint, true);
             combo->view()->setTextElideMode(Qt::ElideRight);
         }
     }
+    if (auto* view = qobject_cast<QAbstractItemView*>(widget))
+        useAppItemDelegate(view);
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +489,71 @@ void paintDropdownChevron(QComboBox* combo)
     p.drawPixmap(r, iconPixmap(QStringLiteral("chevron_down"), size::icon, c, combo->devicePixelRatioF()));
 }
 
+// The inside of a line edit's padding, where its text and a unit go.
+QRect lineEditContents(const QLineEdit* edit)
+{
+    QStyleOptionFrame opt;
+    opt.initFrom(edit);
+    return edit->style()->subElementRect(QStyle::SE_LineEditContents, &opt, edit);
+}
+
+// A field whose text runs past its end while it does not have the focus,
+// laid out left to right from its start (a path, a pattern list, a template;
+// QLineEdit lays out such a text by its own direction, so also in a
+// right-to-left window): the part that does not fit is covered and "…"
+// stands in for it.
+bool showsCutEnd(const QLineEdit* edit)
+{
+    return !edit->hasFocus() && edit->cursorPosition() == 0 && !edit->displayText().isRightToLeft()
+        && (QStyle::visualAlignment(Qt::LeftToRight, edit->alignment()) & Qt::AlignLeft) && isTextCut(edit);
+}
+
+// What a line edit needs drawn over it: its unit (setInputSuffix), what its
+// value means (setInputNote) and the ellipsis of a cut text.
+bool needsLineEditExtras(const QLineEdit* edit)
+{
+    return !inputSuffix(edit).isEmpty() || (!edit->hasFocus() && !inputNote(edit).isEmpty()) || showsCutEnd(edit);
+}
+
+void paintLineEditExtras(QLineEdit* edit)
+{
+    QPainter p(edit);
+    p.setFont(edit->font());
+    const QRect contents = lineEditContents(edit);
+    const QString suffix = inputSuffix(edit);
+    if (!suffix.isEmpty()) {
+        // In the room setInputSuffix() kept: after the value, at the field's
+        // end (its start right to left).
+        const int w = QFontMetrics(edit->font()).horizontalAdvance(suffix);
+        const QRect r = edit->isRightToLeft() ? QRect(contents.left(), contents.top(), w + 1, contents.height())
+                                              : QRect(contents.right() - w, contents.top(), w + 1, contents.height());
+        p.setPen(edit->isEnabled() ? color::fg_4 : color::fg_5);
+        p.drawText(r, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextForceLeftToRight, suffix);
+    }
+    if (const QString note = inputNote(edit); !note.isEmpty() && !edit->hasFocus()) {
+        // In the text area (inside the unit's room), on the side away from
+        // the number: QLineEdit places a number by its own direction (left to
+        // right, also in a right-to-left window) and the field's alignment.
+        const QRect area = contents.marginsRemoved(edit->textMargins()).adjusted(2, 0, -2, 0);
+        const Qt::Alignment numberSide =
+            QStyle::visualAlignment(edit->text().isRightToLeft() ? Qt::RightToLeft : Qt::LeftToRight, edit->alignment()) & Qt::AlignHorizontal_Mask;
+        const QFontMetrics fm(edit->font());
+        const int room = area.width() - fm.horizontalAdvance(edit->displayText()) - space::md; // what the number leaves
+        p.setPen(edit->isEnabled() ? color::fg_4 : color::fg_5);
+        p.drawText(area, Qt::AlignVCenter | Qt::AlignAbsolute | ((numberSide & Qt::AlignRight) ? Qt::AlignLeft : Qt::AlignRight),
+                   fm.elidedText(note, Qt::ElideRight, std::max(0, room)));
+    }
+    if (!showsCutEnd(edit))
+        return;
+    // At the end of the text area: inside the text margins and QLineEdit's own 2 px.
+    const QRect text = contents.marginsRemoved(edit->textMargins()).adjusted(2, 0, -2, 0);
+    const int ew = QFontMetrics(edit->font()).horizontalAdvance(QChar(0x2026)) + space::xs;
+    const QRect cover(text.right() - ew + 1, text.top() + 1, ew + 1, text.height() - 2);
+    p.fillRect(cover, !edit->isEnabled() || edit->isReadOnly() ? color::bg_2 : color::field_bg);
+    p.setPen(!edit->isEnabled() ? color::fg_5 : edit->isReadOnly() ? color::fg_2 : color::field_fg);
+    p.drawText(cover, Qt::AlignVCenter | Qt::AlignRight | Qt::AlignAbsolute, QString(QChar(0x2026)));
+}
+
 bool isSubMenu(const QMenu* menu)
 {
     const auto* parent = qobject_cast<const QMenu*>(QApplication::activePopupWidget());
@@ -427,7 +593,27 @@ protected:
                 watched->event(event);
                 paintDropdownChevron(combo);
                 return true;
+            } else if (auto* edit = qobject_cast<QLineEdit*>(watched); edit && needsLineEditExtras(edit)) {
+                watched->event(event);
+                paintLineEditExtras(edit);
+                return true;
             }
+            break;
+        case QEvent::LayoutDirectionChange:
+            // A dropdown turned round after it was polished: its padding goes
+            // with the chevron (an unpolished one is marked when it is polished).
+            if (auto* combo = qobject_cast<QComboBox*>(watched);
+                combo && combo->testAttribute(Qt::WA_WState_Polished) && markDropdownDirection(combo)) {
+                combo->style()->unpolish(combo);
+                combo->style()->polish(combo);
+                combo->updateGeometry();
+                combo->update();
+            }
+            [[fallthrough]];
+        case QEvent::FontChange:
+            // The unit's room goes with the field's end and the font's width.
+            if (auto* edit = qobject_cast<QLineEdit*>(watched); edit && !inputSuffix(edit).isEmpty())
+                setInputSuffix(edit, inputSuffix(edit));
             break;
         case QEvent::Show:
             // The panel, not the margin, goes where the menu was asked to be.
@@ -471,6 +657,12 @@ private:
             return false;
         QString tip = w->toolTip();
         QRect rect;
+        // A field that shows only part of its value: the whole value.
+        if (auto* edit = qobject_cast<QLineEdit*>(w);
+            tip.isEmpty() && edit && edit->echoMode() == QLineEdit::Normal && !edit->hasFocus() && isTextCut(edit)) {
+            QToolTip::showText(e->globalPos(), plainTip(edit->text()), w);
+            return true;
+        }
         if (tip.isEmpty()) {
             // Item views take theirs from the model (Qt::ToolTipRole).
             auto* view = qobject_cast<QAbstractItemView*>(w->parentWidget());

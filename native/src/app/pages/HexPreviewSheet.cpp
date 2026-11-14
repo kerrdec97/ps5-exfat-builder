@@ -68,19 +68,18 @@ HexPreviewSheet::HexPreviewSheet(QWidget* host, const QString& image, const QStr
     m_view->setPlaceholderText(FW_TR("Reading…"));
     body()->addWidget(m_view);
 
-    auto* row = new QWidget(this);
-    auto* h = hbox(row, space::sm);
-    m_status = caption({}, row);
-    h->addWidget(m_status, 1);
-    m_more = button(FW_TR("Load more"), ButtonVariant::Secondary, QStringLiteral("arrow_down"), row);
-    setButtonSmall(m_more, true);
+    m_status = caption({}, this);
+    body()->addWidget(m_status);
+
+    // An information sheet: "Load more" at the start of the button row (it
+    // keeps the sheet open), Close the default button (focus, Enter, Esc).
+    m_more = addButton(FW_TR("Load more"), Role::Aside);
+    setButtonIcon(m_more, QStringLiteral("arrow_down"));
     m_more->setToolTip(FW_TR("Show the next %1").arg(formatBytes(kHexPreviewChunk)));
     m_more->setEnabled(false);
-    h->addWidget(m_more);
-    body()->addWidget(row);
     connect(m_more, &QPushButton::clicked, this, &HexPreviewSheet::loadMore);
 
-    addButton(FW_TR("Close"), Role::Safe);
+    addButton(FW_TR("Close"), Role::Close);
     updateStatus();
 }
 

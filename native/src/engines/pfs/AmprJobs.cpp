@@ -26,6 +26,8 @@ public:
     QString title() const override { return QStringLiteral("AMPR index for %1").arg(QFileInfo(folder()).fileName()); }
     QString subtitle() const override { return nativeFolder(folder()); }
     QStringList phases() const override { return {QStringLiteral("Scanning"), QStringLiteral("Writing the index")}; }
+    // The scan lists the whole folder; the index is one small file written once.
+    QList<double> phaseWeights() const override { return {0.95, 0.05}; }
     QJsonObject parameters() const override { return m_p; }
 
     Status validate(const SettingsValues&) const override
@@ -47,6 +49,8 @@ public:
 
     Result<JobOutcome> run(JobContext& ctx) override
     {
+        // Again at the start: asset packs may have appeared since it was queued.
+        FW_TRY(validate(ctx.settings));
         const QString root = QFileInfo(folder()).absoluteFilePath();
         ctx.progress->beginPhase(0, 0);
         ctx.progress->setCurrentItem(nativeFolder(root));
@@ -60,10 +64,16 @@ public:
         ctx.progress->beginPhase(1, index.size());
         const QString out = QDir(root).filePath(kAmprIndexName);
         FW_TRY(ensureFreeSpace(root, index.size(), 0));
+        JobOutcome o;
+        describeAmprRows(rows, o);
+        o.details.insert(QStringLiteral("folders"), scan.folders);
+        o.details.insert(QStringLiteral("hasAmprLibrary"), scan.hasAmprLibrary);
+        if (!scan.hasAmprLibrary)
+            o.warnings << QStringLiteral("The folder has no fakelib/libSceAmpr.sprx; the index is only used by the AMPR emulator.");
         {
             PartFile part(out);
             QFile f(part.partPath());
-            if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            if (!f.open(QIODevice::WriteOnly | QIODevice::NewOnly))
                 return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(nativeFolder(part.partPath())), f.errorString());
             if (f.write(index) != index.size())
                 return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(nativeFolder(part.partPath())), f.errorString());
@@ -71,25 +81,23 @@ public:
             f.close();
             if (!ctx.token.checkpoint())
                 return Error::cancelled();
+            // Read back before it replaces the folder's index: an index that
+            // does not read back as written never takes the old one's place.
+            QFile back(part.partPath());
+            if (!back.open(QIODevice::ReadOnly) || back.readAll() != index) {
+                o.verification = Verification::Failed;
+                o.verificationDetail = QStringLiteral("ampr_emu.index does not read back as written");
+                o.summary = QStringLiteral("ampr_emu.index was not saved because it did not read back as written.");
+                return o; // the .part is removed; an older index stays
+            }
+            back.close();
             FW_TRY(part.commit(true));
         }
         ctx.progress->advance(index.size());
 
-        JobOutcome o;
         o.outputs << out;
-        describeAmprRows(rows, o);
-        o.details.insert(QStringLiteral("folders"), scan.folders);
-        o.details.insert(QStringLiteral("hasAmprLibrary"), scan.hasAmprLibrary);
-        if (!scan.hasAmprLibrary)
-            o.warnings << QStringLiteral("The folder has no fakelib/libSceAmpr.sprx; the index is only used by the AMPR emulator.");
-        QFile back(out);
-        if (back.open(QIODevice::ReadOnly) && back.readAll() == index) {
-            o.verification = Verification::Passed;
-            o.verificationDetail = QStringLiteral("ampr_emu.index read back, %1").arg(formatBytes(index.size()));
-        } else {
-            o.verification = Verification::Failed;
-            o.verificationDetail = QStringLiteral("ampr_emu.index does not read back as written");
-        }
+        o.verification = Verification::Passed;
+        o.verificationDetail = QStringLiteral("ampr_emu.index read back, %1").arg(formatBytes(index.size()));
         o.summary = QStringLiteral("Indexed %1 file(s) into %2 (%3)")
                         .arg(formatCount(qint64(rows.rows.size())), nativeFolder(out), formatBytes(index.size()));
         return o;
@@ -142,6 +150,7 @@ void describeAmprRows(const AmprToolRows& rows, JobOutcome& o)
     o.details.insert(QStringLiteral("collisions"), QJsonArray::fromStringList(rows.collisions));
     o.details.insert(QStringLiteral("skippedControl"), QJsonArray::fromStringList(rows.skippedControl));
     o.details.insert(QStringLiteral("skippedOwn"), QJsonArray::fromStringList(rows.skippedOwn));
+    o.details.insert(QStringLiteral("skippedRuntime"), QJsonArray::fromStringList(rows.skippedRuntime));
     if (!rows.collisions.isEmpty())
         o.warnings << QStringLiteral("%1 path(s) differ only in letter case; the first of each was indexed: %2")
                           .arg(rows.collisions.size())
@@ -150,6 +159,11 @@ void describeAmprRows(const AmprToolRows& rows, JobOutcome& o)
         o.warnings << QStringLiteral("%1 path(s) with a tab or line break were left out: %2")
                           .arg(rows.skippedControl.size())
                           .arg(rows.skippedControl.mid(0, 3).join(QStringLiteral("; ")));
+    if (!rows.skippedRuntime.isEmpty())
+        o.warnings << QStringLiteral("%1 path(s) the AMPR runtime cannot list (a name longer than 255 bytes, a path longer than "
+                                     "1023 bytes or a backslash) were left out: %2")
+                          .arg(rows.skippedRuntime.size())
+                          .arg(rows.skippedRuntime.mid(0, 3).join(QStringLiteral("; ")));
 }
 
 void registerAmprJobs(ModuleContext& ctx)

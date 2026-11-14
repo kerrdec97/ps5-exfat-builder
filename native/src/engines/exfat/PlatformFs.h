@@ -32,6 +32,15 @@ bool setPathTimes(const QString& path, const QDateTime& created, const QDateTime
 // read-only is applied, as the owner write permission of files.
 bool applyAttributes(const QString& path, quint16 attributes, bool isDir);
 
+// What setPathTimes() (when `times`) and applyAttributes() (when
+// `attributes`) do for a file, done through `file` while it is still open for
+// writing, so the file is not opened again by name: one call instead of two
+// opens. Anything still buffered in `file` is written first. Returns false
+// when it could not be done this way (not Windows, or the file system
+// refused); the caller then closes the file and uses the two functions above.
+bool finishOpenFile(QFile& file, bool times, const QDateTime& created, const QDateTime& modified,
+                    const QDateTime& accessed, bool attributes, quint16 attributeBits);
+
 // Opens `path` read-only. A failure is retried `retries` times, `waitMs`
 // apart (files held by antivirus or Windows Search, like robocopy /R /W).
 Result<std::unique_ptr<QFile>> openForRead(const QString& path, int retries, int waitMs,

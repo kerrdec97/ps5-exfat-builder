@@ -31,6 +31,9 @@ QString folderOf(const QString& entryName)
     return slash < 0 ? QString() : entryName.left(slash + 1);
 }
 
+// How many of the other games an archive holds are named (ZipGame::otherGames).
+constexpr qsizetype kNamedOtherGames = 10;
+
 // Every folder that holds eboot.bin or sce_sys/param.json is a game root.
 struct GameRoots {
     QMap<QString, int> roots; // prefix (lower case) -> bit 1 eboot, bit 2 param
@@ -50,7 +53,8 @@ struct GameRoots {
         }
     }
 
-    // The shortest root is the game; the others are named in otherGames.
+    // The shortest root is the game; the others are named in otherGames (the
+    // first kNamedOtherGames of them; moreGames counts the rest).
     Status pick(const QString& archivePath, ZipGame& g) const
     {
         if (roots.isEmpty())
@@ -58,26 +62,23 @@ struct GameRoots {
                                                   .arg(QFileInfo(archivePath).fileName()));
         // Nested folders of one game (e.g. sce_module/.../eboot.bin) are not
         // separate games: keep only roots that are not inside another root.
-        QStringList keys = roots.keys();
-        std::sort(keys.begin(), keys.end(), [](const QString& a, const QString& b) { return a.size() < b.size(); });
+        // In sorted order every root that a root lies in comes before it, and
+        // nothing between the two can leave it, so only the last root kept
+        // has to be asked: one pass, however many game folders a crafted
+        // archive lists.
         QStringList top;
-        for (const QString& k : keys) {
-            bool nested = false;
-            for (const QString& t : top)
-                if (k.startsWith(t)) {
-                    nested = true;
-                    break;
-                }
-            if (!nested)
-                top << k;
-        }
+        for (auto it = roots.keyBegin(); it != roots.keyEnd(); ++it)
+            if (top.isEmpty() || !it->startsWith(top.last()))
+                top << *it;
+        std::stable_sort(top.begin(), top.end(), [](const QString& a, const QString& b) { return a.size() < b.size(); });
         g.rootPrefix = spelling.value(top.first());
-        for (int i = 1; i < top.size(); ++i) {
+        for (qsizetype i = 1; i < top.size() && g.otherGames.size() < kNamedOtherGames; ++i) {
             QString name = spelling.value(top[i]);
             if (name.endsWith(u'/'))
                 name.chop(1);
             g.otherGames << (name.isEmpty() ? QStringLiteral("(top level)") : name);
         }
+        g.moreGames = qint64(top.size()) - 1 - g.otherGames.size();
         const QString rootLower = g.rootPrefix.toLower();
         g.hasEboot = roots.value(rootLower) & 1;
         g.hasParam = roots.value(rootLower) & 2;
@@ -103,9 +104,33 @@ Error severalGames(const QString& archivePath, const ZipGame& g, const QString& 
 {
     // Named like the other games: without the trailing slash.
     const QString first = g.rootPrefix.isEmpty() ? QStringLiteral("(top level)") : g.rootPrefix.chopped(1);
+    QString others = g.otherGames.join(QStringLiteral(", "));
+    if (g.moreGames > 0)
+        others += QStringLiteral(", … and %1 more").arg(formatCount(g.moreGames));
     return Error(ErrorCode::InvalidArgument,
                  QStringLiteral("%1 holds more than one game (%2 and %3). %4, or unpack it and choose the game's folder.")
-                     .arg(QFileInfo(archivePath).fileName(), first, g.otherGames.join(QStringLiteral(", ")), advice));
+                     .arg(QFileInfo(archivePath).fileName(), first, others, advice));
+}
+
+// A ZIP's entries as listArchive() lists a 7z's, for checkExtractable(). The
+// names stay as the ZIP has them ("dir/", "./a"): the game's prefix was
+// taken from them and extractAll() filters on them. A password is the ZIP
+// reader's to name, with its own advice.
+ArchiveListing zipListing(const QString& path, const zip::Reader& r)
+{
+    ArchiveListing out;
+    out.path = path;
+    out.kind = ArchiveKind::Zip;
+    out.volumes << path;
+    out.entries.reserve(r.entries().size());
+    for (const zip::Entry& e : r.entries()) {
+        ArchiveEntry a;
+        a.name = e.name;
+        a.type = e.isDirectory() ? ArchiveEntry::Type::Directory : ArchiveEntry::Type::File;
+        a.size = qint64(std::min<quint64>(e.uncompressedSize, quint64(std::numeric_limits<qint64>::max())));
+        out.entries.push_back(std::move(a));
+    }
+    return out;
 }
 
 // A 7z or RAR archive by its first bytes, whatever it is called. Anything
@@ -327,6 +352,10 @@ Result<ArchiveGame> inspectArchive(const QString& path, const CancellationToken&
     }
     ZipGame g;
     FW_TRY(roots.pick(zipPath, g));
+    // The rules of every archive source, before anything else is said about
+    // the game: a path that leaves the folder, two names Windows takes for
+    // one (unpacked, the second would be written over the first).
+    FW_TRY(checkExtractable(zipListing(zipPath, r), g.rootPrefix));
     // Exactly the entries unpackZipSource() extracts. The sizes come from the
     // archive and are not to be trusted: the sum stops at the largest qint64.
     constexpr quint64 kMaxBytes = quint64(std::numeric_limits<qint64>::max());
@@ -419,8 +448,9 @@ Result<QString> unpackArchiveSource(const QString& path, const QString& tempDir,
             progress->setCurrentItem(QStringLiteral("Unpacking %1").arg(QFileInfo(zipPath).fileName()));
         }
         // Only the game: what else the archive holds (extras, a second folder) is
-        // neither counted above nor wanted in the temporary folder.
-        FW_TRY(r.extractAll(dest, token, progress, true, g.rootPrefix));
+        // neither counted above nor wanted in the temporary folder. Never over a
+        // file: the names are unique (inspectArchive), the folder is new.
+        FW_TRY(r.extractAll(dest, token, progress, false, g.rootPrefix));
         rootPrefix = g.rootPrefix;
     }
     const QString root = QDir::cleanPath(QDir(dest).filePath(zip::Reader::extractedPath(rootPrefix)));

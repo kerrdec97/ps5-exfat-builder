@@ -56,6 +56,7 @@ struct SettingDef {
     bool perJob = false;          // may be overridden for a single job
     bool advanced = false;        // hidden behind "Show advanced"
     bool restartRequired = false;
+    bool keptOnReset = false;     // the user's own list, not a preference (the Library page's folders): resetSection() / resetAll() leave it
     QString enabledWhenKey;       // setting that must equal enabledWhenValue
     QVariant enabledWhenValue = true;
     QString dependencyId;         // DependencyRegistry id this setting relies on
@@ -152,6 +153,7 @@ public:
     Status setValue(const QString& key, const QVariant& value);
     bool isDefault(const QString& key) const;
     void reset(const QString& key);
+    // Settings marked keptOnReset are left as they are by these two.
     void resetSection(const QString& section);
     void resetAll();
 
@@ -162,7 +164,8 @@ public:
     QStringList loadWarnings() const;
 
     // Imports the legacy Python app's settings.json using the schema's legacy
-    // key table. Returns the number of imported values.
+    // key table. Returns the number of imported values. A folder list
+    // (folderList) is joined: the folders already set stay, new ones follow.
     Result<int> importLegacy(const QString& legacySettingsPath);
 
     // Migration hook: transforms a raw values object from `fromVersion` to

@@ -288,12 +288,16 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     m_recentRows = new QWidget(m_recentCard);
     vbox(m_recentRows, 0);
     m_recentCard->body()->addWidget(m_recentRows);
+    // The card can be taller than its rows (as tall as the setup card beside
+    // it): the rows stay at the top, the empty state in the middle.
+    m_recentCard->body()->addStretch(1);
     m_recentEmpty = new EmptyState(QStringLiteral("history"), FW_TR("No jobs yet"),
                                    FW_TR("Finished jobs show up here."), m_recentCard);
     m_recentEmpty->setCompact(true);
     auto* first = m_recentEmpty->addAction(FW_TR("Build your first image"), ButtonVariant::Secondary);
     connect(first, &QPushButton::clicked, this, [this] { emit navigateRequested({QStringLiteral("build"), {}}); });
     m_recentCard->body()->addWidget(m_recentEmpty);
+    m_recentCard->body()->addStretch(1);
     m_columns->setLeft(m_recentCard);
 
     m_setup = new Disclosure(FW_TR("Set up your PS5"), FW_TR("Optional, for network transfers"), columns);
@@ -311,6 +315,7 @@ HomePage::HomePage(AppContext& ctx, JobQueueModel& queueModel, QWidget* parent)
     connect(m_setup, &Disclosure::toggled, this, [](bool on) { QSettings().setValue(QLatin1String(kSetupExpandedKey), on); });
     m_columns->setRight(m_setup);
     content()->addWidget(columns);
+    m_setup->installEventFilter(this); // its height sets the Recent jobs card's
 
     m_lastCheck = loadLastFtpCheck();
     connect(&ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
@@ -386,6 +391,24 @@ void HomePage::setSetupShown(bool shown)
     m_setupShown = shown;
     m_columns->setRight(shown ? m_setup : nullptr);
     m_setup->setVisible(shown);
+    matchRecentHeight();
+}
+
+bool HomePage::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_setup && (event->type() == QEvent::Resize || event->type() == QEvent::Move))
+        matchRecentHeight();
+    return Page::eventFilter(watched, event);
+}
+
+// Side by side, the two cards end on one line: Recent jobs takes the setup
+// card's height when that is the taller one (its rows stay at the top).
+void HomePage::matchRecentHeight()
+{
+    const bool beside = m_setupShown && !m_setup->isHidden() && !m_columns->isStacked();
+    const int h = beside ? m_setup->height() : 0;
+    if (m_recentCard->minimumHeight() != h)
+        m_recentCard->setMinimumHeight(h);
 }
 
 void HomePage::refreshChecklist()
@@ -425,19 +448,22 @@ void HomePage::refreshChecklist()
         auto* text = new QWidget(row);
         auto* tv = vbox(text, 1);
         tv->addWidget(label(item.label, next ? TextStyle::BodyStrong : TextStyle::Body, item.done ? color::fg_2 : color::fg_0, text));
-        auto* detail = new ElideLabel(item.detail, Qt::ElideRight, text);
-        detail->setFont(font::caption());
-        setTextColor(detail, next ? color::fg_2 : color::fg_4);
-        detail->setToolTip(item.detail);
+        // The whole help, on up to two lines: the way to fix it is under it,
+        // not beside it, so it does not take the line's room.
+        auto* detail = label(item.detail, TextStyle::Caption, next ? color::fg_2 : color::fg_4, text);
+        detail->setWordWrap(true);
+        keepWrappedHeight(detail);
         tv->addWidget(detail);
-        h->addWidget(text, 1);
         if (!item.fixText.isEmpty()) {
-            auto* fix = new Link(item.fixText, row);
+            auto* fix = new Link(item.fixText, text);
+            fix->setFont(font::caption());
             const NavRequest nav{item.fixPage, item.fixArgs};
             // Queued: the rows are rebuilt on many signals; never inside the link's own click.
             connect(fix, &Link::activated, this, [this, nav] { emit navigateRequested(nav); }, Qt::QueuedConnection);
-            h->addWidget(fix, 0, Qt::AlignTop);
+            tv->addSpacing(2);
+            tv->addWidget(fix, 0, Qt::AlignLeft);
         }
+        h->addWidget(text, 1);
         rows->addWidget(row);
     }
     setSetupShown(!all);
@@ -464,8 +490,9 @@ void HomePage::refreshQueueTile()
                 indeterminate = rec->progress.indeterminate && rec->state == JobState::Running;
                 stage = rec->state == JobState::Paused ? FW_TR("Paused")
                         : rec->state == JobState::Cancelling ? FW_TR("Cancelling") : i18n::translate(rec->progress.phase);
-                if (rec->state == JobState::Running && rec->progress.etaMs >= 0)
-                    stage += QStringLiteral(" · ") + (i18n::currentCode() == u"en" ? formatTimeLeft(rec->progress.etaMs).toLower() : formatTimeLeft(rec->progress.etaMs));
+                // The job's time left (all its stages), as every unqualified "left" in the app.
+                if (const qint64 left = jobTimeLeftMs(*rec); left >= 0)
+                    stage += QStringLiteral(" · ") + (i18n::currentCode() == u"en" ? formatTimeLeft(left).toLower() : formatTimeLeft(left));
             }
             break;
         case JobState::Queued: ++queued; break;

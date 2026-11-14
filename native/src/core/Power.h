@@ -8,6 +8,8 @@
 
 #include <QString>
 
+#include <functional>
+
 namespace fw::power {
 
 // Returns true if the request is active after the call.
@@ -21,7 +23,17 @@ QString actionName(Action action);
 QString actionLabel(Action action);         // "Shut down", ...
 
 // Performs the action now (Windows). Elsewhere returns Unsupported.
+// A test never reaches Windows: while a hook is set perform() returns what
+// the hook returns and does nothing else; without one it refuses (PermissionDenied)
+// in a test program (an executable named tst_*) and whenever the environment
+// variable FW_NO_POWER_ACTIONS is set (smoke runs of the real app).
 Status perform(Action action);
+
+using PerformHook = std::function<Status(Action)>;
+void setPerformHook(PerformHook hook); // an empty hook puts perform() back to normal
+// No hook is set and this is a test program or FW_NO_POWER_ACTIONS is set:
+// perform() refuses.
+bool performBlocked();
 
 } // namespace fw::power
 

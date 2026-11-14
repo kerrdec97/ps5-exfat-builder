@@ -26,7 +26,8 @@ Result<QString> childPathInside(const QString& root, const QString& relative);
 
 // The name an image entry gets on disk. With Windows rules, characters
 // Windows forbids become '_', trailing dots/spaces go and reserved device
-// names (CON, NUL, COM1...) get a '_' prefix; otherwise names are unchanged.
+// names (CON, NUL, COM1..., COM¹ COM² COM³, LPT¹..., CONIN$, CONOUT$, also with
+// an extension) get a '_' prefix; otherwise names are unchanged.
 QString hostFileName(const QString& name, bool windowsRules);
 
 // True on Windows: names follow the Win32 rules and compare case-insensitively.

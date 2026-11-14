@@ -97,8 +97,9 @@ private:
     friend struct DlcIniTestAccess;
 };
 
-// Writes `data` to a new file `path` (fails when it exists), flushed to disk;
-// a partial file is removed on failure.
+// Writes `data` to a new file `path` (fails when it exists): written as a
+// .part file (PartFile), flushed to disk and only then given its name, so a
+// crash or a full drive never leaves a short file under that name.
 Status writeNewFile(const QString& path, const QByteArray& data);
 
 } // namespace fw::dlc

@@ -7,6 +7,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
+#include "connect/ps5/Module.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
 #include "core/Tr.h"
@@ -57,6 +58,15 @@ QString sectionIcon(const QString& section)
         {QStringLiteral("Advanced"), QStringLiteral("advanced")},
     };
     return icons.value(section, QStringLiteral("settings"));
+}
+
+// An optional tool the user supplies and has not chosen yet (its path setting
+// is empty): its row says "Not set" (DependencyRow), and it is not a problem
+// for a count either, or a fresh install would look broken.
+bool notChosenYet(const DependencyInfo& info, const SettingsStore& settings)
+{
+    return info.status == DependencyStatus::Missing && !info.required && !info.settingKey.isEmpty()
+        && settings.value(info.settingKey).toString().trimmed().isEmpty();
 }
 
 // A 34 px section row for the left list: icon + name (+ count badge).
@@ -282,7 +292,12 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
     scol->setSpacing(2);
     auto* titleRow = new QHBoxLayout;
     titleRow->setSpacing(space::sm);
+    // Under the page's title (24 px), over the cards' (15 px): a step between.
     m_secTitle = heading({}, TextStyle::Title, secHeader);
+    QFont secFont = font::title();
+    secFont.setPixelSize(18);
+    secFont.setWeight(QFont::DemiBold);
+    m_secTitle->setFont(secFont);
     titleRow->addWidget(m_secTitle);
     m_secChanged = new Badge({}, Tone::Info, secHeader);
     m_secChanged->setIconName(QStringLiteral("advanced"));
@@ -320,7 +335,7 @@ SettingsPage::SettingsPage(AppContext& ctx, QWidget* parent)
         int changed = 0;
         bool paths = false;
         for (const SettingDef* d : m_ctx.schema().inSection(m_section)) {
-            if (m_ctx.settings().isDefault(d->key))
+            if (d->keptOnReset || m_ctx.settings().isDefault(d->key))
                 continue;
             ++changed;
             paths = paths || d->type == SettingType::DirPath || d->type == SettingType::FilePath;
@@ -496,6 +511,15 @@ SettingRow* SettingsPage::addRow(const SettingDef& def, QWidget* parent, QVBoxLa
     auto* row = new SettingRow(def, parent);
     row->setDivider(divider);
     row->setRestartNote(def.restartRequired);
+    // An empty address field says what goes in it, as on PS5 connect.
+    if (def.key == ps5::keys::kConsoleIp) {
+        QWidget* w = row->editor()->widget();
+        auto* edit = qobject_cast<QLineEdit*>(w);
+        if (!edit && w)
+            edit = w->findChild<QLineEdit*>();
+        if (edit && edit->placeholderText().isEmpty())
+            edit->setPlaceholderText(QStringLiteral("192.168.1.40"));
+    }
     m_rows.insert(def.key, row);
     const QString key = def.key;
     connect(row->editor(), &SettingEditor::edited, this, [this, key](const QVariant& v) { applyValue(key, v); });
@@ -587,13 +611,19 @@ void SettingsPage::buildSection(const QString& section)
     const auto defs = m_ctx.schema().inSection(section);
     QStringList groups;
     bool allAdvanced = !defs.empty();
+    int rareCount = 0;
     for (const SettingDef* d : defs) {
         if (!groups.contains(d->group))
             groups << d->group;
         allAdvanced = allAdvanced && d->advanced;
+        rareCount += d->advanced ? 1 : 0;
     }
     // Rare settings fold into one "Advanced" disclosure at the end of the
-    // section; a section that is advanced as a whole shows them directly.
+    // section; a section that is advanced as a whole shows them directly, and
+    // so does one with only one or two of them (a fold for a single row hides
+    // more than it tidies).
+    constexpr int kFoldFrom = 3;
+    const bool foldRare = !allAdvanced && rareCount >= kFoldFrom;
     std::vector<std::pair<QString, std::vector<const SettingDef*>>> advanced;
     QStringList depIds;
     for (const QString& g : groups) {
@@ -603,7 +633,7 @@ void SettingsPage::buildSection(const QString& section)
                 continue;
             if (!d->dependencyId.isEmpty() && !depIds.contains(d->dependencyId))
                 depIds << d->dependencyId;
-            (d->advanced && !allAdvanced ? rare : rows).push_back(d);
+            (d->advanced && foldRare ? rare : rows).push_back(d);
         }
         if (!rare.empty())
             advanced.emplace_back(g.isEmpty() ? section : g, rare);
@@ -652,37 +682,8 @@ void SettingsPage::buildSection(const QString& section)
         m_cardsLayout->addWidget(card);
         updateTempUsage();
     }
-    if (section == QLatin1String("Advanced")) {
-        auto* card = new Card(m_cards);
-        card->setTitle(FW_TR("Import settings from the old app"));
-        auto* note = caption(FW_TR("Takes over every value this app understands. Nothing is deleted."), card);
-        note->setToolTip(FW_TR("Reads the Python edition's settings.json; values the native app does not use are skipped."));
-        card->body()->addWidget(note);
-        auto* pf = new PathField(PathField::Mode::OpenFile, card);
-        pf->setFilter(FW_TR("JSON files") + QStringLiteral(" (*.json)"));
-        pf->setDialogTitle(FW_TR("Choose the old settings.json"));
-        const QString legacy = QDir::home().filePath(QStringLiteral(".exfat_builder_settings.json"));
-        if (QFile::exists(legacy))
-            pf->setPath(legacy);
-        else
-            pf->setPlaceholder(nativePath(legacy));
-        card->body()->addWidget(field(FW_TR("Old settings file"), pf, {}, card));
-        auto* row = new QWidget(card);
-        auto* rh = hbox(row, space::sm);
-        rh->addStretch(1);
-        auto* go = button(FW_TR("Import"), ButtonVariant::Secondary, QStringLiteral("file_down"), row);
-        connect(go, &QPushButton::clicked, this, [this, pf] {
-            if (pf->path().isEmpty()) {
-                pf->setError(FW_TR("Choose the old settings file first."));
-                return;
-            }
-            pf->setError({});
-            importLegacyFrom(pf->path());
-        });
-        rh->addWidget(go);
-        card->body()->addWidget(row);
-        m_cardsLayout->addWidget(card);
-    }
+    // The legacy import has one entry point: "Import legacy settings…" under
+    // the section list, on every section.
     if (section == QLatin1String("Tools")) {
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
@@ -709,7 +710,12 @@ void SettingsPage::buildSection(const QString& section)
                 return;
             }
             const int ready = m_deps->readyCount(), total = m_deps->total();
-            badge->set(FW_TR("%1 of %2 ready").arg(ready).arg(total), ready == total ? Tone::Ok : Tone::Warn);
+            // Amber only for a problem; tools that are only not chosen yet leave it neutral.
+            int notChosen = 0;
+            for (const auto& info : m_ctx.dependencies().lastAll())
+                notChosen += notChosenYet(info, m_ctx.settings()) ? 1 : 0;
+            badge->set(FW_TR("%1 of %2 ready").arg(ready).arg(total),
+                       ready == total ? Tone::Ok : ready + notChosen >= total ? Tone::Neutral : Tone::Warn);
         });
         connect(m_deps, &DependencyList::fixRequested, this, [this](const QString&, const QString& how, const QString& settingKey) {
             navigateWith({{QStringLiteral("key"), settingKey}, {QStringLiteral("howToFix"), how}});
@@ -979,7 +985,23 @@ void SettingsPage::makePortable()
     else
         text += FW_TR("<br><br>The old folder is still in place: %1. Delete it once the portable copy works for you.")
                     .arg(Sheet::monoSpan(nativePath(plan.currentDataDir)));
-    Sheet::message(window(), FW_TR("Portable from the next start"), text, Sheet::Icon::Info);
+    // The copy is what is on disk now: restarting at once leaves nothing behind
+    // in the old folders. Jobs that still run or wait would be stopped, and the
+    // portable copy has them as they are now: said before the choice.
+    auto* after = new Sheet(window(), FW_TR("Portable from the next start"), Sheet::Icon::Info);
+    after->addText(text);
+    if (m_ctx.queue().runningCount() + m_ctx.queue().pendingCount() > 0) {
+        auto* busy = new InfoBar(Tone::Warn, after);
+        busy->setObjectName(QStringLiteral("portable-jobs-warning"));
+        busy->setMessage(FW_TR("Jobs are still running or waiting. Restarting now stops them, and the portable copy lists them as they are now."));
+        after->body()->addWidget(busy);
+    }
+    after->addButton(FW_TR("Not now"), Sheet::Role::Safe);
+    after->addButton(FW_TR("Restart now"), Sheet::Role::Primary);
+    if (after->exec() != 1)
+        return;
+    (void)m_ctx.settings().save();
+    (void)language::restart(window()); // false when the user kept the app open (jobs to finish)
 }
 
 void SettingsPage::addLanguageExtras(QWidget* card, QVBoxLayout* layout)
@@ -1153,17 +1175,20 @@ void SettingsPage::updateSectionHeader()
     if (!m_search->text().trimmed().isEmpty())
         return;
     m_secTitle->setText(shownSection(m_section));
-    int differ = 0;
+    int differ = 0, resettable = 0;
     for (const SettingDef* d : m_ctx.schema().inSection(m_section))
-        if (!m_ctx.settings().isDefault(d->key))
+        if (!m_ctx.settings().isDefault(d->key)) {
             ++differ;
+            if (!d->keptOnReset)
+                ++resettable; // the Library page's folders stay: no button for them alone
+        }
     m_secCaption->setText(sectionCaption(m_section));
     m_secLink->setVisible(m_section == QLatin1String("Tools"));
     m_secChanged->setText(FW_TR("%1 changed").arg(differ));
     m_secChanged->setToolTip(differ == 1 ? FW_TR("%1 setting in this section differs from the defaults").arg(differ)
                                          : FW_TR("%1 settings in this section differ from the defaults").arg(differ));
     m_secChanged->setVisible(differ > 0);
-    m_resetSection->setVisible(differ > 0);
+    m_resetSection->setVisible(resettable > 0);
     updateAdvancedSummary();
 }
 
@@ -1186,7 +1211,8 @@ void SettingsPage::updateSectionBadges()
 {
     int problems = 0;
     for (const auto& info : m_ctx.dependencies().lastAll())
-        if (info.status == DependencyStatus::Missing || info.status == DependencyStatus::Outdated || info.status == DependencyStatus::Error)
+        if ((info.status == DependencyStatus::Missing && !notChosenYet(info, m_ctx.settings())) || info.status == DependencyStatus::Outdated
+            || info.status == DependencyStatus::Error)
             ++problems;
     if (auto* b = m_sectionBadges.value(QStringLiteral("Tools"))) {
         b->setText(QString::number(problems));
@@ -1257,15 +1283,18 @@ void SettingsPage::importLegacyFrom(const QString& path)
 
 void SettingsPage::resetAll()
 {
+    // The Library page's folders are the user's own list (keptOnReset): said
+    // here, so "1 changed" on General afterwards is no surprise.
     if (!Sheet::confirm(window(), FW_TR("Reset every setting?"),
-                        FW_TR("All sections go back to their defaults. Tool paths you entered are cleared too. Jobs already in the queue keep their settings."),
+                        FW_TR("All sections go back to their defaults, except the Library folders. Tool paths you entered are cleared too. "
+                              "Jobs already in the queue keep their settings."),
                         FW_TR("Keep settings"), FW_TR("Reset all"), true, Sheet::Icon::Warning))
         return;
     m_ctx.settings().resetAll();
     (void)m_ctx.settings().save();
     m_errors.clear();
     rebuild();
-    emit toastRequested(Tone::Ok, FW_TR("Settings reset"), FW_TR("Every setting is back to its default."));
+    emit toastRequested(Tone::Ok, FW_TR("Settings reset"), FW_TR("Every setting except the Library folders is back to its default."));
 }
 
 void SettingsPage::navigateWith(const QVariantMap& args)
@@ -1340,7 +1369,8 @@ void SettingsPage::applyDemoState(const QString& name)
     }
     if (name == QLatin1String("reset-dialog")) {
         auto* s = new Sheet(window(), FW_TR("Reset every setting?"), Sheet::Icon::Warning);
-        s->addText(FW_TR("All sections go back to their defaults. Tool paths you entered are cleared too. Jobs already in the queue keep their settings."));
+        s->addText(FW_TR("All sections go back to their defaults, except the Library folders. Tool paths you entered are cleared too. "
+                         "Jobs already in the queue keep their settings."));
         s->addButton(FW_TR("Keep settings"), Sheet::Role::Safe);
         s->addButton(FW_TR("Reset all"), Sheet::Role::Destructive);
         s->open();

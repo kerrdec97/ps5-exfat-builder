@@ -27,6 +27,8 @@ jobs:
     timeout-minutes: 90
     env:
       QT_VERSION: '6.8.3'
+      # No test and no run of the app may put the runner to sleep or shut it down.
+      FW_NO_POWER_ACTIONS: '1'
     steps:
       - uses: actions/checkout@v4
 
@@ -105,13 +107,18 @@ jobs:
           $dist = "dist\exFAT Image Builder"
           New-Item -ItemType Directory -Force $dist | Out-Null
           Copy-Item "build\bin\exFAT Image Builder.exe" $dist
-          windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw --compiler-runtime "$dist\exFAT Image Builder.exe"
+          # As make-release.ps1: no vc_redist.x64.exe; finish-deploy.ps1 puts the VC++ runtime DLLs
+          # next to the program (the folder edition starts without the Redistributable) and
+          # removes the Qt plugins the app never loads.
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-system-dxc-compiler --no-opengl-sw --no-compiler-runtime "$dist\exFAT Image Builder.exe"
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed ($LASTEXITCODE)" }
           Copy-Item native\packaging\README-portable.txt "$dist\README.txt"
           Copy-Item LICENSES -Recurse "$dist\LICENSES"
           Copy-Item native\packaging\licenses\* "$dist\LICENSES\"
           Copy-Item native\packaging\THIRD_PARTY_NOTICES-native.md "$dist\THIRD_PARTY_NOTICES.md"
           Copy-Item native\packaging\LICENCE.txt "$dist\LICENCE.txt"
           Copy-Item build\bin\engines -Recurse "$dist\engines"
+          & native\packaging\finish-deploy.ps1 -DeployDir $dist
           Get-ChildItem $dist -Recurse | Measure-Object -Property Length -Sum | Select-Object Count, Sum | Tee-Object ci-out\dist-size.txt
 
       - name: Single-file exe (the download)
@@ -198,7 +205,20 @@ jobs:
         shell: pwsh
         run: |
           $ver = (Select-String -Path native\CMakeLists.txt -Pattern 'VERSION (\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
-          Compress-Archive -Path "dist\exFAT Image Builder" -DestinationPath "dist\exFAT-Image-Builder-$ver-win64-portable.zip" -Force
+          # As make-release.ps1, entry by entry with "/" in the names (Compress-Archive of
+          # Windows PowerShell 5.1 writes "\", which the zip format does not allow).
+          Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+          $dist = (Get-Item -LiteralPath (Join-Path $PWD 'dist\exFAT Image Builder')).FullName.TrimEnd('\')
+          $zipPath = Join-Path $PWD "dist\exFAT-Image-Builder-$ver-win64-portable.zip"
+          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+          $top = Split-Path $dist -Leaf
+          $archive = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
+          try {
+            foreach ($f in @(Get-ChildItem -LiteralPath $dist -Recurse -File -Force | Sort-Object FullName)) {
+              $entry = $top + '/' + $f.FullName.Substring($dist.Length + 1).Replace('\', '/')
+              [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
+            }
+          } finally { $archive.Dispose() }
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
             $inno = 'C:\Program Files (x86)\Inno Setup 6'
             if (-not (Test-Path "$inno\ISCC.exe")) { choco install innosetup --no-progress -y | Out-Null }

@@ -147,7 +147,10 @@ struct Scanner {
             // it points at. QFileInfo describes its target, so the file's own
             // size and time come from an open handle.
             const bool shortcut = fi.isShortcut();
-            if (!shortcut && fi.isDir()) {
+            // Qt calls a junction whose folder is gone an existing folder:
+            // it is a broken link (below), not a folder to enter.
+            const bool deadJunction = fi.isJunction() && !QFileInfo::exists(fi.junctionTarget());
+            if (!shortcut && !deadJunction && fi.isDir()) {
                 n.kind = NodeKind::Dir;
             } else if (shortcut) {
                 n.kind = NodeKind::File;

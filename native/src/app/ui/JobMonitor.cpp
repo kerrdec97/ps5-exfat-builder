@@ -20,10 +20,12 @@
 #include <QPainter>
 #include <QShowEvent>
 #include <QPainterPath>
+#include <QTextLayout>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace fw::ui {
 
@@ -43,13 +45,13 @@ QString clockText(qint64 ms)
 QString shortDuration(qint64 ms)
 {
     if (ms < 1000)
-        return QStringLiteral("<1 s");
+        return QStringLiteral("<") + FW_TR("%1 s").arg(1);
     const qint64 s = ms / 1000;
     if (s < 60)
-        return QStringLiteral("%1 s").arg(s);
+        return FW_TR("%1 s").arg(s);
     if (s < 3600)
-        return s % 60 == 0 ? QStringLiteral("%1 min").arg(s / 60) : QStringLiteral("%1 min %2 s").arg(s / 60).arg(s % 60);
-    return QStringLiteral("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60, 2, 10, QLatin1Char('0'));
+        return s % 60 == 0 ? FW_TR("%1 min").arg(s / 60) : FW_TR("%1 min %2 s").arg(s / 60).arg(s % 60);
+    return FW_TR("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60, 2, 10, QLatin1Char('0'));
 }
 
 QString shortTimeLeft(qint64 ms)
@@ -58,11 +60,11 @@ QString shortTimeLeft(qint64 ms)
         return {};
     const qint64 s = (ms + 500) / 1000;
     if (s < 60)
-        return QStringLiteral("~%1 s").arg(std::max<qint64>(1, s));
+        return QStringLiteral("~") + FW_TR("%1 s").arg(std::max<qint64>(1, s));
     const qint64 min = (s + 30) / 60;
     if (min < 60)
-        return QStringLiteral("~%1 min").arg(min);
-    return QStringLiteral("~%1 h %2 min").arg(min / 60).arg(min % 60, 2, 10, QLatin1Char('0'));
+        return QStringLiteral("~") + FW_TR("%1 min").arg(min);
+    return QStringLiteral("~") + FW_TR("%1 h %2 min").arg(min / 60).arg(min % 60, 2, 10, QLatin1Char('0'));
 }
 
 namespace {
@@ -138,7 +140,8 @@ void RateSparkline::clear()
 
 void RateSparkline::paintEvent(QPaintEvent*)
 {
-    if (m_samples.size() < 2)
+    // Two points make a lone spike, not a history: the line starts with three.
+    if (m_samples.size() < 3)
         return;
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
@@ -205,17 +208,32 @@ void MetricTile::setHint(const QString& hint)
     // The line keeps its height so the tiles of a row stay level.
     m_hint->setFullText(hint);
     m_hint->setToolTip(plainTip(hint));
+    if (m_spark) {
+        m_hint->setVisible(!hint.isEmpty()); // beside the sparkline: it gives the line back when empty
+        // The words first ("avg 402 MB/s", not "av…"); the sparkline takes what is left.
+        m_hint->setMinimumWidth(hint.isEmpty() ? 0 : m_hint->fontMetrics().horizontalAdvance(hint) + 6);
+    }
 }
 
 QString MetricTile::value() const { return m_value->text(); }
 
+QString MetricTile::hint() const { return m_hint->fullText(); }
+
 RateSparkline* MetricTile::sparkline()
 {
     if (!m_spark) {
-        // Under the value, as wide as the tile: the value never has to make room.
-        m_spark = new RateSparkline(this);
-        m_hint->hide();
-        body()->addWidget(m_spark);
+        // Under the value, as wide as the tile: the value never has to make
+        // room. The hint (the average speed) takes the start of that line.
+        auto* foot = new QWidget(this);
+        auto* fl = hbox(foot, space::sm);
+        foot->setFixedHeight(font::lineCaption);
+        body()->removeWidget(m_hint);
+        m_hint->setParent(foot);
+        fl->addWidget(m_hint);
+        m_spark = new RateSparkline(foot);
+        fl->addWidget(m_spark, 1);
+        body()->addWidget(foot);
+        m_hint->setVisible(!m_hint->fullText().isEmpty());
     }
     return m_spark;
 }
@@ -271,6 +289,65 @@ private:
     motion::Pulse* m_pulse = nullptr;
 };
 
+// A stage's name. On one line when it fits; a long translation ("Projektdateien
+// werden geschrieben") takes a second line instead of losing its end, and only
+// what does not fit on two lines is cut with "…" (the tooltip has it whole).
+class StageName : public QLabel {
+public:
+    StageName(const QString& text, QWidget* parent) : QLabel(parent), m_text(text)
+    {
+        setTextFormat(Qt::PlainText);
+        setWordWrap(false);
+        setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        setText(text);
+        setToolTip(plainTip(text));
+    }
+    QString fullText() const { return m_text; }
+    int lineCount() const { return int(text().count(u'\n')) + 1; }
+    QSize minimumSizeHint() const override { return {0, QLabel::minimumSizeHint().height()}; }
+
+protected:
+    void resizeEvent(QResizeEvent* e) override
+    {
+        QLabel::resizeEvent(e);
+        relayout();
+    }
+    void changeEvent(QEvent* e) override
+    {
+        QLabel::changeEvent(e);
+        if (e->type() == QEvent::FontChange || e->type() == QEvent::LayoutDirectionChange)
+            relayout();
+    }
+
+private:
+    void relayout()
+    {
+        const int w = contentsRect().width();
+        const QFontMetrics fm(font());
+        QString shown = m_text;
+        if (w > 0 && fm.horizontalAdvance(m_text) > w) {
+            QTextLayout layout(m_text, font());
+            QTextOption option;
+            option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            option.setTextDirection(layoutDirection());
+            layout.setTextOption(option);
+            layout.beginLayout();
+            QTextLine first = layout.createLine();
+            first.setLineWidth(w);
+            const int restAt = first.textStart() + first.textLength();
+            layout.endLayout();
+            const QString rest = m_text.mid(restAt).trimmed();
+            shown = m_text.left(restAt).trimmed();
+            if (!rest.isEmpty())
+                shown += u'\n' + fm.elidedText(rest, Qt::ElideRight, w);
+        }
+        if (shown != text())
+            setText(shown);
+    }
+    QString m_text;
+};
+
 StageList::StageList(QWidget* parent) : QWidget(parent)
 {
     m_layout = vbox(this, 0);
@@ -292,22 +369,29 @@ void StageList::setStages(const QStringList& names)
         delete it->widget(); // rows and the "No stages" label alike
         delete it;
     }
+    // One line of body text in a 26 px row (22 compact); a name on two lines
+    // makes its row taller, with the glyph and the time beside its first line.
+    const int pad = ((m_compact ? 22 : 26) - font::lineBody) / 2;
     for (const QString& n : names) {
         Row row;
         row.widget = new QWidget(this);
-        row.widget->setFixedHeight(m_compact ? 22 : 26);
-        auto* h = hbox(row.widget, space::sm);
+        row.widget->setMinimumHeight(m_compact ? 22 : 26);
+        auto* h = hbox(row.widget, space::sm, QMargins(0, pad, 0, pad));
         row.icon = new StageMark(row.widget);
         const QString shownName = i18n::translate(n); // stage names are the engines' English
-        row.name = new ElideLabel(shownName, Qt::ElideRight, row.widget);
+        row.name = new StageName(shownName, row.widget);
         row.name->setFont(font::body());
-        row.name->setToolTip(plainTip(shownName));
         row.time = label({}, TextStyle::MonoSmall, color::fg_3, row.widget);
         row.time->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        row.time->setMinimumWidth(QFontMetrics(font::monoSmall()).horizontalAdvance(QStringLiteral("12 min 40 s")));
-        h->addWidget(row.icon);
+        row.time->setFixedHeight(font::lineBody);
+        row.time->setMinimumWidth(QFontMetrics(font::monoSmall()).horizontalAdvance(FW_TR("%1 min %2 s").arg(12).arg(40)));
+        auto* mark = new QVBoxLayout;
+        mark->setContentsMargins(0, (font::lineBody - row.icon->height()) / 2, 0, 0);
+        mark->addWidget(row.icon);
+        mark->addStretch(1);
+        h->addLayout(mark);
         h->addWidget(row.name, 1);
-        h->addWidget(row.time);
+        h->addWidget(row.time, 0, Qt::AlignTop);
         m_layout->addWidget(row.widget);
         m_rows.push_back(row);
     }
@@ -334,8 +418,10 @@ void StageList::update(const ProgressSnapshot& p, JobState state)
             icon = QStringLiteral("check");
             c = color::success_hi;
             nameColor = color::fg_2;
-            time = ms > 0 ? shortDuration(ms) : FW_TR("skipped");
-            if (ms <= 0)
+            // A stage that ran in under a millisecond ran ("<1 s"); one never entered was skipped.
+            const bool entered = p.phaseEntered.isEmpty() ? ms > 0 : p.phaseEntered.value(i);
+            time = entered ? shortDuration(ms) : FW_TR("skipped");
+            if (!entered)
                 timeColor = color::fg_4; // a real caption, not a disabled one
             row.status = QStringLiteral("done");
         } else if (started && i == current && (active(state) || failed || stopped)) {
@@ -368,6 +454,10 @@ void StageList::update(const ProgressSnapshot& p, JobState state)
             }
             f = font::bodyStrong();
             time = shortDuration(ms);
+            // How far the stage itself is (the verification's own progress),
+            // when it can be measured; a stage without a size has no number.
+            if ((row.status == QLatin1String("running") || row.status == QLatin1String("paused")) && !p.indeterminate)
+                time = thinPercent(p.phaseNames.isEmpty() ? p.phaseFraction() : p.phaseProgress) + QStringLiteral(" · ") + time;
         } else {
             row.status = QStringLiteral("pending");
         }
@@ -475,7 +565,8 @@ void JobMonitor::build()
     m_title = new ElideLabel({}, Qt::ElideRight, head);
     m_title->setFont(wide ? font::title() : font::subtitle());
     setTextColor(m_title, color::fg_0);
-    m_meta = new ElideLabel({}, Qt::ElideMiddle, head);
+    m_meta = new MetaLine(head); // a long destination is cut, never the size
+    m_meta->setObjectName(QStringLiteral("job-monitor-meta"));
     m_meta->setFont(font::mono());
     setTextColor(m_meta, color::fg_3);
     tcol->addWidget(m_title);
@@ -504,6 +595,7 @@ void JobMonitor::build()
     m_detail->setWordWrap(true);
     pl->addWidget(m_detail);
     m_item = new ElideLabel({}, Qt::ElideMiddle, prog);
+    m_item->setObjectName(QStringLiteral("job-monitor-item"));
     m_item->setFont(font::monoSmall());
     keepLeftToRight(m_item);
     setTextColor(m_item, color::fg_3);
@@ -519,9 +611,11 @@ void JobMonitor::build()
     m_mStage = new MetricTile(FW_TR("Stage"), metrics);
     m_mSpeed->sparkline();
     if (wide) {
+        // The Speed tile holds two things on its last line (the average and
+        // the sparkline): it is the wider one.
         auto* ml = hbox(metrics, space::sm);
         for (MetricTile* t : {m_mElapsed, m_mLeft, m_mSpeed, m_mDone, m_mStage})
-            ml->addWidget(t, 1);
+            ml->addWidget(t, t == m_mSpeed ? 3 : 2);
     } else {
         auto* g = new QGridLayout(metrics);
         g->setSpacing(space::sm);
@@ -548,9 +642,11 @@ void JobMonitor::build()
     auto* logHead = new QWidget(logPanel);
     auto* lh = hbox(logHead, space::sm);
     lh->addWidget(label(FW_TR("Live log"), TextStyle::Overline, color::fg_4, logHead));
-    m_lineCount = label({}, TextStyle::Caption, color::fg_4, logHead);
-    lh->addWidget(m_lineCount);
-    lh->addStretch(1);
+    // Cut before it widens the monitor (a long language has long words here).
+    m_lineCount = new ElideLabel({}, Qt::ElideRight, logHead);
+    m_lineCount->setFont(font::caption());
+    setTextColor(m_lineCount, color::fg_4);
+    lh->addWidget(m_lineCount, 1);
     auto* verboseLabel = label(FW_TR("Verbose"), TextStyle::Caption, color::fg_3, logHead);
     verboseLabel->setToolTip(FW_TR("Also show the tools' own output and debug lines."));
     m_verbose = new Switch(logHead);
@@ -560,25 +656,36 @@ void JobMonitor::build()
     lh->addWidget(m_verbose);
     m_copy = new IconButton(QStringLiteral("copy"), FW_TR("Copy these lines"), IconButton::Size::Small, logHead);
     lh->addWidget(m_copy);
-    m_openLogs = new Link(FW_TR("Open in Logs"), logHead);
-    lh->addWidget(m_openLogs);
     ll->addWidget(logHead);
     m_console = new LogConsole(m_logs, logPanel);
     m_console->setMinimumHeight(wide ? 240 : 170);
     ll->addWidget(m_console, 1);
+    // Under the console: the way to the whole log, and the way back to the
+    // newest line once the user scrolled up (in the header, a long language
+    // would make the monitor too wide to stay beside the Jobs dock).
     auto* jumpRow = new QWidget(logPanel);
     auto* jl = hbox(jumpRow, space::sm);
+    m_openLogs = new Link(FW_TR("Open in Logs"), jumpRow);
+    m_openLogs->setFont(font::caption());
+    jl->addWidget(m_openLogs);
     jl->addStretch(1);
     m_jump = new Link(FW_TR("Jump to the latest line ↓"), jumpRow);
     m_jump->setFont(font::caption());
     jl->addWidget(m_jump);
-    jumpRow->setVisible(false);
+    m_jump->setVisible(false);
     ll->addWidget(jumpRow);
-    connect(m_console, &LogConsole::followChanged, jumpRow, [jumpRow](bool follow) { jumpRow->setVisible(!follow); });
+    connect(m_console, &LogConsole::followChanged, m_jump, [this](bool follow) { m_jump->setVisible(!follow); });
     connect(m_jump, &Link::activated, m_console, &LogConsole::jumpToLatest);
     connect(m_console, &LogConsole::lineCountChanged, this, [this](int n) {
-        m_lineCount->setText(n <= 0 ? QString() : n == 1 ? FW_TR("%1 line").arg(formatCount(n)) : FW_TR("%1 lines").arg(formatCount(n)));
+        m_logLines = n;
+        updateLogCaption();
     });
+    // New records arrive in batches at the end of the model.
+    connect(&m_logs, &LogModel::rowsAppended, this, [this](int count) {
+        if (!m_demo && !m_id.isEmpty())
+            countLog(m_logs.rowCount() - count, m_logs.rowCount());
+    });
+    connect(&m_logs, &QAbstractItemModel::modelReset, this, &JobMonitor::recountLog);
     connect(m_verbose, &QAbstractButton::toggled, this, [this](bool on) { m_console->setMinimumLevel(on ? LogLevel::Debug : LogLevel::Info); });
     connect(m_copy, &QToolButton::clicked, this, [this] {
         QApplication::clipboard()->setText(m_console->plainLines());
@@ -682,8 +789,9 @@ void JobMonitor::setJobId(const QString& id)
 {
     if (m_id == id && !m_demo && !id.isEmpty())
         return; // already following it (the queue's signals keep it current)
+    const bool wasDemo = m_demo.has_value();
     m_demo.reset();
-    if (m_id != id) {
+    if (m_id != id || wasDemo) {
         m_id = id;
         m_phasesKey.clear();
         m_stagesSet = false;
@@ -692,6 +800,7 @@ void JobMonitor::setJobId(const QString& id)
         m_mSpeed->sparkline()->clear();
         m_lastSampleMs = 0;
         m_copy->setToolTip(FW_TR("Copy these lines"));
+        recountLog();
     }
     if (id.isEmpty()) {
         m_console->setJobId({});
@@ -712,6 +821,8 @@ void JobMonitor::setDemoRecord(const JobRecord& record, const QStringList& logLi
     m_stagesSet = false;
     m_console->setLive(false);
     m_console->clearLines();
+    m_logWarnings = 0;
+    m_logErrors = 0;
     QDateTime t = record.started.isValid() ? record.started : QDateTime::currentDateTime();
     for (const QString& line : logLines) {
         LogLevel level = LogLevel::Info;
@@ -719,9 +830,11 @@ void JobMonitor::setDemoRecord(const JobRecord& record, const QStringList& logLi
         if (text.startsWith(QLatin1String("W "))) {
             level = LogLevel::Warning;
             text = text.mid(2);
+            ++m_logWarnings;
         } else if (text.startsWith(QLatin1String("E "))) {
             level = LogLevel::Error;
             text = text.mid(2);
+            ++m_logErrors;
         } else if (text.startsWith(QLatin1String("D "))) {
             level = LogLevel::Debug;
             text = text.mid(2);
@@ -729,11 +842,13 @@ void JobMonitor::setDemoRecord(const JobRecord& record, const QStringList& logLi
         t = t.addMSecs(1200 + (text.size() * 37) % 2600);
         m_console->appendLine(t, level, text);
     }
+    updateLogCaption();
     m_console->jumpToLatest();
     auto* spark = m_mSpeed->sparkline();
     spark->clear();
+    // In bytes per second, like the samples a running job adds (the record's own comes last).
     for (int i = 0; i < 40; ++i)
-        spark->addSample(300.0 + 120.0 * std::sin(i / 4.0) + (i % 7) * 9.0);
+        spark->addSample((300.0 + 120.0 * std::sin(i / 4.0) + (i % 7) * 9.0) * 1024.0 * 1024.0);
     apply(record);
     m_tick.stop();
 }
@@ -746,16 +861,15 @@ JobRecord JobMonitor::demoRecord(const QString& state, QStringList* logLines)
     rec.kind = QStringLiteral("fpkg.build");
     rec.title = QStringLiteral("Demon's Souls (PPSA01342)");
     rec.subtitle = QStringLiteral("FPKG · 31.6 GB → D:\\PS5\\Packages");
-    // The FPKG job's stage names (engines/fpkg), English as a job has them.
+    // The FPKG job's stage names (engines/fpkg buildPhases()), English as a job has them.
     rec.phases = {FW_TR_NOOP("Preparing the source"), FW_TR_NOOP("Planning"), FW_TR_NOOP("Writing project files"),
-                  FW_TR_NOOP("Pre-reading files"), FW_TR_NOOP("Packing"), FW_TR_NOOP("Finishing"),
-                  FW_TR_NOOP("Checking the package"), FW_TR_NOOP("Verifying with img_verify"), FW_TR_NOOP("Computing SHA-256")};
-    rec.added = now.addSecs(-240);
-    rec.started = now.addSecs(-218);
+                  FW_TR_NOOP("Pre-reading files"), FW_TR_NOOP("Packing"), FW_TR_NOOP("Checking the package"),
+                  FW_TR_NOOP("Verifying with img_verify"), FW_TR_NOOP("Computing SHA-256")};
     ProgressSnapshot& p = rec.progress;
     p.phaseCount = rec.phases.size();
     p.unitIsBytes = true;
-    p.total = 31600000000LL;
+    constexpr qint64 kGiB = 1024LL * 1024 * 1024;
+    p.total = qint64(31.6 * double(kGiB)); // "31.6 GB", as the meta line says
     p.filesTotal = 18442;
     QStringList lines{
         QStringLiteral("Queued: Demon's Souls (PPSA01342)"),
@@ -776,17 +890,18 @@ JobRecord JobMonitor::demoRecord(const QString& state, QStringList* logLines)
         rec.state = JobState::Running;
         p.phase = QStringLiteral("Packing");
         p.phaseIndex = 4;
-        p.done = 19900000000LL;
+        p.done = qint64(19.9 * double(kGiB));
         p.filesDone = 11204;
         p.ratePerSec = 418.0 * 1024 * 1024;
+        p.averageRatePerSec = 402.0 * 1024 * 1024;
         p.etaMs = qint64(double(p.total - p.done) / p.ratePerSec * 1000.0);
-        p.currentItem = QStringLiteral("19.9 GB written · Data\\chunk_0007.pak");
+        p.jobEtaMs = p.etaMs + 175000; // the checks after packing (img_verify, SHA-256) take minutes
+        // What the FPKG engine reports while the publisher writes (FpkgBuilder, onBytesWritten).
+        p.currentItem = FW_TR("%1 written").arg(formatBytes(p.done));
         p.overallFraction = 0.63;
-        p.phaseMs = {4100, 900, 1300, 22000, 190000, 0, 0, 0, 0};
-        p.elapsedMs = 218300;
+        p.phaseMs = {4100, 900, 1300, 22000, 190000, 0, 0, 0}; // the running stage's time so far included
         p.phaseElapsedMs = 190000;
     } else {
-        rec.finished = now.addSecs(-20);
         p.finished = true;
         lines << QStringLiteral("Header check passed: FIH header, plaintext debug marker.")
               << QStringLiteral("Package written: D:\\PS5\\Packages\\UP9000-PPSA01342_00-DEMONSSOULS00000-A0104-V0104.pkg (31.2 GB)")
@@ -794,12 +909,11 @@ JobRecord JobMonitor::demoRecord(const QString& state, QStringList* logLines)
         if (state == QLatin1String("done")) {
             rec.state = JobState::Succeeded;
             p.phase = QStringLiteral("Computing SHA-256");
-            p.phaseIndex = 8;
+            p.phaseIndex = 7;
             p.done = p.total;
             p.filesDone = p.filesTotal;
             p.overallFraction = 1.0;
-            p.phaseMs = {4100, 900, 1300, 22000, 301000, 400, 2100, 96000, 48000};
-            p.elapsedMs = 475800;
+            p.phaseMs = {4100, 900, 1300, 22000, 301000, 2100, 96000, 48000};
             JobOutcome o;
             o.outputs = {QStringLiteral("D:/PS5/Packages/UP9000-PPSA01342_00-DEMONSSOULS00000-A0104-V0104.pkg")};
             o.verification = Verification::Passed;
@@ -812,11 +926,10 @@ JobRecord JobMonitor::demoRecord(const QString& state, QStringList* logLines)
         } else {
             rec.state = JobState::Failed;
             p.phase = QStringLiteral("Verifying with img_verify");
-            p.phaseIndex = 7;
+            p.phaseIndex = 6;
             p.done = p.total;
             p.overallFraction = 0.91;
-            p.phaseMs = {4100, 900, 1300, 22000, 301000, 400, 2100, 61000, 0};
-            p.elapsedMs = 392800;
+            p.phaseMs = {4100, 900, 1300, 22000, 301000, 2100, 61000, 0};
             rec.error = Error(ErrorCode::VerificationFailed,
                               QStringLiteral("Verification failed. img_verify reported: [Error] The PFS image digest does not match (chunk 3)."));
             lines.removeLast();
@@ -824,6 +937,13 @@ JobRecord JobMonitor::demoRecord(const QString& state, QStringList* logLines)
                   << QStringLiteral("E Failed: Demon's Souls (PPSA01342) — Verification failed. img_verify reported: [Error] The PFS image digest does not match (chunk 3).");
         }
     }
+    // The clock and the stages tell the same time.
+    p.elapsedMs = std::accumulate(p.phaseMs.cbegin(), p.phaseMs.cend(), qint64(0));
+    const QDateTime end = p.finished ? now.addSecs(-20) : now;
+    if (p.finished)
+        rec.finished = end;
+    rec.started = end.addMSecs(-p.elapsedMs);
+    rec.added = rec.started.addSecs(-22);
     if (logLines)
         *logLines = lines;
     return rec;
@@ -916,6 +1036,7 @@ void JobMonitor::apply(const JobRecord& r)
     const bool isActive = active(r.state);
     const bool finished = isTerminal(r.state);
     const bool started = r.started.isValid();
+    const double fraction = shownFraction(r); // 100 % only once the job has succeeded
 
     // Header
     m_tile->setIconName(stateIconFor(r.state));
@@ -925,10 +1046,9 @@ void JobMonitor::apply(const JobRecord& r)
     if (!r.subtitle.isEmpty())
         meta += QStringLiteral(" · ") + r.subtitle;
     m_meta->setFullText(meta);
-    m_meta->setToolTip(plainTip(meta));
     QString badge = i18n::translate(jobStateName(r.state));
     if (r.state == JobState::Running)
-        badge = p.indeterminate ? FW_TR("Running") : FW_TR("Running · %1").arg(thinPercent(p.overallFraction));
+        badge = p.indeterminate ? FW_TR("Running") : FW_TR("Running · %1").arg(thinPercent(fraction));
     else if (r.state == JobState::Paused)
         badge = FW_TR("Paused");
     else if (r.state == JobState::Cancelling)
@@ -942,17 +1062,17 @@ void JobMonitor::apply(const JobRecord& r)
     m_badge->show();
 
     // Hero progress
-    m_bar->setFraction(p.overallFraction);
+    m_bar->setFraction(fraction);
     QString pct;
     QColor pctColor = color::fg_0;
     switch (r.state) {
     case JobState::Running:
         m_bar->setState(p.indeterminate ? ProgressBar::State::Indeterminate : ProgressBar::State::Determinate);
-        pct = p.indeterminate ? QString() : thinPercent(p.overallFraction);
+        pct = p.indeterminate ? QString() : thinPercent(fraction);
         break;
     case JobState::Paused:
         m_bar->setState(ProgressBar::State::Paused);
-        pct = p.indeterminate ? FW_TR("Paused") : FW_TR("Paused · %1").arg(thinPercent(p.overallFraction));
+        pct = p.indeterminate ? FW_TR("Paused") : FW_TR("Paused · %1").arg(thinPercent(fraction));
         pctColor = color::fg_3;
         break;
     case JobState::Cancelling:
@@ -967,18 +1087,18 @@ void JobMonitor::apply(const JobRecord& r)
         break;
     case JobState::Failed:
         m_bar->setState(ProgressBar::State::Failed);
-        pct = (!started || p.indeterminate) ? FW_TR("Failed") : FW_TR("Failed at %1").arg(thinPercent(p.overallFraction));
+        pct = (!started || p.indeterminate) ? FW_TR("Failed") : FW_TR("Failed at %1").arg(thinPercent(fraction));
         pctColor = color::danger_hi;
         break;
     case JobState::Interrupted:
         // A job restored after the app closed has no start time any more.
         m_bar->setState(ProgressBar::State::Failed);
-        pct = (!started || p.indeterminate) ? FW_TR("Interrupted") : FW_TR("Interrupted at %1").arg(thinPercent(p.overallFraction));
+        pct = (!started || p.indeterminate) ? FW_TR("Interrupted") : FW_TR("Interrupted at %1").arg(thinPercent(fraction));
         pctColor = color::warn_hi;
         break;
     case JobState::Cancelled:
         m_bar->setState(ProgressBar::State::Paused);
-        pct = (!started || p.indeterminate) ? FW_TR("Cancelled") : FW_TR("Cancelled at %1").arg(thinPercent(p.overallFraction));
+        pct = (!started || p.indeterminate) ? FW_TR("Cancelled") : FW_TR("Cancelled at %1").arg(thinPercent(fraction));
         pctColor = color::fg_3;
         break;
     case JobState::Queued:
@@ -1001,7 +1121,7 @@ void JobMonitor::apply(const JobRecord& r)
         QStringList parts;
         if (!phase.isEmpty())
             parts << phase;
-        if (const QString d = progressDetailText(p); !d.isEmpty())
+        if (const QString d = progressDetailText(p, jobTimeLeftMs(r)); !d.isEmpty()) // the job's time left, as in the tile
             parts << d;
         detail = parts.join(QStringLiteral(" · "));
         break;
@@ -1045,8 +1165,9 @@ void JobMonitor::apply(const JobRecord& r)
     setTextColor(m_detail, detailColor);
     m_detail->setVisible(!detail.isEmpty());
     const bool showItem = r.state == JobState::Running && !p.currentItem.isEmpty();
-    // A file name, or a step text some engines give as data (FTP diagnostics): shown translated.
-    const QString item = showItem ? i18n::translate(p.currentItem) : QString();
+    // A file name, or a step text some engines give as data (FTP diagnostics,
+    // a composite job's inner stage): shown translated.
+    const QString item = showItem ? currentItemText(p.currentItem) : QString();
     m_item->setFullText(item);
     m_item->setToolTip(showItem ? plainTip(item) : QString());
     m_item->setVisible(showItem);
@@ -1060,16 +1181,28 @@ void JobMonitor::apply(const JobRecord& r)
         m_mElapsed->setHint(r.state == JobState::Queued ? FW_TR("not started") : QString());
     }
     if (r.state == JobState::Running) {
-        const QString left = shortTimeLeft(p.etaMs);
-        m_mLeft->setValue(left.isEmpty() ? kDash : left);
-        m_mLeft->setHint(left.isEmpty() ? (p.indeterminate ? FW_TR("this stage has no size") : FW_TR("measuring")) : FW_TR("this stage"));
+        // The whole job's time left, with this stage's beside it; the
+        // stage's alone while the job's cannot be told yet.
+        const QString job = shortTimeLeft(jobTimeLeftMs(r));
+        const QString stage = shortTimeLeft(p.etaMs);
+        const bool lastStage = p.phaseIndex >= p.phaseCount - 1;
+        if (!job.isEmpty()) {
+            m_mLeft->setValue(job);
+            m_mLeft->setHint(!stage.isEmpty() && !lastStage ? FW_TR("%1 this stage").arg(stage) : QString());
+        } else if (!stage.isEmpty()) {
+            m_mLeft->setValue(stage);
+            m_mLeft->setHint(FW_TR("this stage"));
+        } else {
+            m_mLeft->setValue(kDash);
+            m_mLeft->setHint(p.indeterminate ? FW_TR("this stage has no size") : FW_TR("measuring"));
+        }
     } else {
-        m_mLeft->setValue(r.state == JobState::Succeeded ? clockText(0) : kDash);
+        m_mLeft->setValue(kDash); // waiting or ended: no time left to show, not a clock at 00:00
         m_mLeft->setHint({});
     }
     if (r.state == JobState::Running && p.unitIsBytes && p.ratePerSec > 0) {
         m_mSpeed->setValue(formatRate(p.ratePerSec));
-        m_mSpeed->setHint({});
+        m_mSpeed->setHint(p.averageRatePerSec > 0 ? FW_TR("avg %1").arg(formatRate(p.averageRatePerSec)) : QString());
     } else {
         m_mSpeed->setValue({});
         m_mSpeed->setHint({});
@@ -1080,6 +1213,11 @@ void JobMonitor::apply(const JobRecord& r)
     } else if (isActive && p.filesTotal > 0) {
         m_mDone->setValue(formatCount(p.filesDone));
         m_mDone->setHint(FW_TR("of %1 files").arg(formatCount(p.filesTotal)));
+    } else if (isActive && ((p.unitIsBytes && p.done > 0) || p.filesDone > 0)) {
+        // A stage without a size still says how much it has done.
+        m_mDone->setValue(p.unitIsBytes && p.done > 0 ? formatBytes(p.done)
+                          : (p.filesDone == 1 ? FW_TR("%1 file") : FW_TR("%1 files")).arg(formatCount(p.filesDone)));
+        m_mDone->setHint(FW_TR("this stage has no size"));
     } else if (r.state == JobState::Succeeded && r.outcome) {
         m_mDone->setValue(FW_TR("All"));
         const qsizetype outputs = r.outcome->outputs.size();
@@ -1093,17 +1231,19 @@ void JobMonitor::apply(const JobRecord& r)
         m_mStage->setValue(FW_TR("%1 of %2").arg(cur).arg(std::max(1, p.phaseCount)));
         m_mStage->setHint(r.state == JobState::Succeeded ? FW_TR("all done") : phase);
     } else {
-        m_mStage->setValue(FW_TR("%1 of %2").arg(0).arg(std::max<qsizetype>(1, r.phases.size())));
+        m_mStage->setValue(FW_TR("%1 of %2").arg(0).arg(std::max<qsizetype>(1, stageNames(r).size())));
         m_mStage->setHint({});
     }
     sample(r);
 
-    // Stages
-    const QString key = r.phases.join(u'\x1f');
+    // Stages: the ones the progress counts in (a job may declare its phases
+    // again while it runs; the stage index refers to those).
+    const QStringList names = stageNames(r);
+    const QString key = names.join(u'\x1f');
     if (!m_stagesSet || key != m_phasesKey) {
         m_stagesSet = true;
         m_phasesKey = key;
-        m_stages->setStages(r.phases);
+        m_stages->setStages(names);
     }
     m_stages->update(p, r.state);
 
@@ -1234,6 +1374,50 @@ QString JobMonitor::detailText() const { return m_detail->text(); }
 QStringList JobMonitor::metricValues() const
 {
     return {m_mElapsed->value(), m_mLeft->value(), m_mSpeed->value(), m_mDone->value(), m_mStage->value()};
+}
+
+QStringList JobMonitor::metricHints() const
+{
+    return {m_mElapsed->hint(), m_mLeft->hint(), m_mSpeed->hint(), m_mDone->hint(), m_mStage->hint()};
+}
+
+QString JobMonitor::logCountText() const { return m_lineCount->fullText(); }
+
+void JobMonitor::recountLog()
+{
+    if (m_demo)
+        return; // a made-up job counts its own lines
+    m_logWarnings = 0;
+    m_logErrors = 0;
+    if (!m_id.isEmpty())
+        countLog(0, m_logs.rowCount());
+    else
+        updateLogCaption();
+}
+
+void JobMonitor::countLog(int fromRow, int toRow)
+{
+    for (int i = std::max(0, fromRow); i < toRow; ++i)
+        if (const LogRecord* rec = m_logs.recordAt(i); rec && rec->jobId == m_id) {
+            if (rec->level == LogLevel::Error)
+                ++m_logErrors;
+            else if (rec->level == LogLevel::Warning)
+                ++m_logWarnings;
+        }
+    updateLogCaption();
+}
+
+void JobMonitor::updateLogCaption()
+{
+    QStringList parts;
+    if (m_logLines > 0)
+        parts << (m_logLines == 1 ? FW_TR("%1 line") : FW_TR("%1 lines")).arg(formatCount(m_logLines));
+    if (m_logWarnings > 0)
+        parts << (m_logWarnings == 1 ? FW_TR("%1 warning") : FW_TR("%1 warnings")).arg(formatCount(m_logWarnings));
+    if (m_logErrors > 0)
+        parts << (m_logErrors == 1 ? FW_TR("%1 error") : FW_TR("%1 errors")).arg(formatCount(m_logErrors));
+    m_lineCount->setFullText(parts.join(QStringLiteral(" · ")));
+    setTextColor(m_lineCount, m_logErrors > 0 ? color::danger_hi : m_logWarnings > 0 ? color::warn_hi : color::fg_4);
 }
 
 } // namespace fw::ui

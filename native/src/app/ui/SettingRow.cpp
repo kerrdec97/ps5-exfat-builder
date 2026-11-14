@@ -14,6 +14,8 @@
 #include <QPainter>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace fw::ui {
 
 using namespace theme;
@@ -71,6 +73,18 @@ static bool isFolderList(const SettingDef& def)
 
 static QString listText(const QStringList& items) { return items.join(QStringLiteral("; ")); }
 
+// What 0 means for the settings where it is not a quantity: the field says
+// so beside the number instead of showing a bare "0" that reads like an error.
+QString SettingEditor::zeroMeaning(const SettingDef& def)
+{
+    if (def.key == general::keys::kWorkerThreads || def.key == QLatin1String("pfs.threads")
+        || def.key == QLatin1String("exfat.imageSizeGiB"))
+        return FW_TR("Automatic");
+    if (def.key == general::keys::kAutoRetryCount || def.key == QLatin1String("dlc.sdkOverride"))
+        return FW_TR("Off");
+    return {};
+}
+
 QString SettingEditor::numberText(const QString& typed, const QLocale& locale)
 {
     const QString sep = locale.decimalPoint();
@@ -109,17 +123,29 @@ void SettingEditor::build(QWidget* parent)
         } else {
             auto* combo = dropdown(parent);
             for (const auto& c : m_def.choices) {
-                combo->addItem(c.description.isEmpty() ? shownChoiceLabel(m_def, c)
-                                                       : QStringLiteral("%1 · %2").arg(shownChoiceLabel(m_def, c), shownChoiceDescription(m_def, c)),
-                               c.value);
+                const QString name = shownChoiceLabel(m_def, c);
+                combo->addItem(c.description.isEmpty() ? name : QStringLiteral("%1 · %2").arg(name, shownChoiceDescription(m_def, c)), c.value);
+                // What the closed field shows when the whole text does not fit.
+                if (!c.description.isEmpty())
+                    combo->setItemData(combo->count() - 1, name, kShortTextRole);
             }
+            // As wide as its longest choice (dropdown() adjusts to its
+            // contents), from 160 to 320 px; a choice wider than that shows
+            // its name alone, with the whole text as the tooltip.
             combo->setMinimumWidth(160);
-            combo->setMaximumWidth(260);
+            combo->setMaximumWidth(320);
             combo->setAccessibleName(shownLabel(m_def));
-            connect(combo, &QComboBox::currentIndexChanged, this, [this, combo](int) {
+            auto tip = [combo] {
+                const QString text = combo->currentText();
+                const bool cut = QFontMetrics(combo->font()).horizontalAdvance(text) > combo->maximumWidth() - 44;
+                combo->setToolTip(cut ? plainTip(text) : QString());
+            };
+            connect(combo, &QComboBox::currentIndexChanged, this, [this, combo, tip](int) {
+                tip();
                 if (!m_updating)
                     emit edited(combo->currentData());
             });
+            tip();
             m_widget = m_control = combo;
         }
         break;
@@ -136,8 +162,18 @@ void SettingEditor::build(QWidget* parent)
         if (numeric)
             edit->setAlignment(Qt::AlignRight);
         h->addWidget(edit);
+        // The unit inside the field: every control of a column ends on one line.
         if (!m_def.unit.isEmpty())
-            h->addWidget(caption(i18n::translate(m_def.unit), wrap));
+            setInputSuffix(edit, i18n::translate(m_def.unit));
+        if (const QString zero = zeroMeaning(m_def); numeric && !zero.isEmpty()) {
+            auto note = [edit, zero] {
+                bool ok = false;
+                const double v = numberText(edit->text()).toDouble(&ok);
+                setInputNote(edit, ok && v == 0.0 ? zero : QString());
+            };
+            connect(edit, &QLineEdit::textChanged, edit, note);
+            note();
+        }
         connect(edit, &QLineEdit::editingFinished, this, [this, edit, numeric] {
             if (m_updating)
                 return;
@@ -255,6 +291,8 @@ void SettingEditor::setValue(const QVariant& v)
     case SettingType::String: {
         auto* e = static_cast<QLineEdit*>(m_control);
         e->setText(v.toString());
+        if (!e->hasFocus())
+            e->setCursorPosition(0); // a long text shows its start (and "…" where it is cut), not its tail
         e->setProperty("fwLast", v.toString());
         break;
     }
@@ -297,6 +335,8 @@ QString SettingRow::displayValue(const SettingDef& def, const QVariant& value)
         return value.toString();
     case SettingType::Int:
     case SettingType::Double:
+        if (const QString zero = SettingEditor::zeroMeaning(def); !zero.isEmpty() && value.toDouble() == 0.0)
+            return zero; // "Default is Automatic."
         return def.unit.isEmpty() ? value.toString() : QStringLiteral("%1 %2").arg(value.toString(), i18n::translate(def.unit));
     case SettingType::DirPath:
     case SettingType::FilePath:
@@ -310,12 +350,19 @@ QString SettingRow::displayValue(const SettingDef& def, const QVariant& value)
     return value.toString();
 }
 
-// The first sentence of a description (at most ~130 characters), so rows stay
-// one or two lines; the rest is in the tooltip. Runs on the shown (translated)
-// text; the full stops of Chinese and Japanese end a sentence without a space.
+// The first sentence of a description, so rows stay one or two lines; the
+// rest is in the tooltip. Runs on the shown (translated) text: the full stops
+// of Chinese and Japanese end a sentence without a space; the danda of Hindi,
+// Bengali, Marathi and Nepali (। ॥), the Arabic question mark (؟), the Urdu
+// full stop (۔) and the Armenian one (։) end one like ". ".
 QString SettingRow::conciseHelp(const QString& text)
 {
     const QString t = text.simplified();
+    constexpr int kLong = 140; // a first sentence up to this is shown whole
+    auto endsWithSpace = [](QChar c) {
+        return c == u'.' || c == u'!' || c == u'?' || c == QChar(0x0964) || c == QChar(0x0965) || c == QChar(0x061F)
+            || c == QChar(0x06D4) || c == QChar(0x0589);
+    };
     int end = -1;
     for (int i = 0; i < t.size(); ++i) {
         const QChar c = t.at(i);
@@ -323,7 +370,7 @@ QString SettingRow::conciseHelp(const QString& text)
             end = i + 1;
             break;
         }
-        if (c != u'.' && c != u'!' && c != u'?')
+        if (!endsWithSpace(c))
             continue;
         if (i + 1 < t.size() && t.at(i + 1) != u' ')
             continue; // 1.5, .bin, e.g.x
@@ -335,13 +382,37 @@ QString SettingRow::conciseHelp(const QString& text)
         break;
     }
     QString first = end > 0 ? t.left(end) : t;
-    if (first.size() > 140) {
-        int cut = first.lastIndexOf(u' ', 125);
-        if (cut < 60)
-            cut = 125;
-        first = first.left(cut).trimmed() + QChar(0x2026);
+    if (first.size() <= kLong)
+        return first;
+    // A long first sentence: up to the last clause break before the limit
+    // ("; ", ": ", ", " and their CJK and Arabic forms), outside brackets, so
+    // the row ends on a whole clause; else the whole sentence, which wraps,
+    // unless it is very long. Never in the middle of a word.
+    auto isClauseBreak = [](QChar c) {
+        return c == u';' || c == u':' || c == u',' || c == QChar(0x3001) || c == QChar(0xFF0C) || c == QChar(0xFF1B)
+            || c == QChar(0xFF1A) || c == QChar(0x060C) || c == QChar(0x061B);
+    };
+    int depth = 0, cut = -1, space = -1;
+    for (int i = 0; i < std::min<int>(int(first.size()), kLong); ++i) {
+        const QChar c = first.at(i);
+        if (c == u'(' || c == u'[' || c == QChar(0xFF08)) {
+            if (depth == 0 && i >= kLong / 3)
+                space = i; // before the bracket, not inside it
+            ++depth;
+        } else if ((c == u')' || c == u']' || c == QChar(0xFF09)) && depth > 0) {
+            --depth;
+        } else if (depth == 0 && i >= kLong / 3) {
+            if (isClauseBreak(c))
+                cut = i;
+            else if (c == u' ')
+                space = i;
+        }
     }
-    return first;
+    if (cut > 0)
+        return first.left(cut).trimmed() + QChar(0x2026);
+    if (first.size() <= 2 * kLong)
+        return first;
+    return first.left(space > 0 ? space : kLong).trimmed() + QChar(0x2026);
 }
 
 SettingRow::SettingRow(const SettingDef& def, QWidget* parent) : QWidget(parent), m_def(def)

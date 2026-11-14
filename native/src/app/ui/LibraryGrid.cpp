@@ -484,6 +484,12 @@ void LibraryGrid::paintRow(QPainter& p, int i, const QRect& rect)
             const qreal bw = std::min(c.width(), qreal(full));
             const QString shown = bw < full ? QFontMetrics(font::chip()).elidedText(it.badge, Qt::ElideRight, int(bw - 16)) : it.badge;
             paintBadge(p, vis(QRectF(c.left(), c.center().y() - size::badge / 2.0, bw, size::badge)), shown, it.badgeTone);
+        } else {
+            // Not known (never looked at): a quiet dash, so the column has no
+            // holes and a blank is not read as a state.
+            p.setFont(font::body());
+            p.setPen(color::fg_5);
+            p.drawText(vis(c.adjusted(4, 0, 0, 0)), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("—"));
         }
     }
     {

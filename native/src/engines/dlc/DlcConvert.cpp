@@ -467,6 +467,7 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
         errors << QString();
     }
     std::set<QString> used;
+    QStringList unread; // built and kept, but the job was cancelled while they were read back
     int ok = 0, failed = 0;
     bool cancelled = false;
     const int total = int(req.items.size());
@@ -608,17 +609,17 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
             fail(QStringLiteral("The DLC engine reported success but wrote no package."));
             continue;
         }
-        // Read the identity back.
+        // Read the identity back. The package is finished from here on: a
+        // cancel during the read-back keeps it, not read back (GitHub #97),
+        // and the job stops after it.
         auto back = inspectDlcPackage(cli, built, passcode, ctx.token);
-        if (!back.ok()) {
-            if (back.error().isCancelled() || ctx.token.isCancelled()) {
-                cancelled = true;
-                break;
-            }
+        const bool readBackCancelled = !back.ok() && (back.error().isCancelled() || ctx.token.isCancelled());
+        if (!back.ok() && !readBackCancelled) {
             fail(QStringLiteral("The built package could not be read back: %1").arg(back.error().message));
             continue;
         }
-        if (back->contentId != item.contentId || value(back->metadata, QStringLiteral("titleId")) != item.titleId || !back->isDlc) {
+        if (back.ok()
+            && (back->contentId != item.contentId || value(back->metadata, QStringLiteral("titleId")) != item.titleId || !back->isDlc)) {
             fail(QStringLiteral("Built metadata does not match the reviewed DLC target."));
             continue;
         }
@@ -627,14 +628,16 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
             continue;
         }
         const QString finalPath = uniqueOutput(req.output, item.contentId + QStringLiteral(".pkg"), used);
-        if (!QFile::rename(built, finalPath)) {
-            // Another drive: copied through <name>.part and flushed, so a cancel
-            // or a pulled drive never leaves a short file under the package's name.
-            if (Status mv = copyFileStreaming(built, finalPath, ctx.token, nullptr, false, true); !mv.ok()) {
-                if (mv.error().isCancelled()) {
-                    cancelled = true;
-                    break;
-                }
+        // Never QFile::rename(): to another drive it copies the package straight
+        // under its final name, and no cancel can stop it.
+        if (QString why; !renameWithoutCopying(built, finalPath, &why)) {
+            ctx.log.debug(why);
+            // Another drive: copied through <name>.part and flushed, so a
+            // pulled drive never leaves a short file under the package's name.
+            // A cancel does not cut it short: the work folder holds the only
+            // copy of the finished package and goes with this item. The
+            // cancel is seen once the package has its name.
+            if (Status mv = copyFileStreaming(built, finalPath, CancellationToken(), nullptr, false, true); !mv.ok()) {
                 fail(QStringLiteral("Could not move the package to %1.").arg(native(finalPath)));
                 ctx.log.warn(mv.error().toLogString());
                 continue;
@@ -643,6 +646,12 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
         }
         outputs[n] = finalPath;
         ++ok;
+        if (readBackCancelled) {
+            unread << item.contentId;
+            say(QStringLiteral("  → %1 (kept, but not read back: the job was cancelled)").arg(native(finalPath)));
+            cancelled = true;
+            break;
+        }
         say(QStringLiteral("  → %1 (%2 structural verification passed; DLC compatibility unverified)")
                 .arg(native(finalPath), s.fullVerify ? QStringLiteral("full") : QStringLiteral("quick")));
     }
@@ -676,6 +685,8 @@ Result<JobOutcome> runDlcConvert(const DlcConvertRequest& req, const DlcSettings
         if (!skipped.isEmpty())
             o.warnings.prepend(QStringLiteral("Cancelled before %1 DLC package%2 could be built: %3")
                                    .arg(skipped.size()).arg(skipped.size() == 1 ? QString() : QStringLiteral("s"), skipped.join(QStringLiteral(", "))));
+        if (!unread.isEmpty())
+            o.warnings.prepend(QStringLiteral("Kept, but not read back because the job was cancelled: %1").arg(unread.join(QStringLiteral(", "))));
     }
     o.verification = cancelled ? Verification::Inconclusive : Verification::Passed;
     o.verificationDetail = cancelled ? QStringLiteral("Cancelled: the %1 package(s) that were built passed the %2 structural verification; the rest were not built.")

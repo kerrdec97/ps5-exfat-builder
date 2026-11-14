@@ -924,6 +924,20 @@ private slots:
         QCOMPARE(QFileInfo(empty).size(), qint64(0));
 
         QVERIFY(!writeNewFile(QString(), "abc").ok());
+
+        // Written through a temporary name: none is left, and a file of the
+        // user's that has that name is not touched.
+        const QString other = dir.filePath(QStringLiteral("other.ini"));
+        QFile theirs(other + QStringLiteral(".part"));
+        QVERIFY(theirs.open(QIODevice::WriteOnly));
+        theirs.write("the user's");
+        theirs.close();
+        QVERIFY(writeNewFile(other, "new").ok());
+        QCOMPARE(readAll(other), QByteArray("new"));
+        QCOMPARE(readAll(other + QStringLiteral(".part")), QByteArray("the user's"));
+        QCOMPARE(QDir(dir.path()).entryList(QDir::Files, QDir::Name),
+                 (QStringList{QStringLiteral("empty.ini"), QStringLiteral("new.ini"), QStringLiteral("other.ini"),
+                              QStringLiteral("other.ini.part")}));
     }
 };
 

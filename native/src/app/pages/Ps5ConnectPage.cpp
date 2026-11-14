@@ -211,26 +211,32 @@ public:
             p->drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), radius::control, radius::control);
         }
         const bool missing = index.data(MissingRole).toBool();
-        const QRect tile(r.left() + 10, r.center().y() - 16, 32, 32);
+        // Laid out left to right, then mirrored within the row in a
+        // right-to-left view: the tile at the start, "Sent …" at the end.
+        const QWidget* view = option.widget;
+        const auto place = [&](const QRect& rect) { return QStyle::visualRect(option.direction, r, rect); };
+        const QRect tile = place(QRect(r.left() + 10, r.center().y() - 16, 32, 32));
         p->setPen(Qt::NoPen);
         p->setBrush(missing ? color::danger_bg : color::bg_4);
         p->drawRoundedRect(tile, radius::sm, radius::sm);
         p->drawPixmap(QRect(tile.center().x() - 8, tile.center().y() - 8, 16, 16),
                       iconPixmap(missing ? QStringLiteral("file_x") : QStringLiteral("rocket"), 16, missing ? color::danger_hi : color::accent_hi, p->device()->devicePixelRatioF()));
-        const int x = tile.right() + 12;
+        const int x = r.left() + 10 + 32 + 12;
         const QString sent = index.data(SentRole).toString();
         const int sentW = QFontMetrics(font::caption()).horizontalAdvance(sent) + 12;
         p->setFont(font::bodyStrong());
         p->setPen(color::fg_0);
-        p->drawText(QRect(x, r.top() + 8, r.right() - x - sentW, 18), Qt::AlignLeft | Qt::AlignVCenter,
-                    QFontMetrics(font::bodyStrong()).elidedText(index.data().toString(), Qt::ElideRight, r.right() - x - sentW));
+        QString name = QFontMetrics(font::bodyStrong()).elidedText(index.data().toString(), Qt::ElideRight, r.right() - x - sentW);
+        if (option.direction == Qt::RightToLeft)
+            name = bidiSafe(name); // "ShadowMount+", not "+ShadowMount"
+        p->drawText(place(QRect(x, r.top() + 8, r.right() - x - sentW, 18)), naturalText(view, Qt::AlignLeft | Qt::AlignVCenter, name), name);
         p->setFont(font::monoSmall());
         p->setPen(missing ? color::danger_hi : color::fg_4);
-        p->drawText(QRect(x, r.top() + 28, r.right() - x - 10, 16), Qt::AlignLeft | Qt::AlignVCenter,
+        p->drawText(place(QRect(x, r.top() + 28, r.right() - x - 10, 16)), leftToRightText(view, Qt::AlignLeft | Qt::AlignVCenter),
                     QFontMetrics(font::monoSmall()).elidedText(index.data(FileRole).toString(), Qt::ElideMiddle, r.right() - x - 10));
         p->setFont(font::caption());
         p->setPen(color::fg_4);
-        p->drawText(QRect(r.right() - sentW, r.top() + 8, sentW - 8, 18), Qt::AlignRight | Qt::AlignVCenter, sent);
+        p->drawText(place(QRect(r.right() - sentW, r.top() + 8, sentW - 8, 18)), naturalText(view, Qt::AlignRight | Qt::AlignVCenter, sent), sent);
         p->restore();
     }
 };
@@ -352,6 +358,11 @@ Ps5ConnectPage::Ps5ConnectPage(AppContext& ctx, JobQueueModel& queueModel, Paylo
         showTool(target.value(key, QStringLiteral("ftp")));
     });
     connect(m_hero, &ConsoleHero::checkServicesRequested, this, &Ps5ConnectPage::checkServices);
+    // One gradient button per view: the card's Connect until a console is
+    // connected, then the open tool's main action.
+    connect(m_hero, &ConsoleHero::stateChanged, this, [this](ConsoleHero::State state) {
+        setConnectOffered(this, state != ConsoleHero::State::Connected);
+    });
     content()->addWidget(m_hero);
 
     // ---- groups
@@ -727,7 +738,11 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     h->addWidget(m_crumbs, 1);
     m_filter = textInput(FW_TR("Filter this folder"), false, card);
     m_filter->setClearButtonEnabled(true);
-    m_filter->setMaximumWidth(220);
+    // Its placeholder whole in a long language too ("Diesen Ordner filtern"):
+    // the text, the field's padding and the clear button's room.
+    const int filterNeed = std::min(m_filter->fontMetrics().horizontalAdvance(m_filter->placeholderText()) + 56, 280);
+    m_filter->setMinimumWidth(std::min(filterNeed, 220));
+    m_filter->setMaximumWidth(std::max(filterNeed, 220));
     m_filter->setAccessibleName(FW_TR("Filter"));
     h->addWidget(m_filter);
     connect(m_btnBack, &QToolButton::clicked, this, &Ps5ConnectPage::goBack);
@@ -765,11 +780,14 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     auto* bar = new QWidget(m_remoteArea);
     auto* bh = hbox(bar, space::sm, QMargins(space::md, space::sm, space::md, space::sm));
     m_btnUpload = button(FW_TR("Upload files…"), ButtonVariant::Primary, QStringLiteral("upload"), bar);
+    setToolPrimary(m_btnUpload);
+    // One button style in the bar; Delete is told apart by its glyph's colour.
     m_btnUploadFolder = button(FW_TR("Upload folder…"), ButtonVariant::Secondary, QStringLiteral("folder_in"), bar);
     m_btnNewFolder = button(FW_TR("New folder…"), ButtonVariant::Secondary, QStringLiteral("folder_plus"), bar);
     m_btnDownload = button(FW_TR("Download…"), ButtonVariant::Secondary, QStringLiteral("download"), bar);
-    m_btnRename = button(FW_TR("Rename…"), ButtonVariant::Subtle, QStringLiteral("rename"), bar);
-    m_btnDelete = button(FW_TR("Delete…"), ButtonVariant::Subtle, QStringLiteral("trash"), bar);
+    m_btnRename = button(FW_TR("Rename…"), ButtonVariant::Secondary, QStringLiteral("rename"), bar);
+    m_btnDelete = button(FW_TR("Delete…"), ButtonVariant::Secondary, QStringLiteral("trash"), bar);
+    setButtonIcon(m_btnDelete, QStringLiteral("trash"), color::danger_hi);
     for (auto* b : {m_btnUpload, m_btnUploadFolder, m_btnNewFolder, m_btnDownload, m_btnRename, m_btnDelete})
         setButtonSmall(b, true);
     m_btnDownload->setToolTip(FW_TR("Download the selected items to a folder on this PC"));
@@ -863,6 +881,7 @@ QWidget* Ps5ConnectPage::buildFilesBrowser(QWidget* parent)
     m_remoteEmpty = new EmptyState(QStringLiteral("plug"), FW_TR("Connect to browse the console"),
                                    FW_TR("Start ftpsrv, etaHEN's FTP or zftpd on the PS5, then connect. Once connected, drop files on the list to upload them."), right);
     m_emptyConnect = m_remoteEmpty->addAction(FW_TR("Connect"), ButtonVariant::Primary);
+    setToolPrimary(m_emptyConnect); // the card's Connect is the one while it offers it
     connect(m_emptyConnect, &QPushButton::clicked, this, &Ps5ConnectPage::toggleConnection);
     auto* find = m_remoteEmpty->addAction(FW_TR("Find my PS5"), ButtonVariant::Secondary);
     connect(find, &QPushButton::clicked, m_find, &QPushButton::click);
@@ -913,7 +932,9 @@ void Ps5ConnectPage::rebuildPlaces()
     };
     m_places->clear();
     for (const Place& p : places) {
-        auto* it = new QListWidgetItem(icon(QLatin1String(p.icon), color::fg_3, color::fg_1, color::accent_hi), p.label, m_places);
+        // The stylesheet style draws an item's text itself: "ShadowMount+" keeps its sign right to left here.
+        auto* it = new QListWidgetItem(icon(QLatin1String(p.icon), color::fg_3, color::fg_1, color::accent_hi),
+                                       i18n::isRightToLeft() ? bidiSafe(p.label) : p.label, m_places);
         it->setData(Qt::UserRole, p.path);
         it->setToolTip(p.path);
         it->setSizeHint(QSize(0, 32));
@@ -1253,8 +1274,7 @@ void Ps5ConnectPage::uploadFiles(const QStringList& localPaths, const QString& r
     if (started.isEmpty())
         return;
     // These transfers run now, in this order; a paused queue stays paused for the rest.
-    for (auto it = started.crbegin(); it != started.crend(); ++it)
-        m_ctx.queue().startNow(*it);
+    m_ctx.queue().startNow(started);
     showTool(QStringLiteral("ftp"));
     emit toastRequested(Tone::Info, FW_TR("Upload queued"),
                         (items == 1 ? FW_TR("%1 item → %2").arg(items) : FW_TR("%1 items → %2").arg(items)).arg(remoteDir));
@@ -1322,8 +1342,7 @@ void Ps5ConnectPage::downloadSelected()
         }
         started << r.value();
     }
-    for (auto it = started.crbegin(); it != started.crend(); ++it)
-        m_ctx.queue().startNow(*it); // in this order; a paused queue stays paused for the rest
+    m_ctx.queue().startNow(started); // in this order; a paused queue stays paused for the rest
     emit toastRequested(Tone::Info, FW_TR("Download queued"), nativePath(dir));
 }
 
@@ -1589,7 +1608,9 @@ QWidget* Ps5ConnectPage::buildPayloads(QWidget* parent)
         m_payloadTarget->addItem(icon(QStringLiteral("rocket"), color::fg_2), FW_TR("ELF loader (elfldr) · %1").arg(loader),
                                  QStringLiteral("payload:%1").arg(loader));
         m_payloadTarget->addItem(icon(QStringLiteral("zap"), color::fg_2), FW_TR("Exploit loader · 9020"), QStringLiteral("payload:9020"));
-        m_payloadTarget->addItem(icon(QStringLiteral("layers"), color::fg_2), FW_TR("ShadowMount+ loader · %1").arg(settingPort(ps5::keys::kShadowMountPort, 9021)),
+        // The drop-down's list draws its items itself: "ShadowMount+" keeps its sign right to left.
+        const QString smp = FW_TR("ShadowMount+ loader · %1").arg(settingPort(ps5::keys::kShadowMountPort, 9021));
+        m_payloadTarget->addItem(icon(QStringLiteral("layers"), color::fg_2), i18n::isRightToLeft() ? bidiSafe(smp) : smp,
                                  QStringLiteral("shadowmount:%1").arg(settingPort(ps5::keys::kShadowMountPort, 9021)));
         m_payloadTarget->addItem(icon(QStringLiteral("youtube"), color::fg_2), FW_TR("Y2JB JS server · 50000 (.js)"), QStringLiteral("payload:50000"));
         m_payloadTarget->addItem(icon(QStringLiteral("archive"), color::fg_4), FW_TR("MicroMount loader (archived) · %1").arg(settingPort(ps5::keys::kMicroMountPort, 9021)),
@@ -1620,6 +1641,7 @@ QWidget* Ps5ConnectPage::buildPayloads(QWidget* parent)
     m_pRemove = button(FW_TR("Remove"), ButtonVariant::Subtle, QStringLiteral("trash"), pa);
     m_pEdit = button(FW_TR("Edit…"), ButtonVariant::Secondary, QStringLiteral("edit"), pa);
     m_pSend = button(FW_TR("Send"), ButtonVariant::Primary, QStringLiteral("send"), pa);
+    setToolPrimary(m_pSend);
     m_pSend->setMinimumWidth(110);
     pal->addWidget(m_pRemove);
     pal->addStretch(1);
@@ -1635,6 +1657,7 @@ QWidget* Ps5ConnectPage::buildPayloads(QWidget* parent)
     m_payloadEmpty = new EmptyState(QStringLiteral("rocket"), FW_TR("No payloads yet"),
                                     FW_TR("Add the .elf and .bin payloads you use (elfldr, kstuff, ftpsrv, ShadowMount+…) to send them in one click."), tab);
     auto* addFirst = m_payloadEmpty->addAction(FW_TR("Add payload…"), ButtonVariant::Primary);
+    setToolPrimary(addFirst);
     connect(addFirst, &QPushButton::clicked, this, [this] { addOrEditPayload(-1); });
     outer->addWidget(m_payloadEmpty);
     outer->addStretch(1);
@@ -1788,6 +1811,7 @@ QWidget* Ps5ConnectPage::buildKlog(QWidget* parent)
     auto* h = card->header();
     h->setSpacing(space::md);
     m_klogConnect = button(FW_TR("Connect"), ButtonVariant::Primary, QStringLiteral("plug"), card);
+    setToolPrimary(m_klogConnect);
     m_klogPause = button(FW_TR("Pause"), ButtonVariant::Secondary, QStringLiteral("pause"), card);
     m_klogPause->setEnabled(false);
     m_klogBadge = new Badge(FW_TR("Disconnected"), Tone::Neutral, card);
@@ -1959,7 +1983,7 @@ void Ps5ConnectPage::klogState(ps5::KlogState state, const QString& detail)
 {
     const bool running = m_klogClient != nullptr;
     m_klogConnect->setText(running ? FW_TR("Disconnect") : FW_TR("Connect"));
-    setButtonVariant(m_klogConnect, running ? ButtonVariant::Secondary : ButtonVariant::Primary);
+    setToolPrimary(m_klogConnect, !running);
     setButtonIcon(m_klogConnect, running ? QStringLiteral("unplug") : QStringLiteral("plug"));
     m_klogPause->setEnabled(running);
     Tone tone = Tone::Neutral;
@@ -2237,6 +2261,7 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
     m_ytHint->setWordWrap(true);
     besth->addWidget(m_ytHint, 1);
     m_ytBest = button(FW_TR("Install the right version"), ButtonVariant::Primary, QStringLiteral("upload"), bestRow);
+    setToolPrimary(m_ytBest);
     m_ytBest->setAccessibleName(FW_TR("Install the right YouTube version"));
     besth->addWidget(m_ytBest);
     dpi->body()->addWidget(bestRow);
@@ -2261,7 +2286,8 @@ QWidget* Ps5ConnectPage::buildY2jb(QWidget* parent)
     m_dpiStatus->setWordWrap(true);
     dh->addWidget(m_dpiStatus, 1);
     auto* test = button(FW_TR("Test installer"), ButtonVariant::Secondary, QStringLiteral("plug"), dpiRow);
-    m_install = button(FW_TR("Install on PS5"), ButtonVariant::Primary, QStringLiteral("upload"), dpiRow);
+    // The card's main action is "Install the right version" above; this is the other way.
+    m_install = button(FW_TR("Install on PS5"), ButtonVariant::Secondary, QStringLiteral("upload"), dpiRow);
     m_install->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kDpiInstall));
     dh->addWidget(test);
     dh->addWidget(m_install);
@@ -2538,7 +2564,7 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
         m_hero->setSubtitle(QStringLiteral("192.168.1.40 · FTP 2121 · ftpsrv v0.21.1 (example)"));
         m_hero->setChip(QStringLiteral("ftp"), Tone::Ok, QStringLiteral("ftpsrv v0.21.1"));
         m_hero->setChip(QStringLiteral("klog"), Tone::Ok, QStringLiteral("3232"));
-        m_hero->setChip(QStringLiteral("payload"), Tone::Ok, QStringLiteral("9021 · sent"));
+        m_hero->setChip(QStringLiteral("payload"), Tone::Ok, FW_TR("%1 · sent").arg(9021)); // the live chip's words
         m_hero->setChip(QStringLiteral("shadowmount"), Tone::Ok, QStringLiteral("1.7beta11"));
         m_hero->setChip(QStringLiteral("installer"), Tone::Neutral, QStringLiteral("12800"));
     };
@@ -2620,16 +2646,18 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
         // Example rows (the user's own list is not touched).
         const QSignalBlocker block(m_payloadList);
         m_payloadList->clear();
-        const std::tuple<const char*, const char*, const char*> rows[] = {
-            {"elfldr", "elfldr.elf · 92.4 KB", "Sent 3 min ago"},
-            {"kstuff-lite 1.11", "kstuff.elf · 214.0 KB", "Sent 3 min ago"},
-            {"ShadowMount+ 1.7beta11", "shadowmountplus.elf · 1.1 MB", "Sent yesterday"},
-            {"ftpsrv v0.21.1", "ftpsrv-ps5.elf · 168.2 KB", ""},
+        // "Sent …" in the live rows' words, from example times.
+        const QDateTime now = QDateTime::currentDateTime();
+        const std::tuple<const char*, const char*, qint64> rows[] = {
+            {"elfldr", "elfldr.elf · 92.4 KB", 3 * 60},
+            {"kstuff-lite 1.11", "kstuff.elf · 214.0 KB", 3 * 60},
+            {"ShadowMount+ 1.7beta11", "shadowmountplus.elf · 1.1 MB", 26 * 3600},
+            {"ftpsrv v0.21.1", "ftpsrv-ps5.elf · 168.2 KB", -1},
         };
-        for (const auto& [n, f, s] : rows) {
+        for (const auto& [n, f, ago] : rows) {
             auto* it = new QListWidgetItem(QString::fromUtf8(n), m_payloadList);
             it->setData(PayloadDelegate::FileRole, QString::fromUtf8(f));
-            it->setData(PayloadDelegate::SentRole, QString::fromUtf8(s));
+            it->setData(PayloadDelegate::SentRole, ago < 0 ? QString() : FW_TR("Sent %1").arg(relativeTime(now.addSecs(-ago))));
         }
         m_payloadList->setCurrentRow(0);
         m_payloadArea->show();
@@ -2639,7 +2667,7 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
         m_pFile->setText(QStringLiteral("D:\\PS5\\payloads\\elfldr.elf · 92.4 KB"));
         m_pNotes->setText(QStringLiteral("ps5-payload-dev v0.27: the LAN ELF loader (example)"));
         m_pNotes->show();
-        m_pLastSent->setText(QStringLiteral("Last sent 3 min ago"));
+        m_pLastSent->setText(FW_TR("Last sent %1").arg(humanTime(now.addSecs(-3 * 60))));
         m_pBadge->set(FW_TR("Ready"), Tone::Ok);
         m_pSend->setEnabled(true);
         exampleConsole();
@@ -2647,7 +2675,12 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
     for (auto* tool : findChildren<ConsoleToolTab*>())
         if (tool->demoKey() == name)
             tool->applyDemo();
-    if (name == QLatin1String("mount"))
+    // What these tools show is read from a console: the card, the header chip
+    // and the status bar say one is connected, as they would.
+    static const QStringList fromConsole = {QStringLiteral("mount"),      QStringLiteral("manager"),    QStringLiteral("fakelib"),
+                                            QStringLiteral("ampr"),       QStringLiteral("smplog"),     QStringLiteral("crashdumps"),
+                                            QStringLiteral("install"),    QStringLiteral("diagnostics")};
+    if (fromConsole.contains(name))
         exampleConsole();
     if (name == QLatin1String("klog") && m_klog->rowCount() == 0) {
         // Specimen lines so the viewer's tags are visible in the evidence.

@@ -25,6 +25,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
+#include <QStyledItemDelegate>
 #include <QTextDocument>
 #include <QTimer>
 
@@ -54,6 +55,22 @@ void setBadge(Badge* b, const QString& text, Tone tone, const QString& icon = {}
 }
 
 bool isCompareImage(const QString& path) { return !imageFormatOf(path).isEmpty(); }
+
+// A switch with its title and one line of help, as the panels' other rows.
+QWidget* switchRow(const QString& title, const QString& help, Switch* sw, QWidget* parent)
+{
+    auto* row = new QWidget(parent);
+    auto* h = hbox(row, space::lg, QMargins(0, space::sm, 0, 0));
+    auto* text = new QWidget(row);
+    auto* v = vbox(text, 2);
+    v->addWidget(label(title, TextStyle::Body, color::fg_1, text));
+    v->addWidget(caption(help, text));
+    h->addWidget(text, 1);
+    sw->setParent(row);
+    sw->setAccessibleName(title);
+    h->addWidget(sw, 0, Qt::AlignTop);
+    return row;
+}
 
 bool samePath(const QString& a, const QString& b)
 {
@@ -270,6 +287,22 @@ private:
 
 ActionBar* bar(QWidget* w) { return static_cast<ActionBar*>(w); }
 
+// Rows of the app's compact height (28 px), whatever the font gives.
+class CompactRowDelegate : public ItemDelegate {
+public:
+    using ItemDelegate::ItemDelegate;
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        QSize s = ItemDelegate::sizeHint(option, index);
+        s.setHeight(std::max(s.height(), int(size::rowCompact)));
+        return s;
+    }
+};
+
+// The Contents list is as tall as its rows, between these.
+constexpr int kTreeMinH = 240;
+constexpr int kTreeMaxH = 520;
+
 // What the screenshot demo shows (CI evidence of the result sheet).
 QJsonObject demoCompareDetails()
 {
@@ -353,6 +386,16 @@ ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     for (QWidget* w = options(); w; w = w->parentWidget())
         if ((m_advanced = qobject_cast<Disclosure*>(w)))
             break;
+    // "Verify after extracting / converting" and the options' "Verify every
+    // output" row are one per-job value; the row is hidden where a switch shows.
+    for (Switch* sw : {m_extractVerify, m_convertVerify})
+        connect(sw, &QAbstractButton::toggled, this, [this](bool on) {
+            if (on != options()->effectiveValue(general::keys::kVerifyAfterBuild).toBool())
+                options()->setOverride(general::keys::kVerifyAfterBuild, on);
+        });
+    connect(options(), &JobOptionsPanel::overridesChanged, this, &ImageToolsPage::syncVerifySwitches);
+    connect(&m_ctx.settings(), &SettingsStore::resetDone, this, &ImageToolsPage::syncVerifySwitches);
+    syncVerifySwitches();
 
     // Comparisons run through the queue; the result row follows the latest one.
     connect(&m_ctx.queue(), &JobQueue::jobChanged, this, [this](const QString& id) { onCompareJob(id, false); });
@@ -362,6 +405,8 @@ ImageToolsPage::ImageToolsPage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     });
     // The file dialogs start in the output folder of the moment, not the one at start-up.
     connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant& value) {
+        if (key == general::keys::kVerifyAfterBuild)
+            syncVerifySwitches(); // a switch nobody changed for this job follows the setting
         if (key != general::keys::kDefaultOutputDir)
             return;
         m_imageField->setStartDir(value.toString());
@@ -417,8 +462,11 @@ void ImageToolsPage::buildImageCard()
     col->addWidget(m_stripMeta);
     col->addWidget(m_stripPath);
     sh->addLayout(col, 1);
-    auto* show = new IconButton(QStringLiteral("folder_open"), FW_TR("Show in folder"), IconButton::Size::Regular, m_strip);
+    // Not a second folder glyph next to "Change…" (which picks another
+    // image): this one opens the image's folder elsewhere.
+    auto* show = new IconButton(QStringLiteral("external"), FW_TR("Show in folder"), IconButton::Size::Regular, m_strip);
     show->setToolTip(FW_TR("Show in folder"));
+    outlineIconButton(show);
     connect(show, &QToolButton::clicked, this, [this] { openInFileManager(m_path); });
     sh->addWidget(show);
     auto* change = button(FW_TR("Change…"), ButtonVariant::Secondary, QStringLiteral("folder"), m_strip);
@@ -426,6 +474,7 @@ void ImageToolsPage::buildImageCard()
     sh->addWidget(change);
     auto* close = new IconButton(QStringLiteral("close"), FW_TR("Close the image"), IconButton::Size::Regular, m_strip);
     close->setToolTip(FW_TR("Close the image"));
+    outlineIconButton(close);
     connect(close, &QToolButton::clicked, this, [this] { requestImage({}); });
     sh->addWidget(close);
     m_strip->body()->addLayout(sh);
@@ -462,6 +511,13 @@ void ImageToolsPage::buildExtractPanel()
     uh->addWidget(m_unpackPacks, 0, Qt::AlignTop);
     m_unpackRow->setVisible(false);
     card->body()->addWidget(m_unpackRow);
+    // This job's verification, up front: it starts at Settings > Verification.
+    m_extractVerify = new Switch(card);
+    m_extractVerifyRow = switchRow(FW_TR("Verify after extracting"),
+                                   FW_TR("Reads every extracted file back and compares it with the image. Off: the files are "
+                                         "not checked."),
+                                   m_extractVerify, card);
+    card->body()->addWidget(m_extractVerifyRow);
     m_extractPanel = card;
     form()->addWidget(card);
 }
@@ -481,16 +537,17 @@ void ImageToolsPage::buildVerifyPanel()
 
     m_compareBox = new QWidget(card);
     auto* cl = vbox(m_compareBox, space::md);
+    // Label above, segmented control under it at the left, as "Check
+    // against" and "Depth" are.
     auto* bHead = new QWidget(m_compareBox);
-    auto* bh = hbox(bHead, space::sm);
+    auto* bh = vbox(bHead, space::xs);
     bh->addWidget(label(FW_TR("Compare with"), TextStyle::Body, color::fg_1, bHead));
-    bh->addStretch(1);
     m_compareBKind = new Segmented(bHead);
     m_compareBKind->addSegment(FW_TR("Folder"), QStringLiteral("folder"), QStringLiteral("folder"));
     m_compareBKind->addSegment(FW_TR("Image"), QStringLiteral("drive"), QStringLiteral("image"));
     m_compareBKind->setAccessibleName(FW_TR("B is an image or a folder"));
     m_compareBKind->setCurrentIndex(0);
-    bh->addWidget(m_compareBKind);
+    bh->addWidget(m_compareBKind, 0, Qt::AlignLeft);
     cl->addWidget(bHead);
     m_compareB = new PathField(PathField::Mode::Directory, m_compareBox);
     m_compareB->setStartDir(m_ctx.settings().value(general::keys::kDefaultOutputDir).toString());
@@ -559,6 +616,12 @@ void ImageToolsPage::buildConvertPanel()
     m_convertOutput->setDialogTitle(FW_TR("Save the converted image as"));
     m_convertOutput->setToolTip(FW_TR("The new image is written and verified first; the original stays."));
     card->body()->addWidget(field(FW_TR("Save as"), m_convertOutput, {}, card));
+    m_convertVerify = new Switch(card);
+    m_convertVerifyRow = switchRow(FW_TR("Verify after converting"),
+                                   FW_TR("Reads the new image back and compares it with the files it was made from. Off: it "
+                                         "is not checked."),
+                                   m_convertVerify, card);
+    card->body()->addWidget(m_convertVerifyRow);
     m_convertPanel = card;
     form()->addWidget(card);
     connect(m_method, &Segmented::currentChanged, this, [this](int) { updateConvert(); });
@@ -589,8 +652,10 @@ void ImageToolsPage::buildEditPanel()
     m_btnReplace->setToolTip(FW_TR("Replace the selected file…"));
     m_btnRename->setToolTip(FW_TR("Rename (FFPKG images)"));
     m_btnDelete->setToolTip(FW_TR("Delete the selection"));
-    for (auto* b : {m_btnMkdir, m_btnReplace, m_btnRename, m_btnDelete})
+    for (auto* b : {m_btnMkdir, m_btnReplace, m_btnRename, m_btnDelete}) {
+        outlineIconButton(b); // one tool row: the same plates as "Add files…" and "Add folder…"
         h->addWidget(b);
+    }
     connect(m_btnAddFiles, &QPushButton::clicked, this, [this] { addFiles(false); });
     connect(m_btnAddFolder, &QPushButton::clicked, this, [this] { addFiles(true); });
     connect(m_btnReplace, &QToolButton::clicked, this, &ImageToolsPage::replaceSelected);
@@ -598,7 +663,9 @@ void ImageToolsPage::buildEditPanel()
     connect(m_btnRename, &QToolButton::clicked, this, &ImageToolsPage::renameSelected);
     connect(m_btnDelete, &QToolButton::clicked, this, &ImageToolsPage::deleteSelected);
 
-    m_treeView = new QTreeWidget(treeCard);
+    m_treeView = new QTreeWidget(treeCard); // folder chevrons: FwStyle (PE_IndicatorBranch)
+    m_treeView->setItemDelegate(new CompactRowDelegate(m_treeView));
+    m_treeView->setRootIsDecorated(true);
     m_treeView->setHeaderLabels({FW_TR("Name"), FW_TR("Size"), FW_TR("Modified")});
     m_treeView->header()->setFixedHeight(32);
     m_treeView->header()->setStretchLastSection(false);
@@ -609,7 +676,7 @@ void ImageToolsPage::buildEditPanel()
     keepColumnLeftToRight(m_treeView, 1); // sizes, dates, paths, IDs: left to right in any language
     keepColumnLeftToRight(m_treeView, 2);
     m_treeView->setUniformRowHeights(true);
-    m_treeView->setMinimumHeight(11 * size::rowCompact + 40);
+    m_treeView->setFixedHeight(kTreeMinH); // fitTreeHeight() once there are rows
     m_treeView->setSelectionMode(QAbstractItemView::SingleSelection);
     m_treeView->setIndentation(20);
     m_treeView->setFont(font::mono());
@@ -621,6 +688,8 @@ void ImageToolsPage::buildEditPanel()
             (void)preview(it->data(0, Qt::UserRole).toString());
     });
     connect(m_treeView, &QTreeWidget::itemSelectionChanged, this, &ImageToolsPage::updateTreeButtons);
+    connect(m_treeView, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem*) { fitTreeHeight(); });
+    connect(m_treeView, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem*) { fitTreeHeight(); });
     treeCard->body()->addWidget(m_treeView);
     m_treeEmpty = new EmptyState(QStringLiteral("folder_tree"), FW_TR("Reading the image…"), FW_TR("Its folders and files appear here."), treeCard);
     m_treeEmpty->setCompact(true);
@@ -852,7 +921,13 @@ void ImageToolsPage::updateActions()
     m_extractNote->setText(emptyOnly ? FW_TR("The folder must be new or empty.") : FW_TR("Existing files are never overwritten."));
     m_destination->setToolTip(emptyOnly ? FW_TR("The folder is created if it does not exist. A folder that has files in it is refused.")
                                         : FW_TR("The folder is created if it does not exist. Existing files are never overwritten."));
-    queueButton()->setVisible(!(m_action == Action::Edit || (m_action == Action::Verify && cmp)) || !open);
+    // PFS images and FPKG packages are extracted without a verification step.
+    m_extractVerifyRow->setVisible(extractVerifies());
+    // Edits and comparisons start at once (their result is on this page):
+    // "Add to queue" stays in its place, unavailable, so the header keeps its buttons.
+    setQueueBlocked(open && (m_action == Action::Edit || (m_action == Action::Verify && cmp))
+                        ? FW_TR("This action starts at once and is not added to the queue.")
+                        : QString());
     // A comparison's result is the row in this card (and its sheet): keep the form.
     setMonitorOnStart(!(m_action == Action::Verify && cmp));
     rebuildConvertChoices();
@@ -912,7 +987,8 @@ void ImageToolsPage::updateAdvanced()
     for (const QString& key : options()->keys()) {
         const SettingDef* d = m_ctx.schema().find(key);
         if (auto* row = options()->row(key))
-            row->setVisible(writes || !d || d->section != QLatin1String("Build"));
+            row->setVisible((writes || !d || d->section != QLatin1String("Build"))
+                            && !(key == general::keys::kVerifyAfterBuild && verifySwitch()));
     }
     refreshOptionsSummary();
     m_advanced->setCaption(writes ? FW_TR("Cluster size, verification, threads") : FW_TR("Verification, threads"));
@@ -934,6 +1010,34 @@ void ImageToolsPage::ensureTree()
 bool ImageToolsPage::usesGameExtract() const
 {
     return !m_summary.packs.isEmpty() || (!m_summary.inner.isEmpty() && m_summary.fromImage);
+}
+
+// exFAT and FFPKG images and everything game.extract reads compare what they
+// extracted; the PFS and FPKG package extractions have no such step.
+bool ImageToolsPage::extractVerifies() const
+{
+    const QString f = m_summary.format;
+    return usesGameExtract() || f == u"exfat" || f == u"ffpkg";
+}
+
+Switch* ImageToolsPage::verifySwitch() const
+{
+    if (m_path.isEmpty() || m_summary.format.isEmpty())
+        return nullptr;
+    if (m_action == Action::Extract && extractVerifies())
+        return m_extractVerify;
+    if (m_action == Action::Convert)
+        return m_convertVerify;
+    return nullptr;
+}
+
+void ImageToolsPage::syncVerifySwitches()
+{
+    // Not blocked: the knob moves on toggled(); the handler sees the value is the same.
+    const bool on = options()->effectiveValue(general::keys::kVerifyAfterBuild).toBool();
+    for (Switch* sw : {m_extractVerify, m_convertVerify})
+        if (sw->isChecked() != on)
+            sw->setChecked(on);
 }
 
 // ---- Extract / Verify -------------------------------------------------------------------
@@ -1103,10 +1207,11 @@ void ImageToolsPage::rebuildConvertChoices()
     const QString from = m_summary.format;
     if (m_convertTo && from == m_convertFrom)
         return;
-    const QString keep = m_convertTo ? m_convertTo->currentValue().toString() : QString();
+    const QString keep = m_convertTo ? m_convertTo->currentValue() : QString();
     delete m_convertTo;
     m_convertFrom = from;
-    m_convertTo = new ChoiceTiles(m_convertTilesHost);
+    // The tiles of Build › Format: one look for "which format".
+    m_convertTo = new OptionTiles(m_convertTilesHost);
     m_convertTo->setAccessibleName(FW_TR("Target format"));
     struct Target {
         QString title, text, icon, value, tag;
@@ -1119,12 +1224,12 @@ void ImageToolsPage::rebuildConvertChoices()
     };
     for (const Target& t : all)
         if (t.value != from)
-            m_convertTo->addChoice(t.title, t.text, t.icon, t.value, t.tag);
+            m_convertTo->addTile(t.title, t.text, t.icon, t.value, t.tag);
     m_convertTilesHost->layout()->addWidget(m_convertTo);
     m_convertTo->setCurrentIndex(0);
     if (!keep.isEmpty())
         m_convertTo->setCurrentValue(keep);
-    connect(m_convertTo, &ChoiceTiles::currentChanged, this, [this](int) { updateConvert(); });
+    m_convertTo->onChanged = [this](int) { updateConvert(); };
 }
 
 void ImageToolsPage::setConvertTarget(const QString& format)
@@ -1135,7 +1240,7 @@ void ImageToolsPage::setConvertTarget(const QString& format)
     updateConvert();
 }
 
-QString ImageToolsPage::convertTarget() const { return m_convertTo ? m_convertTo->currentValue().toString() : QString(); }
+QString ImageToolsPage::convertTarget() const { return m_convertTo ? m_convertTo->currentValue() : QString(); }
 
 QString ImageToolsPage::convertMethod() const
 {
@@ -1211,6 +1316,10 @@ void ImageToolsPage::rebuildTree()
                           formatBytes(m_tree.totalBytes)};
         if (!m_tree.problems.isEmpty())
             parts << (m_tree.problems.size() == 1 ? FW_TR("%1 problem").arg(m_tree.problems.size()) : FW_TR("%1 problems").arg(m_tree.problems.size()));
+        // Beside the tool buttons a long language wraps the line: only between
+        // the parts, never between a number and its unit ("45.2" / "GB").
+        for (QString& p : parts)
+            p.replace(u' ', QChar(0x00A0));
         m_treeCount->setText(parts.join(QStringLiteral(" · ")));
         m_treeCount->setToolTip((m_tree.problems + m_tree.warnings).join(u'\n'));
     } else {
@@ -1252,6 +1361,28 @@ void ImageToolsPage::rebuildTree()
     m_treeView->addTopLevelItems(top);
     m_treeView->sortItems(0, Qt::AscendingOrder);
     m_treeView->setUpdatesEnabled(true);
+    fitTreeHeight();
+}
+
+void ImageToolsPage::fitTreeHeight()
+{
+    // The rows on show (an open folder's children count, a closed one's do
+    // not), counted only as far as the tallest list needs.
+    const int rowH = std::max(int(size::rowCompact), m_treeView->topLevelItemCount() > 0 ? m_treeView->sizeHintForRow(0) : 0);
+    const int cap = kTreeMaxH / rowH + 1;
+    int rows = 0;
+    const auto count = [&](const auto& self, QTreeWidgetItem* it) -> void {
+        if (rows >= cap)
+            return;
+        ++rows;
+        if (it->isExpanded())
+            for (int i = 0; i < it->childCount() && rows < cap; ++i)
+                self(self, it->child(i));
+    };
+    for (int i = 0; i < m_treeView->topLevelItemCount() && rows < cap; ++i)
+        count(count, m_treeView->topLevelItem(i));
+    const int h = m_treeView->header()->height() + rows * rowH + 2 * m_treeView->frameWidth() + space::xs;
+    m_treeView->setFixedHeight(std::clamp(h, kTreeMinH, kTreeMaxH));
 }
 
 void ImageToolsPage::updateTreeButtons()
@@ -1623,6 +1754,9 @@ QVariantMap ImageToolsPage::jobOverrides() const
     for (auto it = all.cbegin(); it != all.cend(); ++it)
         if (SettingRow* row = panel->row(it.key()); row && !row->isHidden())
             out.insert(it.key(), it.value());
+    // The action's own "Verify after …" switch stands in for the row it hides.
+    if (verifySwitch() && all.contains(general::keys::kVerifyAfterBuild))
+        out.insert(general::keys::kVerifyAfterBuild, all.value(general::keys::kVerifyAfterBuild));
     return out;
 }
 
@@ -1744,7 +1878,9 @@ void ImageToolsPage::applyDemoState(const QString& name)
     if (name == QLatin1String("error")) {
         setDemoImage(kDemoImage, 48500000000LL);
         setAction(Action::Extract);
-        showFormError(QStringLiteral("Not enough space on D:"), QStringLiteral("Extracting needs 48.5 GB; 31.2 GB is free. Free 17.3 GB or choose another folder."));
+        // The live title; the line under it stands for the job's own message.
+        showFormError(FW_TR("Not enough space on %1").arg(QStringLiteral("D:")),
+                      QStringLiteral("Extracting needs 48.5 GB; 31.2 GB is free. Free 17.3 GB or choose another folder."));
         return;
     }
     setDemoImage(kDemoImage, 48500000000LL);
@@ -1759,7 +1895,7 @@ void ImageToolsPage::applyDemoState(const QString& name)
         m_compareDemo = true;
         m_compareB->setPath(QStringLiteral("D:/Dumps/PPSA01325-app"));
         m_compareResultRow->show();
-        setBadge(m_compareBadge, QStringLiteral("6 differences"), Tone::Warn);
+        setBadge(m_compareBadge, FW_TR("%1 differences").arg(formatCount(6)), Tone::Warn); // the live template, translated
         m_compareSummary->setText(QStringLiteral("PPSA01325 Astro Bot (01.002).exfat ↔ PPSA01325-app\n") + kDemoSummary);
         m_compareView->show();
     } else if (name == QLatin1String("compare-result")) {

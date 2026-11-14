@@ -43,7 +43,8 @@ AmprTab::AmprTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     auto* lh = hbox(lrow, space::sm);
     m_localStatus = new MessageRow(lrow);
     lh->addWidget(m_localStatus, 1, Qt::AlignVCenter);
-    m_localGo = button(FW_TR("Generate"), ButtonVariant::Primary, QStringLiteral("file_plus"), lrow);
+    // One gradient button in the tab: the console's "Generate and upload" below.
+    m_localGo = button(FW_TR("Generate"), ButtonVariant::Secondary, QStringLiteral("file_plus"), lrow);
     lh->addStretch(0);
     lh->addWidget(m_localGo);
     local->body()->addWidget(lrow);
@@ -66,6 +67,7 @@ AmprTab::AmprTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     m_remoteStatus = new MessageRow(grow);
     gh->addWidget(m_remoteStatus, 1, Qt::AlignVCenter);
     m_remoteGo = button(FW_TR("Generate and upload"), ButtonVariant::Primary, QStringLiteral("upload"), grow);
+    setToolPrimary(m_remoteGo);
     gh->addStretch(0);
     gh->addWidget(m_remoteGo);
     remote->body()->addWidget(grow);

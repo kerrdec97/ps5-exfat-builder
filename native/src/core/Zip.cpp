@@ -4,6 +4,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 #include <QtEndian>
 
 #include <zlib.h>
@@ -24,6 +25,7 @@ constexpr quint16 kFlagUtf8 = 0x0800;
 constexpr quint16 kFlagEncrypted = 0x0001;
 constexpr quint16 kZip64ExtraId = 0x0001;
 constexpr int kChunk = 1 << 20;
+constexpr size_t kMaxEntries = 2'000'000;
 
 void put16(QByteArray& b, quint16 v)
 {
@@ -105,6 +107,42 @@ QString decodeName(const QByteArray& raw, bool utf8Flag)
 
 } // namespace
 
+QString stagingPath(const QString& target)
+{
+    // The PartFile's working name must fit in a name (partPathFor() keeps it
+    // within 255 characters itself).
+    const QFileInfo fi(target);
+    const qsizetype added = PartFile::partPathFor(target).size() - target.size();
+    if (fi.fileName().size() + added <= 255)
+        return target;
+    const QDir dir = fi.dir();
+    for (int n = 1; n < 100000; ++n) {
+        const QString candidate = dir.filePath(QStringLiteral(".fw-unpack-%1").arg(n));
+        if (!QFileInfo::exists(candidate) && !QFileInfo::exists(PartFile::partPathFor(candidate)))
+            return candidate;
+    }
+    return target;
+}
+
+Status moveIntoPlace(const QString& staged, const QString& target, bool replaceExisting)
+{
+    if (staged == target)
+        return success();
+    const QString name = QFileInfo(target).fileName();
+    if (QFileInfo::exists(target) && (!replaceExisting || !QFile::remove(target))) {
+        QFile::remove(staged);
+        return Error(ErrorCode::AlreadyExists, QStringLiteral("%1 already exists. Choose another name or folder.").arg(name));
+    }
+    // Not QFile::rename(): it answers a refused rename (a scanner holds the
+    // file) by copying the file under its final name.
+    QString why;
+    if (!renameWithoutCopying(staged, target, &why)) {
+        QFile::remove(staged);
+        return Error(ErrorCode::IoError, QStringLiteral("Could not give %1 its final name.").arg(name), why);
+    }
+    return success();
+}
+
 quint32 crc32(const QByteArray& data, quint32 seed)
 {
     // zlib takes a 32-bit length; a QByteArray can be larger.
@@ -138,7 +176,7 @@ Status Writer::open(const QString& path, bool replaceExisting)
     QDir().mkpath(QFileInfo(path).absolutePath());
     m_part = std::make_unique<PartFile>(path);
     m_file.setFileName(toLongPath(m_part->partPath()));
-    if (!m_file.open(QIODevice::ReadWrite | QIODevice::Truncate))
+    if (!m_file.open(QIODevice::ReadWrite | QIODevice::NewOnly))
         return ioError(QStringLiteral("Could not create %1.").arg(QFileInfo(path).fileName()), m_file);
     return success();
 }
@@ -532,6 +570,11 @@ Status Reader::open(const QString& path)
     for (quint64 i = 0; i < count; ++i) {
         if (pos + 46 > cd.size() || get32(cd.constData() + pos) != kCentralSig)
             return corrupt(QStringLiteral("bad central directory entry"));
+        // As for 7z and RAR (ArchiveReader): far more than any game holds, and
+        // what the entries cost in memory stays in bounds.
+        if (m_entries.size() >= kMaxEntries)
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("%1 holds more than 2,000,000 entries, more than this app reads.").arg(QFileInfo(path).fileName()));
         const char* c = cd.constData() + pos;
         Entry e;
         const quint16 flags = get16(c + 8);
@@ -702,10 +745,30 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
     };
     // Validate every name before writing anything.
     QString rel;
-    for (const Entry& e : m_entries)
-        if (wanted(e) && extractionPath(e.name, rel) == NameCheck::Unsafe)
+    QHash<QString, QString> written; // what the destination compares -> the name as extracted
+    for (const Entry& e : m_entries) {
+        if (!wanted(e))
+            continue;
+        const NameCheck check = extractionPath(e.name, rel);
+        if (check == NameCheck::Unsafe)
             return Error(ErrorCode::CorruptData,
                          QStringLiteral("The archive contains an unsafe path (%1); nothing was extracted.").arg(e.name));
+        if (check == NameCheck::Ok)
+            written.insert(hostNameKey(rel).toLower(), rel);
+    }
+    // A file is written as "<name>.fw.part" until it is whole: a file of the
+    // archive with that name would be taken for a leftover and removed, and
+    // the extraction would end complete with one file missing.
+    for (const Entry& e : m_entries) {
+        if (!wanted(e) || e.isDirectory() || extractionPath(e.name, rel) != NameCheck::Ok)
+            continue;
+        const auto other = written.constFind(hostNameKey(PartFile::partPathFor(rel)).toLower());
+        if (other != written.constEnd())
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("The archive holds both %1 and %2, which cannot be extracted together: each file is "
+                                        "written as <name>.fw.part until it is complete. Nothing was extracted.")
+                             .arg(rel, *other));
+    }
     QDir().mkpath(destination);
     const QDir dest(destination);
     for (const Entry& e : m_entries) {
@@ -719,9 +782,10 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
             continue;
         }
         QDir().mkpath(QFileInfo(target).absolutePath());
-        PartFile part(target);
+        const QString staged = stagingPath(target); // a long name may have no room for the part file's suffix
+        PartFile part(staged);
         QFile out(toLongPath(part.partPath()));
-        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly))
             return ioError(QStringLiteral("Could not create %1.").arg(rel), out);
         FW_TRY(read(e, [&](const QByteArray& c) -> Status {
             if (out.write(c) != c.size())
@@ -731,7 +795,8 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
         // The buffered tail (all of a small file) is written here: a failure
         // must stop the extraction, and `part` then removes the partial file.
         FW_TRY(finishWrittenFile(out, rel, e.modified));
-        FW_TRY(part.commit(overwrite));
+        FW_TRY(part.commit(staged == target && overwrite));
+        FW_TRY(moveIntoPlace(staged, target, overwrite));
     }
     return success();
 }

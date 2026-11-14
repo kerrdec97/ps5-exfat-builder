@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QHeaderView>
 
+#include <algorithm>
 #include <optional>
 
 namespace fw::pages {
@@ -57,6 +58,7 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     h->addWidget(monoLabel(fl::kFolder, card, color::fg_3));
     h->addStretch(1);
     m_add = button(FW_TR("Add…"), ButtonVariant::Primary, QStringLiteral("plus"), card);
+    setToolPrimary(m_add); // the tab's one gradient button
     m_replace = button(FW_TR("Replace…"), ButtonVariant::Secondary, QStringLiteral("replace"), card);
     m_toggle = button(FW_TR("Disable"), ButtonVariant::Secondary, QStringLiteral("toggle"), card);
     m_remove = button(FW_TR("Remove"), ButtonVariant::Secondary, QStringLiteral("trash"), card);
@@ -73,7 +75,8 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     styleToolTable(m_table, 6);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->horizontalHeader()->setSectionResizeMode(NameCol, QHeaderView::Stretch);
-    m_table->setColumnWidth(StatusCol, 130);
+    // Both states whole in every language (at least the width it always had).
+    m_table->setColumnWidth(StatusCol, std::max(130, badgeColumnWidth(m_table, StatusCol, {FW_TR("Enabled"), FW_TR("Disabled")})));
     m_table->setColumnWidth(SizeCol, 100);
     m_table->setColumnWidth(ModifiedCol, 150);
     m_table->setColumnWidth(FolderCol, 300);
@@ -81,7 +84,7 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     card->body()->addWidget(m_table);
     m_empty = new EmptyState(QStringLiteral("layers"), FW_TR("Overlays not listed yet"),
                              FW_TR("Refresh lists the .prx and .sprx files in /data/shadowmount/fakelib and fakelib.disabled."), card);
-    auto* listBtn = m_empty->addAction(FW_TR("Refresh"), ButtonVariant::Primary);
+    auto* listBtn = m_empty->addAction(FW_TR("Refresh"), ButtonVariant::Secondary);
     card->body()->addWidget(m_empty);
     auto* f = card->footer();
     m_status = caption({}, card);

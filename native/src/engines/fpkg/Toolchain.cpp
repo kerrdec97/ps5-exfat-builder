@@ -2,6 +2,7 @@
 
 #include "core/OrderedJson.h"
 #include "core/Settings.h"
+#include "core/Tr.h"
 #include "engines/fpkg/FpkgSettings.h"
 
 #include <QCoreApplication>
@@ -33,6 +34,21 @@ QString PubToolchain::summary() const
 }
 
 namespace {
+
+// `text` (an FW_TR_NOOP literal) filled in with `args`, in English to `english`
+// (a build job's error is English like every engine message) and in the
+// interface language to `shown` (the Settings > Tools row).
+template <typename... Args>
+void note(QStringList& english, QStringList& shown, const QString& text, const Args&... args)
+{
+    if constexpr (sizeof...(Args) == 0) {
+        english << text;
+        shown << i18n::translate(text);
+    } else {
+        english << text.arg(args...);
+        shown << i18n::translate(text).arg(args...);
+    }
+}
 
 bool isAscii(const QString& s)
 {
@@ -66,15 +82,19 @@ PubToolchain validate(const QString& exe)
     const QString dirName = QFileInfo(t.binDir).fileName().toLower();
     t.toolkitRoot = (dirName == u"toolchain" || dirName == u"bin") ? QFileInfo(t.binDir).absolutePath() : t.binDir;
     if (fi.fileName().compare(kPubCmdExeName, Qt::CaseInsensitive) != 0)
-        t.problems << QStringLiteral("Expected %1, but %2 was chosen.").arg(kPubCmdExeName, fi.fileName());
+        note(t.problems, t.shownProblems, FW_TR_NOOP("Expected %1, but %2 was chosen."), kPubCmdExeName, fi.fileName());
     if (!QFileInfo::exists(QDir(t.binDir).filePath(QStringLiteral("libScePubTools.dll"))))
-        t.warnings << QStringLiteral("libScePubTools.dll was not found next to %1; the tool may not start.").arg(kPubCmdExeName);
+        note(t.warnings, t.shownWarnings, FW_TR_NOOP("libScePubTools.dll was not found next to %1; the tool may not start."),
+             kPubCmdExeName);
     if (!QFileInfo(QDir(t.binDir).filePath(QStringLiteral("ext"))).isDir())
-        t.warnings << QStringLiteral("The ext folder of the Publishing Tools was not found next to %1; texture and audio "
-                                     "conversion may fail for some games.").arg(kPubCmdExeName);
+        note(t.warnings, t.shownWarnings,
+             FW_TR_NOOP("The ext folder of the Publishing Tools was not found next to %1; texture and audio "
+                        "conversion may fail for some games."),
+             kPubCmdExeName);
     if (!isAscii(t.binDir))
-        t.warnings << QStringLiteral("The Publishing Tools folder path contains non-ASCII characters; the tool may "
-                                     "reject it.");
+        note(t.warnings, t.shownWarnings,
+             FW_TR_NOOP("The Publishing Tools folder path contains non-ASCII characters; the tool may "
+                        "reject it."));
     for (const QString& mf : {QDir(t.binDir).filePath(QStringLiteral("patch-manifest.json")),
                               QDir(t.toolkitRoot).filePath(QStringLiteral("patch-manifest.json"))}) {
         QFile f(mf);
@@ -86,10 +106,13 @@ PubToolchain validate(const QString& exe)
         break;
     }
     const QStringList missing = missingVcRuntimeDlls(t.binDir);
-    if (!missing.isEmpty())
-        t.problems << QStringLiteral("The Microsoft Visual C++ 2015-2022 x64 runtime is missing (%1). Install the "
-                                     "\"Visual C++ Redistributable for Visual Studio 2015-2022 (x64)\" from Microsoft.")
-                          .arg(missing.join(QStringLiteral(", ")));
+    if (!missing.isEmpty()) {
+        t.runtimeMissing = true;
+        note(t.problems, t.shownProblems,
+             FW_TR_NOOP("The Microsoft Visual C++ 2015-2022 x64 runtime is missing (%1). Install the "
+                        "\"Visual C++ Redistributable for Visual Studio 2015-2022 (x64)\" from Microsoft."),
+             missing.join(QStringLiteral(", ")));
+    }
     return t;
 }
 
@@ -104,20 +127,27 @@ QString bundledToolkitDir()
 
 PubToolchain locatePubTools(const QString& configured, const QString& envValue)
 {
-    const auto tryBase = [](const QString& base, const QString& where) -> std::optional<PubToolchain> {
+    // `where` names the place in English (the job's text), `shownWhere` as the
+    // row shows it: the Settings page in the interface language, the
+    // environment variable as it is spelt.
+    const auto tryBase = [](const QString& base, const QString& where,
+                            const QString& shownWhere) -> std::optional<PubToolchain> {
         if (base.trimmed().isEmpty())
             return std::nullopt;
         for (const QString& cand : candidates(base))
             if (QFileInfo(cand).isFile())
                 return validate(cand);
         PubToolchain t;
-        t.problems << QStringLiteral("%1 was not found at %2 (%3). Choose your own copy in Settings > Tools.")
-                          .arg(kPubCmdExeName, QDir::toNativeSeparators(base.trimmed()), where);
+        const QString text = FW_TR_NOOP("%1 was not found at %2 (%3). Choose your own copy in Settings > Tools.");
+        const QString path = QDir::toNativeSeparators(base.trimmed());
+        t.problems << text.arg(kPubCmdExeName, path, where);
+        t.shownProblems << i18n::translate(text).arg(kPubCmdExeName, path, shownWhere);
         return t;
     };
-    if (auto t = tryBase(configured, QStringLiteral("Settings > Tools")))
+    const QString settingsPage = FW_TR_NOOP("Settings > Tools");
+    if (auto t = tryBase(configured, settingsPage, i18n::translate(settingsPage)))
         return *t;
-    if (auto t = tryBase(envValue, kPubToolsEnvVar))
+    if (auto t = tryBase(envValue, kPubToolsEnvVar, kPubToolsEnvVar))
         return *t;
     // A private build carries the owner's own toolkit next to the app
     // (make-release.ps1 -PrivateToolkit); public builds have none.
@@ -125,8 +155,8 @@ PubToolchain locatePubTools(const QString& configured, const QString& envValue)
         if (QFileInfo(cand).isFile())
             return validate(cand);
     PubToolchain t;
-    t.problems << QStringLiteral("The Sony Publishing Tools are not set. Choose your own %1 in Settings > Tools.")
-                      .arg(kPubCmdExeName);
+    note(t.problems, t.shownProblems, FW_TR_NOOP("The Sony Publishing Tools are not set. Choose your own %1 in Settings > Tools."),
+         kPubCmdExeName);
     return t;
 }
 
@@ -346,19 +376,17 @@ DependencyInfo probePubCmd(const SettingsValues& settings)
     info.version = t.profile;
     if (t.ok()) {
         info.status = DependencyStatus::Ready;
-        info.detail = t.warnings.isEmpty() ? QStringLiteral("Found %1.").arg(QDir::toNativeSeparators(t.exe))
-                                           : t.warnings.join(u' ');
+        info.detail = t.warnings.isEmpty() ? FW_TR("Found %1.").arg(QDir::toNativeSeparators(t.exe))
+                                           : t.shownWarnings.join(u' ');
         if (!t.warnings.isEmpty())
-            info.howToFix = QStringLiteral("Point the setting at a complete Publishing Tools folder.");
+            info.howToFix = FW_TR("Point the setting at a complete Publishing Tools folder.");
         return info;
     }
-    const bool runtime = std::any_of(t.problems.begin(), t.problems.end(),
-                                     [](const QString& p) { return p.contains(QStringLiteral("Visual C++")); });
     info.status = t.exe.isEmpty() ? DependencyStatus::Missing : DependencyStatus::Error;
-    info.detail = t.problems.join(u' ');
-    info.howToFix = runtime ? QStringLiteral("Install the Microsoft Visual C++ 2015-2022 Redistributable (x64), then check again.")
-                            : QStringLiteral("Choose your own prospero-pub-cmd.exe in Settings > Tools. The app does not "
-                                             "include or download Sony software.");
+    info.detail = t.shownProblems.join(u' ');
+    info.howToFix = t.runtimeMissing ? FW_TR("Install the Microsoft Visual C++ 2015-2022 Redistributable (x64), then check again.")
+                            : FW_TR("Choose your own prospero-pub-cmd.exe in Settings > Tools. The app does not "
+                                    "include or download Sony software.");
     return info;
 }
 
@@ -374,13 +402,13 @@ DependencyInfo probeDds2png(const SettingsValues& settings)
     if (!p.isEmpty()) {
         info.status = DependencyStatus::Ready;
         info.path = p;
-        info.detail = QStringLiteral("Found %1.").arg(QDir::toNativeSeparators(p));
+        info.detail = FW_TR("Found %1.").arg(QDir::toNativeSeparators(p));
         return info;
     }
     info.status = DependencyStatus::Missing;
-    info.detail = QStringLiteral("Not found in the toolkit folder or at the configured path. Packages still build; "
-                                 "only images that need rebuilding stop a build.");
-    info.howToFix = QStringLiteral("Put prospero-dds2png.exe in your toolkit folder or choose it in Settings > Tools.");
+    info.detail = FW_TR("Not found in the toolkit folder or at the configured path. Packages still build; "
+                        "only images that need rebuilding stop a build.");
+    info.howToFix = FW_TR("Put prospero-dds2png.exe in your toolkit folder or choose it in Settings > Tools.");
     return info;
 }
 

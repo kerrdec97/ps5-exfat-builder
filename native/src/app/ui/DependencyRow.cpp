@@ -41,7 +41,7 @@ DependencyRow::DependencyRow(const QString& id, const QString& name, QWidget* pa
     h->addWidget(m_badge);
     m_fix = new Link(FW_TR("How to fix…"), this);
     m_fix->hide();
-    connect(m_fix, &Link::activated, this, [this] { emit fixRequested(m_id, m_info.howToFix, m_info.settingKey); });
+    connect(m_fix, &Link::activated, this, [this] { emit fixRequested(m_id, i18n::translate(m_info.howToFix), m_info.settingKey); });
     h->addWidget(m_fix);
     setChecking();
 }
@@ -53,13 +53,16 @@ void DependencyRow::setChecking()
     m_badge->setIconName(QStringLiteral("clock"));
 }
 
-void DependencyRow::setInfo(const DependencyInfo& info)
+void DependencyRow::setInfo(const DependencyInfo& info, bool pathChosen)
 {
     m_info = info;
-    // The tool's name and purpose are in the source list; detail and how-to-fix are composed by the probes (English).
+    // Every text the catalogue has, as a whole: the name and purpose (in the
+    // source list), and a detail or how-to-fix text a probe marked but did not
+    // translate itself (one it translated is not an English key, so it stays).
     const QString name = i18n::translate(info.name), purpose = i18n::translate(info.purpose);
+    const QString infoDetail = i18n::translate(info.detail), howToFix = i18n::translate(info.howToFix);
     m_name->setFullText(info.version.isEmpty() ? name : QStringLiteral("%1 %2").arg(name, info.version));
-    QString detail = info.detail;
+    QString detail = infoDetail;
     if (!info.path.isEmpty())
         detail = detail.isEmpty() ? QDir::toNativeSeparators(info.path) : QStringLiteral("%1 · %2").arg(detail, QDir::toNativeSeparators(info.path));
     if (detail.isEmpty())
@@ -68,7 +71,7 @@ void DependencyRow::setInfo(const DependencyInfo& info)
     m_detail->setFont(info.path.isEmpty() ? font::caption() : font::mono());
     m_detail->setFullText(detail);
     QStringList tip;
-    for (const QString& part : {purpose, info.detail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), info.howToFix})
+    for (const QString& part : {purpose, infoDetail, info.path.isEmpty() ? QString() : QDir::toNativeSeparators(info.path), howToFix})
         if (!part.trimmed().isEmpty())
             tip << part.trimmed();
     m_detail->setToolTip(plainTip(tip.join(u'\n')));
@@ -79,7 +82,23 @@ void DependencyRow::setInfo(const DependencyInfo& info)
     switch (info.status) {
     case DependencyStatus::Ready: iconName = QStringLiteral("success"); c = color::success; tone = Tone::Ok; word = FW_TR("Ready"); break;
     case DependencyStatus::Outdated: iconName = QStringLiteral("warning"); c = color::warn; tone = Tone::Warn; word = FW_TR("Outdated"); break;
-    case DependencyStatus::Missing: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = FW_TR("Not found"); break;
+    case DependencyStatus::Missing:
+        if (!info.required && !info.settingKey.isEmpty() && !pathChosen) {
+            // An optional tool the user supplies and has not chosen yet: not
+            // an error (a fresh install would look broken), and the same
+            // words as on the page that needs it.
+            iconName = QStringLiteral("circle");
+            c = color::fg_3;
+            tone = Tone::Neutral;
+            word = FW_TR("Not set");
+        } else {
+            // Chosen but not there, or a part of the app itself.
+            iconName = QStringLiteral("error");
+            c = color::danger;
+            tone = Tone::Err;
+            word = FW_TR("Not found");
+        }
+        break;
     case DependencyStatus::Error: iconName = QStringLiteral("error"); c = color::danger; tone = Tone::Err; word = FW_TR("Error"); break;
     case DependencyStatus::NotApplicable: iconName = QStringLiteral("circle"); c = color::fg_3; tone = Tone::Neutral; word = FW_TR("Not needed"); break;
     }
@@ -141,7 +160,8 @@ void DependencyList::refresh()
         if (info.id.isEmpty())
             row->setChecking();
         else {
-            row->setInfo(info);
+            const bool chosen = !info.settingKey.isEmpty() && !m_ctx.settings().value(info.settingKey).toString().trimmed().isEmpty();
+            row->setInfo(info, chosen);
             m_last << info;
         }
     }

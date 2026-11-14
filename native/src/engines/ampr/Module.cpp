@@ -2,6 +2,7 @@
 
 #include "core/ArchiveSource.h"
 #include "core/FileUtil.h"
+#include "core/Tr.h"
 #include "engines/ampr/GamePack.h"
 #include "engines/ampr/HostPaths.h"
 #include "engines/ampr/Runtime.h"
@@ -103,11 +104,12 @@ DependencyInfo probeRuntime(const SettingsValues&)
     info.name = QStringLiteral("ampr-emu-ng runtime (zstd packs)");
     info.purpose = QStringLiteral("Serves zstd-packed games on the console (bundled, GPL-3.0, quer3q/ampr-emu-ng).");
     info.path = bundledRuntimePath();
-    const QString problem = bundledRuntimeProblem();
+    // The detail in the interface's language: the engine's own error stays English.
+    const QString problem = bundledRuntimeProblemShown();
     if (!problem.isEmpty()) {
         info.status = DependencyStatus::Missing;
         info.detail = problem;
-        info.howToFix = QStringLiteral("Reinstall the app; the runtime ships with it.");
+        info.howToFix = FW_TR("Reinstall the app; the runtime ships with it.");
         return info;
     }
     info.status = DependencyStatus::Ready;
@@ -158,6 +160,12 @@ public:
     bool acceptsZip() const override { return true; }
     QString subtitle() const override { return QStringLiteral("zstd packs → %1").arg(native(output())); }
     QStringList phases() const override { return {QStringLiteral("Preparing"), QStringLiteral("Packing"), QStringLiteral("Checking packs")}; }
+    QList<double> phaseWeights() const override { return {0.02, 0.75, 0.23}; }
+    // Checking packs takes no share when the packs are not read back.
+    QList<double> phaseWeights(const SettingsValues& s) const override
+    {
+        return readPackSettings(s, m_p).verify ? phaseWeights() : QList<double>{0.02, 0.98, 0};
+    }
     Status validate(const SettingsValues& s) const override
     {
         FW_TRY(FolderJob::validate(s));
@@ -175,8 +183,9 @@ public:
         if (isZip()) {
             FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
-            // Unpacking reports as a phase of its own, which replaced the job's.
-            ctx.progress->setPhases(phases(), phaseWeights());
+            // The unpack was a step of the first stage, which goes on (the
+            // stages and their weights are declared again, as they were).
+            ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
             ctx.progress->beginPhase(0, 0);
         }
         FW_TRY_ASSIGN(auto files, openFolderGame(src, ctx.token));
@@ -204,7 +213,9 @@ public:
         auto r = packGame(files, staged->path(), o, ctx.token, ctx.progress, ctx.log);
         if (!r.ok())
             return r.takeError();
-        FW_TRY(staged->commit());
+        const bool checked = ps.verify && !r->verifyCancelled;
+        FW_TRY(staged->commitOrKeep(checked ? QStringLiteral("The game was packed and its packs checked")
+                                            : QStringLiteral("The game was packed")));
         for (const QString& l : r->looseSummary)
             ctx.log.info(QStringLiteral("Kept loose: %1").arg(l));
         if (!r->droppedFiles.isEmpty())
@@ -220,8 +231,16 @@ public:
         outcome.warnings = r->warnings;
         outcome.warnings << QStringLiteral("Packed games need ShadowMount+ with \"Update game fakelib emulators\" turned off, or the "
                                            "runtime is replaced and the game cannot read its packs.");
-        outcome.verification = ps.verify ? Verification::Passed : Verification::NotRun;
-        outcome.verificationDetail = ps.verify ? QStringLiteral("every pack chunk read back and matched") : QString();
+        if (r->verifyCancelled) {
+            // Cancel while the finished packs were checked (GitHub #97): the
+            // folder is kept as with the check turned off, and not called verified.
+            outcome.verification = Verification::Skipped;
+            outcome.verificationDetail = QStringLiteral("Verification was cancelled, so the packs are not verified.");
+            outcome.details.insert(QStringLiteral("verificationCancelled"), true);
+        } else {
+            outcome.verification = ps.verify ? Verification::Passed : Verification::NotRun;
+            outcome.verificationDetail = ps.verify ? QStringLiteral("every pack chunk read back and matched") : QString();
+        }
         outcome.details.insert(QStringLiteral("packedFiles"), r->packedFiles);
         outcome.details.insert(QStringLiteral("storedBytes"), r->storedBytes);
         outcome.details.insert(QStringLiteral("zstd"),
@@ -243,6 +262,7 @@ public:
     using FolderJob::FolderJob;
     QString kind() const override { return kUnpackJob; }
     QStringList phases() const override { return {QStringLiteral("Reading packs"), QStringLiteral("Unpacking")}; }
+    QList<double> phaseWeights() const override { return {0.02, 0.98}; }
     Result<JobOutcome> run(JobContext& ctx) override
     {
         FW_TRY(validate(ctx.settings));
@@ -261,7 +281,7 @@ public:
         auto r = unpackGame(files, staged->path(), uo, ctx.token, ctx.progress, ctx.log);
         if (!r.ok())
             return r.takeError();
-        FW_TRY(staged->commit());
+        FW_TRY(staged->commitOrKeep(QStringLiteral("The game was unpacked")));
         if (!r->droppedFiles.isEmpty())
             ctx.log.info(QStringLiteral("Left out (packs, old AMPR journal and logs): %1").arg(r->droppedFiles.join(QStringLiteral(", "))));
         JobOutcome outcome;

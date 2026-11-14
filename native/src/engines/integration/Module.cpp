@@ -23,6 +23,9 @@
 #include <QRegularExpression>
 #include <QStorageInfo>
 
+#include <algorithm>
+#include <mutex>
+
 namespace fw::integration {
 
 namespace {
@@ -44,6 +47,66 @@ QString formatOfFile(const QString& path)
 }
 
 bool isPfsFormat(const QString& format) { return format == u"ffpfs" || format == u"ffpfsc"; }
+
+// A child job's whole progress as one stage of the conversion, or the part
+// `from`..`to` of one: the child reports on a reporter of its own, whose bar
+// fills that part, and its stage and item show as the conversion's current
+// item, its counts (bytes, files, speed) as the stage's. On the conversion's
+// reporter a child's phases would replace the conversion's, and the bar would
+// run to the end once for every child.
+class ChildStage {
+public:
+    ChildStage(ProgressReporter* parent, int phase, double from = 0.0, double to = 1.0)
+        : m_parent(parent), m_from(from), m_span(to - from), m_done(qint64(from * kUnits)),
+          m_reporter([this](const ProgressSnapshot& s) { forward(s); }, 100)
+    {
+        if (from <= 0.0) // a later part goes on in the stage the earlier one began
+            m_parent->beginMappedPhase(phase, kUnits);
+    }
+    ProgressReporter* reporter() { return &m_reporter; }
+
+private:
+    static constexpr qint64 kUnits = 1000;
+
+    void forward(const ProgressSnapshot& s)
+    {
+        std::lock_guard lock(m_mutex);
+        // The child's reports can arrive out of order from its worker
+        // threads: only the newest state counts.
+        if (s.sequence != 0 && s.sequence <= m_sequence)
+            return;
+        m_sequence = s.sequence;
+        // The units are the bar only: the views show the child's own counts.
+        m_parent->showFiguresOf(s);
+        const qint64 at = qint64((m_from + m_span * std::clamp(s.overallFraction, 0.0, 1.0)) * double(kUnits));
+        if (at > m_done) {
+            m_done = at;
+            m_parent->setDone(at);
+        }
+        QString item = s.phase;
+        if (!s.currentItem.isEmpty())
+            item += QStringLiteral(" · ") + s.currentItem;
+        m_parent->setCurrentItem(item);
+    }
+
+    ProgressReporter* m_parent;
+    double m_from, m_span;
+    std::mutex m_mutex;
+    qint64 m_done;
+    quint64 m_sequence = 0;
+    ProgressReporter m_reporter;
+};
+
+// An image that is to replace a file is on the drive, not only in the
+// system's cache, before it does: a power cut after the final rename cannot
+// leave a damaged image in place of a good one.
+Status flushImage(const QString& path)
+{
+    QFile f(toLongPath(path));
+    if (!f.open(QIODevice::ReadWrite | QIODevice::ExistingOnly)) // never makes a file of that name
+        return Error(ErrorCode::IoError, QStringLiteral("Could not write %1.").arg(QDir::toNativeSeparators(path)), f.errorString());
+    return flushToDisk(f, QFileInfo(path).fileName());
+}
 
 QString engineOf(const QString& format)
 {
@@ -95,7 +158,8 @@ QString asciiInnerName(const QString& fileName)
 // A container that holds an .exfat/.ffpkg file (a direct conversion) converts
 // back by unpacking that file: to its own format as is, otherwise repacked.
 // An existing output is only replaced with replaceExisting, and only by the
-// final rename of the finished, verified image.
+// final rename of the finished image, after its verification (a cancel during
+// that verification saves it unverified, as with verification turned off).
 class ConvertJob final : public Job {
 public:
     ConvertJob(QJsonObject p, const JobFactory* factory) : m_p(std::move(p)), m_factory(factory) {}
@@ -110,6 +174,20 @@ public:
         if (method() == u"direct")
             return {QStringLiteral("Scanning"), QStringLiteral("Packing"), QStringLiteral("Verifying")};
         return {QStringLiteral("Extracting"), QStringLiteral("Building")};
+    }
+    // "direct": the PFS build reports on these phases itself (scanning one
+    // file is quick). "repack": the extraction and the build, each with its
+    // own read-back, take about as long as each other.
+    QList<double> phaseWeights() const override
+    {
+        return method() == u"direct" ? QList<double>{0.02, 0.6, 0.38} : QList<double>{1, 1};
+    }
+    // Without verification the direct build has no third phase.
+    QList<double> phaseWeights(const SettingsValues& settings) const override
+    {
+        if (method() == u"direct" && !settings.boolean(general::keys::kVerifyAfterBuild))
+            return {0.02, 0.98, 0};
+        return phaseWeights();
     }
     QJsonObject parameters() const override { return m_p; }
     QStringList busyPaths() const override
@@ -155,11 +233,14 @@ public:
                               method() == u"direct" ? QStringLiteral("packing the image as it is") : QStringLiteral("repacking its files")));
 
         // An existing output keeps its name until the new image is finished
-        // and verified: every path below writes "<output>.part" and replaces
-        // the old file only in its final rename (PartFile::commit), so a
-        // failure, a cancel or a crash leaves the previous image where it was.
+        // and has been verified: every path below writes "<output>.fw.part" and
+        // replaces the old file only in its final rename (PartFile::commit), so
+        // a failure, a cancel before the image is finished or a crash leaves
+        // the previous image where it was.
         if (QFileInfo::exists(output()))
-            ctx.log.info(QStringLiteral("The existing %1 is replaced once the new image has verified.").arg(QFileInfo(output()).fileName()));
+            ctx.log.info(QStringLiteral("The existing %1 is replaced once the new image is finished.").arg(QFileInfo(output()).fileName()));
+        // As the queue declared them (a runner that declared none gets them here).
+        ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
         auto result = convert(ctx);
         if (result.ok())
             result->details.insert(QStringLiteral("method"), method());
@@ -185,11 +266,22 @@ private:
         return directPossible() ? QStringLiteral("direct") : QStringLiteral("repack");
     }
 
-    Result<JobOutcome> runChild(JobContext& ctx, const QString& kind, const QJsonObject& params)
+    static bool verifyEnabled(const JobContext& ctx) { return ctx.settings.boolean(general::keys::kVerifyAfterBuild); }
+
+    // `stage`: the child reports there (see ChildStage); without one, on this
+    // job's own reporter, whose phases it then fills itself ("direct").
+    Result<JobOutcome> runChild(JobContext& ctx, const QString& kind, const QJsonObject& params, ChildStage* stage = nullptr)
     {
         FW_TRY_ASSIGN(auto job, m_factory->create(kind, params));
         FW_TRY(job->validate(ctx.settings));
-        return job->run(ctx);
+        if (!stage)
+            return job->run(ctx);
+        JobContext sub = ctx;
+        sub.progress = stage->reporter();
+        sub.progress->setPhases(job->phases(), job->phaseWeights(ctx.settings));
+        auto result = job->run(sub);
+        sub.progress->flush(); // its last progress, which the throttle may have held back
+        return result;
     }
 
     // The build that writes output(): it may replace an existing file exactly
@@ -199,7 +291,8 @@ private:
     // new image must hold exactly that. The user's build settings that leave
     // files out, move the root or add files do not apply then: no search for
     // the game folder, no exclusions, no ampr_emu.index rebuilt, nothing deleted.
-    Result<JobOutcome> runBuild(JobContext& ctx, const QString& kind, QJsonObject params, bool asItIs = false)
+    Result<JobOutcome> runBuild(JobContext& ctx, const QString& kind, QJsonObject params, bool asItIs = false,
+                                ChildStage* stage = nullptr)
     {
         params.insert(QStringLiteral("replaceExisting"), replaceExisting());
         QVariantMap overrides{{exfat::keys::kOverwriteExisting, replaceExisting()}};
@@ -217,7 +310,7 @@ private:
         }
         JobContext sub = ctx;
         sub.settings = ctx.settings.withOverrides(overrides);
-        return runChild(sub, kind, params);
+        return runChild(sub, kind, params, stage);
     }
 
     Result<JobOutcome> convert(JobContext& ctx)
@@ -251,19 +344,28 @@ private:
     }
 
     // Extract `source` (format `from`) to `stage`, build the target from it.
-    Result<JobOutcome> repack(JobContext& ctx, const QString& source, const QString& from, const QString& stage)
+    // The extraction takes Extracting from `extractFrom` on (the first part
+    // of it went to unpacking a container), the build takes Building.
+    Result<JobOutcome> repack(JobContext& ctx, const QString& source, const QString& from, const QString& stage,
+                              double extractFrom = 0.0)
     {
         QJsonObject ex{{QStringLiteral("image"), source}, {QStringLiteral("output"), stage}};
         if (isPfsFormat(from))
             ex.insert(QStringLiteral("deep"), true);
-        FW_TRY_ASSIGN(JobOutcome extracted, runChild(ctx, engineOf(from) + QStringLiteral(".extract"), ex));
+        ChildStage extracting(ctx.progress, 0, extractFrom, 1.0);
+        FW_TRY_ASSIGN(JobOutcome extracted, runChild(ctx, engineOf(from) + QStringLiteral(".extract"), ex, &extracting));
+        // The extraction keeps its files when its own check is cancelled, but
+        // for a conversion that is only half the work: the cancel stands.
+        if (ctx.token.isCancelled())
+            return Error::cancelled();
         if (extracted.verification == Verification::Failed)
             return Error(ErrorCode::VerificationFailed, QStringLiteral("The source image could not be read back correctly. %1").arg(extracted.verificationDetail));
 
         QJsonObject build{{QStringLiteral("source"), stage}, {QStringLiteral("output"), output()}};
         if (isPfsFormat(target()))
             build.insert(QStringLiteral("format"), target());
-        FW_TRY_ASSIGN(JobOutcome built, runBuild(ctx, engineOf(target()) + QStringLiteral(".build"), build, true));
+        ChildStage building(ctx.progress, 1);
+        FW_TRY_ASSIGN(JobOutcome built, runBuild(ctx, engineOf(target()) + QStringLiteral(".build"), build, true, &building));
         built.warnings = extracted.warnings + built.warnings;
         built.details.insert(QStringLiteral("convertedFrom"), image());
         if (built.verification != Verification::Failed)
@@ -274,53 +376,106 @@ private:
     Result<JobOutcome> convertWrapped(JobContext& ctx, const QString& inner, const QString& innerFormat)
     {
         ctx.log.info(QStringLiteral("%1 holds the image %2; unpacking it first.").arg(QFileInfo(image()).fileName(), inner));
+        const bool sameFormat = innerFormat == target();
+        const bool verify = verifyEnabled(ctx);
+        // The image it holds is the result: unpacked, saved next to the
+        // output and checked there, each a stage of its own (declared before
+        // anything is counted). Otherwise the unpacking is the first half of
+        // Extracting and the image is repacked.
+        if (sameFormat)
+            ctx.progress->setPhases({QStringLiteral("Extracting"), QStringLiteral("Saving"), QStringLiteral("Verifying")},
+                                    verify ? QList<double>{0.5, 0.15, 0.35} : QList<double>{0.7, 0.3, 0});
         const QString unpacked = QDir(ctx.tempDir).filePath(QStringLiteral("unpacked"));
+        ChildStage unpacking(ctx.progress, 0, 0.0, sameFormat ? 1.0 : 0.5);
         FW_TRY_ASSIGN(JobOutcome ex, runChild(ctx, QStringLiteral("image.pfs.extract"),
-                                              {{QStringLiteral("image"), image()}, {QStringLiteral("output"), unpacked}, {QStringLiteral("deep"), false}}));
+                                              {{QStringLiteral("image"), image()}, {QStringLiteral("output"), unpacked}, {QStringLiteral("deep"), false}},
+                                              &unpacking));
+        if (ctx.token.isCancelled())
+            return Error::cancelled();
         const QString innerPath = QDir(unpacked).filePath(inner);
         if (!QFileInfo(innerPath).isFile())
             return Error(ErrorCode::CorruptData, QStringLiteral("%1 was not found inside %2.").arg(inner, QFileInfo(image()).fileName()));
-        if (innerFormat != target()) {
-            auto built = repack(ctx, innerPath, innerFormat, QDir(ctx.tempDir).filePath(QStringLiteral("converted")));
+        if (!sameFormat) {
+            auto built = repack(ctx, innerPath, innerFormat, QDir(ctx.tempDir).filePath(QStringLiteral("converted")), 0.5);
             if (built.ok())
                 built->warnings = ex.warnings + built->warnings;
             return built;
         }
-        // Same format: the unpacked image is the result. Check it, then move it into place.
-        FW_TRY_ASSIGN(JobOutcome checked, runChild(ctx, engineOf(innerFormat) + QStringLiteral(".verify"), {{QStringLiteral("image"), innerPath}}));
-        if (checked.verification == Verification::Failed) {
-            checked.summary = QStringLiteral("The image inside %1 did not verify; nothing was written.").arg(QFileInfo(image()).fileName());
-            return checked;
-        }
-        // On the output's own drive the unpacked image only needs a new name;
-        // from another drive (the temp folder usually is on one) it is copied
-        // through "<output>.part": cancellable, with progress, and only after
-        // the output drive is known to have room.
+        // Same format: the unpacked image is the result. It becomes
+        // "<output>.fw.part" on the output's drive first: on the same drive only
+        // a new name, from another drive (the temp folder usually is on one) a
+        // copy that is cancellable, with progress, and only after the output
+        // drive is known to have room. It is checked there and replaces an
+        // existing output only after that, in the final rename.
         const QString outDir = QFileInfo(output()).absolutePath();
         if (!QDir().mkpath(outDir))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create the folder %1.").arg(QDir::toNativeSeparators(outDir)));
+        // PartFile never picks a name that is taken, and nothing below writes
+        // over one: the no-copy rename never replaces, the copy opens its part
+        // with NewOnly.
+        PartFile part(output());
+        // The copy below works under the working name of `part`'s own working
+        // file: what an interrupted copy left there goes now, before the
+        // free-space check, which must count its space as free.
+        if (const QString copyLeft = PartFile::partPathFor(part.partPath()); QFileInfo::exists(copyLeft))
+            QFile::remove(copyLeft);
         const QStorageInfo from(QFileInfo(innerPath).absolutePath()), to(outDir);
-        bool placed = false;
-        if (from.isValid() && to.isValid() && from.rootPath() == to.rootPath()) {
-            PartFile part(output());
-            QFile::remove(part.partPath());
-            if (QFile::rename(innerPath, part.partPath())) {
-                FW_TRY(part.commit(replaceExisting()));
-                placed = true;
-            }
-        }
-        if (!placed) {
+        const bool sameDrive = from.isValid() && to.isValid() && from.rootPath() == to.rootPath();
+        // A new name has nothing to count (the flush after it neither); a
+        // copy is counted in bytes.
+        ctx.progress->beginPhase(1, 0, 0, false);
+        ctx.progress->setCurrentItem(QFileInfo(output()).fileName());
+        QString why;
+        if (!sameDrive || !renameWithoutCopying(innerPath, part.partPath(), &why)) {
+            if (!why.isEmpty())
+                ctx.log.debug(why);
             const qint64 size = QFileInfo(innerPath).size();
             FW_TRY(ensureFreeSpace(outDir, size, general::freeSpaceMarginBytes(ctx.settings)));
-            ctx.progress->begin(QStringLiteral("Saving"), size, 1);
+            ctx.progress->beginPhase(1, size, 1);
             ctx.progress->setCurrentItem(QFileInfo(output()).fileName());
-            FW_TRY(copyFileStreaming(innerPath, output(), ctx.token, ctx.progress, replaceExisting()));
+            FW_TRY(copyFileStreaming(innerPath, part.partPath(), ctx.token, ctx.progress));
         }
+        FW_TRY(flushImage(part.partPath()));
+        ctx.progress->advanceFiles(1);
+        // A cancel while the image was saved (the flush cannot be cut short)
+        // comes before its verification: the image is not finished, and an
+        // existing output stays as it was (the .part goes with `part`).
+        if (ctx.token.isCancelled())
+            return Error::cancelled();
+        JobOutcome checked;
+        if (verify) {
+            ChildStage checking(ctx.progress, 2);
+            auto result = runChild(ctx, engineOf(innerFormat) + QStringLiteral(".verify"), {{QStringLiteral("image"), part.partPath()}},
+                                   &checking);
+            if (!result.ok() && ctx.token.keepFinishedWork()) {
+                // Cancel while the finished image is checked (GitHub #97): it
+                // is saved as with verification turned off, and not called
+                // verified (not when the app is closing: the cancel then stands).
+                checked.verification = Verification::Skipped;
+                checked.verificationDetail = QStringLiteral("Verification was cancelled, so the image is not verified.");
+                checked.details.insert(QStringLiteral("verificationCancelled"), true);
+                ctx.log.warn(checked.verificationDetail);
+            } else {
+                FW_TRY_ASSIGN(checked, std::move(result));
+                if (checked.verification == Verification::Failed) {
+                    checked.summary = QStringLiteral("The image inside %1 did not verify; nothing was written.").arg(QFileInfo(image()).fileName());
+                    return checked; // the .part is removed; an existing output stays
+                }
+            }
+        } else {
+            checked.verification = Verification::Skipped;
+            checked.verificationDetail = QStringLiteral("Verification is turned off in Settings.");
+        }
+        FW_TRY(commitOrKeep(part, replaceExisting(),
+                            checked.verification == Verification::Passed ? QStringLiteral("The image was unpacked and verified")
+                                                                         : QStringLiteral("The image was unpacked")));
         JobOutcome out = checked;
         out.outputs = {output()};
         out.warnings = ex.warnings + checked.warnings;
         out.details.insert(QStringLiteral("convertedFrom"), image());
-        out.summary = QStringLiteral("Unpacked %1 from %2. %3").arg(QFileInfo(output()).fileName(), QFileInfo(image()).fileName(), checked.summary);
+        out.summary = QStringLiteral("Unpacked %1 from %2.").arg(QFileInfo(output()).fileName(), QFileInfo(image()).fileName());
+        if (!checked.summary.isEmpty())
+            out.summary += u' ' + checked.summary;
         return out;
     }
 

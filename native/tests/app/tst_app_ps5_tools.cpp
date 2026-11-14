@@ -125,7 +125,7 @@ private slots:
         QCOMPARE(tab.chipNames(), QStringList{QStringLiteral("kstuff.elf")});
         QVERIFY(!tab.isDirty());
 
-        // Insert below the cursor's line, then save: LF only, previous file kept as .bak.
+        // Insert below the cursor's line, then save: LF only, previous file kept as .fw.bak.
         QTextCursor c = tab.editor()->textCursor();
         c.setPosition(0);
         tab.editor()->setTextCursor(c);
@@ -135,7 +135,7 @@ private slots:
         tab.saveNow();
         QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && !tab.isDirty(), 10000);
         QCOMPARE(readAll(dir + QStringLiteral("/autoload.txt")), QByteArray("kstuff.elf\n!2500\n\n!1000\n"));
-        QCOMPARE(readAll(dir + QStringLiteral("/autoload.txt.bak")), QByteArray("kstuff.elf\r\n\r\n\r\n\r\n!1000\r\n"));
+        QCOMPARE(readAll(dir + QStringLiteral("/autoload.txt.fw.bak")), QByteArray("kstuff.elf\r\n\r\n\r\n\r\n!1000\r\n"));
 
         // Add a payload: copied into the folder, chip added, line inserted.
         const QString src = fresh(QStringLiteral("al-src")) + QStringLiteral("/elfldr.elf");
@@ -161,7 +161,7 @@ private slots:
         tab.saveNow();
         QTRY_VERIFY_WITH_TIMEOUT(!tab.isBusy() && !tab.isDirty(), 10000);
         QCOMPARE(readAll(empty + QStringLiteral("/autoload.txt")), ps5::autoloader::defaultHeader().toUtf8());
-        QVERIFY(!QFileInfo::exists(empty + QStringLiteral("/autoload.txt.bak")));
+        QVERIFY(!QFileInfo::exists(empty + QStringLiteral("/autoload.txt.fw.bak")));
 
         // A folder that is not there: nothing of the previous folder stays editable.
         tab.openFolder(empty + QStringLiteral("/missing"));

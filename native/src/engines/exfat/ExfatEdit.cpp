@@ -103,8 +103,9 @@ QString editJournalPath(const QString& image)
 // (u64 offset, u32 length, bytes), u64 FNV-1a checksum of the records. The
 // size and serial tie the journal to the image it was made for (in-place
 // edits never change them; every build writes a new serial). Written to
-// "<journal>.part", flushed, then renamed: a journal under its final name is
-// always complete, and the image is only modified after that rename.
+// "<journal>.fw.part" (a PartFile; up to 5.0.2 "<journal>.part"), flushed,
+// then renamed: a journal under its final name is always complete, and the
+// image is only modified after that rename.
 
 namespace {
 
@@ -167,6 +168,13 @@ QString journalDoneMarker(const QString& journal)
     return journal + QStringLiteral(".done");
 }
 
+// Where a journal may be while it is written: its PartFile working name, and
+// "<journal>.part", where versions up to 5.0.2 wrote it.
+QStringList partJournalsOf(const QString& journal)
+{
+    return {PartFile::partPathFor(journal), journal + QStringLiteral(".part")};
+}
+
 // Copies everything the edit will overwrite. Nothing in the image has changed
 // yet, so a cancel simply stops (the .part journal is removed). `identity`
 // receives the bytes that tell this journal from any other.
@@ -182,8 +190,16 @@ Status writeJournal(const QString& image, const QString& journal, const std::vec
     if (!in.open(QIODevice::ReadOnly))
         return Error(ErrorCode::IoError, QStringLiteral("Could not read the image."), in.errorString());
     PartFile part(journal);
+    // Recovery reads the journal's working file, and an older version's
+    // "<journal>.part": one still there (it could not be removed when the
+    // edit started) is not this edit's to replace or to leave beside it.
+    for (const QString& left : partJournalsOf(journal))
+        if (QFileInfo::exists(left))
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("Could not remove %1, left by an earlier edit. Close any program using it, then try again.")
+                             .arg(QDir::toNativeSeparators(left)));
     QFile out(toLongPath(part.partPath()));
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly))
         return fileError(QStringLiteral("Could not create the undo journal next to the image."), out);
     const QString what = QStringLiteral("the undo journal");
     uchar head[kJournalHeader];
@@ -712,6 +728,40 @@ Result<EditResult> undoAfter(const QString& image, const QString& journal, Error
     return why;
 }
 
+// Verifies the edited image. A cancel once the edit is written does not throw
+// it away (finished work is kept as with verification turned off): when the
+// verification had found nothing wrong yet, names, sizes and the structure are
+// checked instead, from the image's metadata (seconds), with a token that the
+// cancel does not stop but closing the app does, and that check decides;
+// `cancelled` then says the edit is not verified. A problem found before the
+// cancel fails as always. While the app is closing nothing is kept: the cancel
+// stands (an edit in place is undone, a rebuilt image is not used).
+Result<VerifyReport> verifyEdited(const QString& image, const std::vector<ExpectedFile>& expected, const VerifyOptions& vo,
+                                  const CancellationToken& token, ProgressReporter* progress, const Log* log,
+                                  bool& cancelled, const QString& original = {}, const Geometry* originalGeometry = nullptr)
+{
+    cancelled = false;
+    auto report = verifyImage(image, expected, vo, token, progress, original, originalGeometry);
+    if (report.ok() || !token.isCancelled() || token.isShutdown())
+        return report;
+    if (!token.keepFinishedWork())
+        return Error::cancelled();
+    if (log)
+        log->info(QStringLiteral("Verification was cancelled; checking the structure, names and sizes of the edited image before "
+                                 "it is kept."));
+    VerifyOptions quick = vo;
+    quick.full = false;
+    quick.onCompareStart = {};
+    auto checked = verifyImage(image, expected, quick, token.untilShutdown(), nullptr, original, originalGeometry);
+    if (!checked.ok())
+        return Error::cancelled(); // nothing could be checked: the cancel stands
+    cancelled = checked->passed();
+    if (cancelled && log)
+        log->warn(QStringLiteral("Verification was cancelled, so the edited image is not verified (its structure, names and "
+                                 "sizes were checked)."));
+    return checked;
+}
+
 // ---- in place ----------------------------------------------------------------------------
 
 Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const ImageTree& tree, const Model& m,
@@ -975,10 +1025,12 @@ Result<EditResult> editInPlace(const QString& image, ExfatReader& reader, const 
         const auto onPhase = o.onPhase;
         vo.onCompareStart = [onPhase](qint64 total, qint64 files, bool bytes) { onPhase(2, total, files, bytes); };
     }
-    auto report = verifyImage(image, expected, vo, token, progress);
+    bool cancelled = false;
+    auto report = verifyEdited(image, expected, vo, token, progress, log, cancelled);
     if (!report.ok())
         return undoAfter(image, journal, report.takeError());
     res.verification = std::move(report).value();
+    res.verificationCancelled = cancelled;
     if (!res.verification.passed()) {
         if (log)
             log->warn(QStringLiteral("The edited image did not verify; undoing the edit: %1").arg(res.verification.summary()));
@@ -1078,6 +1130,9 @@ Result<EditResult> editRebuild(const QString& image, std::unique_ptr<ExfatReader
                      QStringLiteral("The edited image would be %1, and its drive uses FAT32, which cannot store files of "
                                     "4 GB or more. Move the image to an NTFS or exFAT drive first.")
                          .arg(formatBytes(res.newVolumeBytes)));
+    // Made before the free-space check: it removes what an interrupted
+    // rebuild of this image left, whose space the check must count as free.
+    PartFile part(image);
     FW_TRY(ensureFreeSpace(QFileInfo(image).absolutePath(), res.newVolumeBytes, o.freeSpaceMarginBytes));
     if (!token.checkpoint())
         return Error::cancelled();
@@ -1091,7 +1146,6 @@ Result<EditResult> editRebuild(const QString& image, std::unique_ptr<ExfatReader
     };
     if (o.onPhase)
         o.onPhase(1, st.totalBytes, st.fileCount, true);
-    PartFile part(image);
     if (log)
         log->info(QStringLiteral("Rebuilding the image: %1, %2, %3")
                       .arg(counted(st.fileCount, "file", "files"), formatBytes(st.totalBytes), plan->sizeChoice));
@@ -1106,16 +1160,19 @@ Result<EditResult> editRebuild(const QString& image, std::unique_ptr<ExfatReader
         const auto onPhase = o.onPhase;
         vo.onCompareStart = [onPhase](qint64 total, qint64 files, bool bytes) { onPhase(2, total, files, bytes); };
     }
-    auto report = verifyImage(part.partPath(), expected, vo, token, progress, image, &geo);
+    bool cancelled = false;
+    auto report = verifyEdited(part.partPath(), expected, vo, token, progress, log, cancelled, image, &geo);
     if (!report.ok())
         return report.takeError();
     res.verification = std::move(report).value();
+    res.verificationCancelled = cancelled;
     if (!res.verification.passed()) {
         res.restored = true; // the original was never touched; the new image is discarded
         return res;
     }
     reader.reset(); // release the original before it is swapped (Windows)
-    FW_TRY(commitOrKeep(part, true, QStringLiteral("The edited image was built and verified")));
+    FW_TRY(commitOrKeep(part, true, cancelled ? QStringLiteral("The edited image was built")
+                                              : QStringLiteral("The edited image was built and verified")));
     return res;
 }
 
@@ -1124,18 +1181,23 @@ Result<EditResult> editRebuild(const QString& image, std::unique_ptr<ExfatReader
 Result<bool> recoverInterruptedEdit(const QString& image, const Log* log)
 {
     const QString journal = editJournalPath(image);
-    const QString partJournal = journal + QStringLiteral(".part");
-    if (QFileInfo::exists(partJournal)) {
+    const QStringList partJournals = partJournalsOf(journal);
+    for (const QString& partJournal : partJournals) {
+        if (!QFileInfo::exists(partJournal))
+            continue;
         // The journal is written and flushed under its .part name, then
         // renamed before the image is touched. After a crash the rename may not
         // have reached the disk although image writes did, so a complete .part
         // journal is applied too: it holds the original bytes, so writing them
         // back is harmless if the image was never changed. An incomplete or
-        // foreign one means the image was not modified.
+        // foreign one means the image was not modified. Only one can be an
+        // edit's (an edit starts only when neither name is taken).
         if (!QFileInfo::exists(journal)) {
             bool writingBack = false;
             const Status st = rollbackJournal(image, partJournal, &writingBack);
             if (st.ok()) {
+                for (const QString& other : partJournals)
+                    QFile::remove(other);
                 if (log)
                     log->warn(QStringLiteral("An earlier edit of %1 was interrupted while it started; undone from %2.")
                                   .arg(QDir::toNativeSeparators(image), QDir::toNativeSeparators(partJournal)));

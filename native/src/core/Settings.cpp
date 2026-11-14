@@ -5,6 +5,7 @@
 #include "core/Log.h"
 
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -359,7 +360,8 @@ void SettingsStore::reset(const QString& key)
 void SettingsStore::resetSection(const QString& section)
 {
     for (const auto* d : m_schema->inSection(section))
-        reset(d->key);
+        if (!d->keptOnReset)
+            reset(d->key);
     emit resetDone();
 }
 
@@ -368,8 +370,14 @@ void SettingsStore::resetAll()
     QStringList keys;
     {
         std::lock_guard lock(m_mutex);
-        keys = m_values.keys();
-        m_values.clear();
+        for (auto it = m_values.begin(); it != m_values.end();) {
+            if (const auto* d = m_schema->find(it.key()); d && d->keptOnReset) {
+                ++it;
+                continue;
+            }
+            keys << it.key();
+            it = m_values.erase(it);
+        }
     }
     for (const auto& k : keys)
         if (const auto* d = m_schema->find(k))
@@ -416,6 +424,23 @@ Result<int> SettingsStore::importLegacy(const QString& legacySettingsPath)
     if (!doc.isObject())
         return Error(ErrorCode::CorruptData, QStringLiteral("The old settings file is not valid JSON."));
     const QJsonObject o = doc.object();
+    // The folders of a folder list that are set already (the Library page's)
+    // stay, first; the imported ones that are not among them follow.
+    const auto joined = [this](const QString& key, const QVariant& v) -> QVariant {
+        const SettingDef* def = m_schema->find(key);
+        if (!def || def->type != SettingType::StringList || !def->folderList)
+            return v;
+        const auto asPath = [](const QString& f) { return QDir::cleanPath(QDir::fromNativeSeparators(f.trimmed())); };
+        QStringList out = value(key).toStringList();
+        for (const QString& f : v.toStringList()) {
+            const QString p = asPath(f);
+            if (!p.isEmpty() && std::none_of(out.cbegin(), out.cend(), [&](const QString& have) {
+                    return asPath(have).compare(p, Qt::CaseInsensitive) == 0;
+                }))
+                out << f.trimmed();
+        }
+        return out;
+    };
     int imported = 0;
     for (const auto& [legacyKey, mapping] : m_schema->legacyKeys()) {
         if (!o.contains(legacyKey))
@@ -427,7 +452,7 @@ Result<int> SettingsStore::importLegacy(const QString& legacySettingsPath)
                 continue;
             v = *c;
         }
-        if (setValue(mapping.key, v).ok())
+        if (setValue(mapping.key, joined(mapping.key, v)).ok())
             ++imported;
         else
             Logger::instance().log(LogLevel::Warning, QStringLiteral("settings"),
@@ -436,7 +461,7 @@ Result<int> SettingsStore::importLegacy(const QString& legacySettingsPath)
     for (const auto& importer : m_schema->legacyImporters()) {
         const QVariantMap values = importer(o);
         for (auto it = values.cbegin(); it != values.cend(); ++it) {
-            if (setValue(it.key(), it.value()).ok())
+            if (setValue(it.key(), joined(it.key(), it.value())).ok())
                 ++imported;
             else
                 Logger::instance().log(LogLevel::Warning, QStringLiteral("settings"),

@@ -13,6 +13,10 @@ namespace fw::crash {
 
 void install(const QString& crashFolder);
 
+// Writes the two crash files into the installed folder now, as the handler
+// does after a crash, without one (tests). Returns how many were written.
+int writeReportForTesting();
+
 // Crash dumps/reports left by earlier runs (newest first).
 QStringList previousCrashFiles(const QString& crashFolder);
 

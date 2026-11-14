@@ -17,6 +17,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -271,6 +272,40 @@ private slots:
         QVERIFY(!folderNameProblem(QStringLiteral("a/b")).isEmpty());
         QVERIFY(!folderNameProblem(QStringLiteral("CON")).isEmpty());
         QVERIFY(!folderNameProblem(QStringLiteral("trailing.")).isEmpty());
+    }
+
+    // Windows opens these names as devices, with an extension too, also with
+    // spaces before it ("CON .txt"), and reads ¹ ² ³ as digits: an image or
+    // folder name never becomes one of them.
+    void deviceNamesAreNeverImageOrFolderNames_data()
+    {
+        QTest::addColumn<QString>("name");
+        QTest::addColumn<QString>("image"); // what sanitizeImageName() makes of it
+        QTest::newRow("CON") << QStringLiteral("CON") << QStringLiteral("CON_");
+        QTest::newRow("COM9 with extension") << QStringLiteral("COM9.img") << QStringLiteral("COM9_.img");
+        QTest::newRow("console in") << QStringLiteral("CONIN$") << QStringLiteral("CONIN$_");
+        QTest::newRow("console out, lower case, extension") << QStringLiteral("conout$.txt") << QStringLiteral("conout$_.txt");
+        QTest::newRow("superscript COM") << QStringLiteral("COM¹") << QStringLiteral("COM¹_");
+        QTest::newRow("superscript LPT, extension") << QStringLiteral("lpt³.log") << QStringLiteral("lpt³_.log");
+        QTest::newRow("spaces before the extension") << QStringLiteral("NUL .backup") << QStringLiteral("NUL_ .backup");
+    }
+
+    void deviceNamesAreNeverImageOrFolderNames()
+    {
+        QFETCH(QString, name);
+        QFETCH(QString, image);
+        QVERIFY2(folderNameProblem(name).contains(QStringLiteral("reserved")), qPrintable(name));
+        QCOMPARE(sanitizeImageName(name), image);
+        QVERIFY2(folderNameProblem(image).isEmpty(), qPrintable(image));
+    }
+
+    void namesLikeDeviceNamesStayAsTheyAre()
+    {
+        for (const QString& name : {QStringLiteral("COM10"), QStringLiteral("COM0"), QStringLiteral("CONIN"), QStringLiteral("CON$"),
+                                    QStringLiteral("CONSOLE"), QStringLiteral("NULL.backup"), QStringLiteral("COM¹0")}) {
+            QVERIFY2(folderNameProblem(name).isEmpty(), qPrintable(name));
+            QCOMPARE(sanitizeImageName(name), name);
+        }
     }
 
     void nameTemplatesMatchLegacy()
@@ -1093,6 +1128,54 @@ private slots:
             auto r = undoDumpRenames(log2, cancel.token());
             QVERIFY(!r.ok());
             QVERIFY(errorOf(r).isCancelled());
+        }
+    }
+
+    // The undo log learns of a rename before it happens. A crash right after
+    // a rename (the log as it stood while that dump was renamed) still lets
+    // Undo put the old name back; an entry whose rename never happened (a
+    // crash just before it) is passed over.
+    void aRenameIsLoggedBeforeItHappens()
+    {
+        const auto readLog = [](const QString& path) {
+            QFile f(path);
+            return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray("");
+        };
+        const auto writeLog = [](const QString& path, const QByteArray& bytes) {
+            QFile f(path);
+            return f.open(QIODevice::WriteOnly | QIODevice::Truncate) && f.write(bytes) == bytes.size();
+        };
+        for (const bool crashAfter : {true, false}) {
+            const QString src = fresh(crashAfter ? QStringLiteral("wal-after") : QStringLiteral("wal-before"));
+            for (const char* n : {"a", "b"})
+                QVERIFY(makePs5Dump(QDir(src).filePath(QLatin1String(n)), QStringLiteral("PPSA3000%1").arg(int(n[0] - 'a')),
+                                    QStringLiteral("Game %1").arg(QLatin1String(n))));
+            RenamePlanOptions opt;
+            opt.preset = NamePreset::TitleId;
+            const QString log = QDir(fresh(crashAfter ? QStringLiteral("wal-after-log") : QStringLiteral("wal-before-log")))
+                                    .filePath(QStringLiteral("log.json"));
+            // The log as it stands while each dump is renamed (what a crash then leaves).
+            QHash<QString, QByteArray> whileRenaming;
+            ProgressReporter watch([&](const ProgressSnapshot& p) {
+                if (!p.currentItem.isEmpty() && !whileRenaming.contains(p.currentItem))
+                    whileRenaming.insert(p.currentItem, readLog(log));
+            }, 0);
+            auto run = applyDumpRenames(planDumpRenames(src, opt, {}).value(), {}, log, {}, &watch);
+            QVERIFY(run.ok());
+            QCOMPARE(run->renamed, 2);
+            QVERIFY(!readLog(log).contains("pending"));
+            const QString crashAt = crashAfter ? QStringLiteral("a") : QStringLiteral("b");
+            QVERIFY2(!whileRenaming.value(crashAt).isEmpty(), "nothing was logged before the rename");
+            QVERIFY(writeLog(log, whileRenaming.value(crashAt)));
+            // What the disk holds after either crash: "a" renamed, "b" not yet.
+            QVERIFY(QDir().rename(QDir(src).filePath(QStringLiteral("PPSA30001")), QDir(src).filePath(QStringLiteral("b"))));
+            auto undo = undoDumpRenames(log, {});
+            QVERIFY2(undo.ok(), undo.ok() ? "" : qPrintable(undo.error().toLogString()));
+            QCOMPARE(undo->renamed, 1);
+            QCOMPARE(undo->failed, 0);
+            QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("a/eboot.bin"))).isFile());
+            QVERIFY(QFileInfo(QDir(src).filePath(QStringLiteral("b/eboot.bin"))).isFile());
+            QCOMPARE(QDir(src).entryList(QDir::Dirs | QDir::NoDotAndDotDot), (QStringList{QStringLiteral("a"), QStringLiteral("b")}));
         }
     }
 

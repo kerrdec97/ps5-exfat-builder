@@ -84,9 +84,10 @@ public:
     static QString statusText(const BackportRow& row);
     static ui::Tone statusTone(const BackportRow& row);
     static int statusWidth(const BackportRow& row);
-    // The column is as wide as its widest state, within these limits and
-    // while the title column keeps at least kTitleColMin.
-    static constexpr int kStatusColMin = 150, kStatusColMax = 300, kTitleColMin = 200;
+    // The title and the status share what the other columns leave by the
+    // table's width alone (never by the states shown): the status half of it
+    // within these limits, the title at least kTitleColMin.
+    static constexpr int kStatusColMin = 150, kStatusColMax = 300, kTitleColMin = 176;
 
 signals:
     void checkedChanged();
@@ -162,6 +163,7 @@ private:
     void updateButtons();
     void updateStartTip();
     void fitStatusColumn();
+    void setScanText(const QString& text); // the search row's "Last scan 14:02"
     void setState(const QString& text, ui::Tone tone);
 
     // engine
@@ -266,11 +268,16 @@ private:
     std::vector<Item> m_items;
     std::vector<std::pair<Item, QJsonObject>> m_batchResults;
     QJsonObject m_runOptions;
+    // The destinations the run's check approved: every game of the run gets
+    // these, whatever the fields or the shared settings say meanwhile.
+    QString m_runOutputDir, m_runBackupDir;
     QString m_lastOutputRoot;
     QString m_lastLabel;
     int m_sdkPair = 5;
     bool m_shownOnce = false;
     bool m_demo = false;
+    bool m_demoRun = false; // the "running" demo put the page in Running (no worker)
+    void leaveDemoRun();
     bool m_suppressSave = false;
     int m_selected = 0; // ticked games, as counted by updateStats()
     QString m_rowSavedStatus, m_rowSavedTone, m_rowSavedDetail;
@@ -286,14 +293,16 @@ private:
     QPushButton* m_rootsBtn;
     ui::IconButton* m_rescanBtn;
     QPushButton* m_addBtn;
-    QLabel* m_scanLabel;
+    // Texts that hold a game's title, a path or the engine's words are cut
+    // (or wrap) rather than widen the page past its aside.
+    ui::ElideLabel* m_scanLabel;
     QTableView* m_table;
     ui::DropZone* m_emptyDrop;
     QLabel* m_emptyText;
     ui::ProgressBar* m_bar;
     QLabel* m_percent;
-    QLabel* m_current;
-    QLabel* m_stage;
+    ui::ElideLabel* m_current;
+    ui::ElideLabel* m_stage;
     QHash<QString, ui::Badge*> m_chips;
     QLabel* m_modeLine;
     QTextEdit* m_logBox;

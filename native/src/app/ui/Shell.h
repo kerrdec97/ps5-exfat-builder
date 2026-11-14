@@ -137,16 +137,29 @@ class PageHeader : public QWidget {
 public:
     PageHeader(const QString& title, const QString& caption, QWidget* parent = nullptr);
     void setCaption(const QString& caption);
+    QString caption() const; // the whole sentence, also while it is cut
     void setTitle(const QString& title);
     void setIcon(const QString& iconName); // gradient tile left of the title
     void addAction(QWidget* w);
     QHBoxLayout* actions() { return m_actions; }
+    // The width of the page's content when it has one (form + dock: 1176 px):
+    // in a wider window the buttons end where the content ends, not at the
+    // window's edge. 0 (default): the full width.
+    void setContentWidth(int px);
+    int contentWidth() const { return m_contentWidth; }
+
+protected:
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
+    void fitTail();
     IconTile* m_icon;
     QLabel* m_title;
-    QLabel* m_caption;
+    ElideLabel* m_caption;
     QHBoxLayout* m_actions;
+    QHBoxLayout* m_row = nullptr;
+    QSpacerItem* m_tail = nullptr; // after the buttons: the width past the content
+    int m_contentWidth = 0;
 };
 
 } // namespace fw::ui

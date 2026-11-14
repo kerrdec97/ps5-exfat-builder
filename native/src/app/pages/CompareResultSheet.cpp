@@ -243,15 +243,16 @@ CompareResultSheet::CompareResultSheet(QWidget* host, const QJsonObject& d, cons
         body()->addWidget(caption(warnings.size() == 4 ? FW_TR("1 more note in Copy report.")
                                                        : FW_TR("%1 more notes in Copy report.").arg(warnings.size() - 3), this));
 
-    auto* copy = addButton(FW_TR("Copy report"), Role::Safe);
-    QObject::disconnect(copy, &QPushButton::clicked, this, nullptr); // copying keeps the sheet open
+    // An information sheet: Copy report at the start of the row (it keeps the
+    // sheet open), Close the default button (focus, Enter, Esc) in the secondary look.
+    auto* copy = addButton(FW_TR("Copy report"), Role::Aside);
     connect(copy, &QPushButton::clicked, this, [this, copy] {
         if (auto* cb = QApplication::clipboard())
             cb->setText(m_report);
         copy->setText(FW_TR("Copied"));
         QTimer::singleShot(1500, copy, [copy] { copy->setText(FW_TR("Copy report")); });
     });
-    addButton(FW_TR("Close"), Role::Primary);
+    addButton(FW_TR("Close"), Role::Close);
 }
 
 QStringList CompareResultSheet::groupTitles() const

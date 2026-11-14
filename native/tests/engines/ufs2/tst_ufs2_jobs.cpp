@@ -12,6 +12,7 @@
 #include "engines/ufs2/Ufs2Check.h"
 #include "engines/ufs2/Ufs2Verify.h"
 #include "jobs/JobQueue.h"
+#include "support/ProgressAudit.h"
 #include "support/SparseFile.h"
 
 #include <QCryptographicHash>
@@ -21,6 +22,9 @@
 #include <QScopeGuard>
 #include <QStorageInfo>
 #include <QTemporaryDir>
+
+#include <atomic>
+#include <cmath>
 
 using namespace ufs2test;
 
@@ -38,8 +42,10 @@ private:
 
     using Sink = std::function<void(const ProgressSnapshot&)>;
 
+    // Runs a job as the queue's worker does (phases and weights declared as
+    // the queue declares them); `audit` watches the progress.
     Result<JobOutcome> runJob(const QString& kind, const QJsonObject& params, const QVariantMap& overrides = {},
-                              const CancellationToken& token = {}, Sink sink = {})
+                              const CancellationToken& token = {}, Sink sink = {}, fwtest::ProgressAudit* audit = nullptr)
     {
         FW_TRY_ASSIGN(auto job, m_jobs.create(kind, params, overrides));
         FW_TRY_ASSIGN(QVariantMap normalized, m_store->normalizeOverrides(overrides));
@@ -50,11 +56,15 @@ private:
             [&](const ProgressSnapshot& s) {
                 if (m_phasesSeen.isEmpty() || m_phasesSeen.last() != s.phase)
                     m_phasesSeen << s.phase;
+                if (audit)
+                    audit->report(s);
                 if (sink)
                     sink(s);
             },
             0);
-        rep.setPhases(job->phases());
+        if (audit)
+            audit->watch(&rep);
+        rep.setPhases(job->phases(), job->phaseWeights(sv));
         TempDir temp(QStringLiteral("ufs2-test"), m_tmp.path());
         JobContext ctx;
         ctx.jobId = QStringLiteral("test");
@@ -63,7 +73,13 @@ private:
         ctx.log = Log(kind, QStringLiteral("test"));
         ctx.settings = sv;
         ctx.tempDir = temp.path();
-        return job->run(ctx);
+        auto r = job->run(ctx);
+        if (audit) {
+            rep.finish();
+            audit->finish(rep.snapshot(), r.ok() && r->verification != Verification::Failed);
+            audit->watch(nullptr);
+        }
+        return r;
     }
 
     static QByteArray sha(const QString& path) { return QCryptographicHash::hash(readAll(path), QCryptographicHash::Sha256); }
@@ -148,8 +164,9 @@ private slots:
         QVERIFY2(o->verificationDetail.contains(QStringLiteral("byte for byte")), qPrintable(o->verificationDetail));
         QCOMPARE(o->outputs, QStringList{out});
         QVERIFY(QFileInfo::exists(out));
-        QVERIFY(!QFileInfo::exists(out + ".part"));
-        QCOMPARE(m_phasesSeen, (QStringList{"Scanning", "Writing image", "Verifying"}));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+        // The structure check is the first part of Verifying, the compare the rest.
+        QCOMPARE(m_phasesSeen, (QStringList{"Scanning", "Writing image", "Verifying", "Checking structure", "Verifying"}));
         QVERIFY(o->details.value("writeBytesPerSec").toDouble() > 0);
         QCOMPARE(o->details.value("blockSize").toInt(), 65536);
         auto r = Ufs2Reader::open(out);
@@ -224,7 +241,7 @@ private slots:
         QVERIFY2(o->verificationDetail.contains(QStringLiteral("eboot.bin")), qPrintable(o->verificationDetail));
         QVERIFY(o->outputs.isEmpty());
         QVERIFY(!QFileInfo::exists(out));
-        QVERIFY(!QFileInfo::exists(out + ".part"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
 
         // The same while replacing an image: the one that was there stays,
         // byte for byte.
@@ -245,7 +262,7 @@ private slots:
         QCOMPARE(o->verification, Verification::Failed);
         QVERIFY(o->outputs.isEmpty());
         QCOMPARE(readAll(out), QByteArray("previous image"));
-        QVERIFY(!QFileInfo::exists(out + ".part"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
     }
 
     void cancelLeavesNoOutputAndKeepsTheOldImage()
@@ -260,7 +277,7 @@ private slots:
         });
         QVERIFY(!o.ok() && o.error().isCancelled());
         QVERIFY(!QFileInfo::exists(out));
-        QVERIFY(!QFileInfo::exists(out + ".part"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         // An existing image being replaced survives a cancelled rebuild (audit M2).
         QVERIFY(mktext(out, "previous image"));
         CancellationSource cs2;
@@ -270,13 +287,187 @@ private slots:
         });
         QVERIFY(!o.ok() && o.error().isCancelled());
         QCOMPARE(readAll(out), QByteArray("previous image"));
-        QVERIFY(!QFileInfo::exists(out + ".part"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         // Cancelled during the scan.
         CancellationSource cs3;
         cs3.cancel();
         o = runJob(ufs2::kinds::kBuild, buildParams(src, m_tmp.filePath("cancel3.ffpkg")), {}, cs3.token());
         QVERIFY(!o.ok() && o.error().isCancelled());
         QVERIFY(!QFileInfo::exists(m_tmp.filePath("cancel3.ffpkg")));
+    }
+
+    // GitHub #97: Cancel while the finished image is verified saves it as
+    // with verification turned off: the structure check still passes (it is
+    // finished when the cancel came during it), the image replaces the old one
+    // only now, the job does not fail and says the image is not verified. The
+    // game folder is never deleted for it.
+    void cancelDuringVerificationSavesTheImage()
+    {
+        const QString src = freshGame("vcancel-src", 64 * 1024 * 1024);
+        const QString out = m_tmp.filePath("vcancel.ffpkg");
+        // During the structure check (the first report of the stage), and while the bytes are compared.
+        for (const qint64 after : {qint64(-1), qint64(4 * 1024 * 1024)}) {
+            QVERIFY(mktext(out, "previous image"));
+            CancellationSource cs;
+            std::atomic<bool> cancelled{false};
+            auto o = runJob(ufs2::kinds::kBuild, buildParams(src, out, true), {{ufs2::keys::kDeleteSourceAfterBuild, true}}, cs.token(),
+                            [&](const ProgressSnapshot& s) {
+                                if (s.phaseIndex == 2 && s.done > after && !cancelled.exchange(true))
+                                    cs.cancel();
+                            });
+            QVERIFY(cancelled);
+            QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+            QCOMPARE(o->verification, Verification::Skipped);
+            QVERIFY2(o->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(o->verificationDetail));
+            QVERIFY(o->details.value("verificationCancelled").toBool());
+            QCOMPARE(o->outputs, QStringList{out});
+            QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+            QVERIFY(QFileInfo(src).isDir());
+            QVERIFY(!o->details.contains("sourceDeleted"));
+            auto check = runJob(ufs2::kinds::kVerify, QJsonObject{{"image", out}, {"source", src}});
+            QVERIFY2(check.ok() && check->verification == Verification::Passed,
+                     check.ok() ? qPrintable(check->verificationDetail) : qPrintable(check.error().toLogString()));
+        }
+    }
+
+    // Closing the app is no Cancel the user chose: while the new image is
+    // verified it is not saved unverified, the previous one stays as it was
+    // and the .part goes. The same when the user had cancelled and the
+    // structure check that then still runs is under way: closing the app stops it.
+    void closingTheAppDuringVerificationKeepsNothing()
+    {
+        const QString src = freshGame("vclose-src", 64 * 1024 * 1024);
+        const QString out = m_tmp.filePath("vclose.ffpkg");
+        for (const bool cancelledFirst : {false, true}) {
+            QVERIFY(mktext(out, "previous image"));
+            CancellationSource cs;
+            std::atomic<bool> closed{false};
+            auto o = runJob(ufs2::kinds::kBuild, buildParams(src, out, true), {}, cs.token(), [&](const ProgressSnapshot& s) {
+                if (s.phaseIndex != 2 || closed)
+                    return;
+                if (!cancelledFirst && s.done > 4 * 1024 * 1024) {
+                    closed = true;
+                    cs.shutdown();
+                } else if (cancelledFirst && !cs.isCancelled()) {
+                    cs.cancel(); // during the structure check, which then runs again to its end
+                } else if (cancelledFirst && cs.token().finishedWorkKept()) {
+                    closed = true;
+                    cs.shutdown();
+                }
+            });
+            QVERIFY2(closed, cancelledFirst ? "after a cancel" : "plain");
+            QVERIFY(!o.ok());
+            QVERIFY2(o.error().isCancelled(), qPrintable(o.error().toLogString()));
+            QCOMPARE(readAll(out), QByteArray("previous image"));
+            QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+        }
+    }
+
+    // A difference found before the cancel still fails the build: the new
+    // image is not saved (not even unverified) and the previous one stays.
+    void aMismatchFoundBeforeTheCancelFailsTheBuild()
+    {
+        const QString src = freshGame("vcancel-bad-src", 64 * 1024 * 1024);
+        const QString out = m_tmp.filePath("vcancel-bad.ffpkg");
+        QVERIFY(mktext(out, "previous image"));
+        CancellationSource cs;
+        std::atomic<bool> changed{false}, cancelled{false};
+        auto o = runJob(ufs2::kinds::kBuild, buildParams(src, out, true), {}, cs.token(), [&](const ProgressSnapshot& s) {
+            if (s.phaseIndex != 2)
+                return;
+            // Before anything is compared, eboot.bin (compared first, at the
+            // top of the tree) changes; the cancel comes while data/big.pak is.
+            if (!changed.exchange(true)) {
+                QFile f(src + "/eboot.bin");
+                char c = 0;
+                if (f.open(QIODevice::ReadWrite) && f.seek(1000) && f.getChar(&c) && f.seek(1000))
+                    f.putChar(char(c ^ 0x55));
+            } else if (s.done > 4 * 1024 * 1024 && !cancelled.exchange(true)) {
+                cs.cancel();
+            }
+        });
+        QVERIFY(cancelled);
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(o->verification, Verification::Failed);
+        QVERIFY2(o->verificationDetail.contains(QStringLiteral("eboot.bin")), qPrintable(o->verificationDetail));
+        QVERIFY2(o->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(o->verificationDetail));
+        QVERIFY(!o->details.contains("verificationCancelled"));
+        QVERIFY(o->outputs.isEmpty());
+        QCOMPARE(readAll(out), QByteArray("previous image"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+    }
+
+    void extractCancelDuringVerificationKeepsTheFiles()
+    {
+        const QString src = freshGame("xvcancel-src", 64 * 1024 * 1024);
+        const QString img = m_tmp.filePath("xvcancel.ffpkg");
+        QVERIFY(runJob(ufs2::kinds::kBuild, buildParams(src, img)).ok());
+        const QString dest = m_tmp.filePath("xvcancel-out/Game");
+        CancellationSource cs;
+        std::atomic<bool> cancelled{false};
+        auto o = runJob(ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", dest}}, {}, cs.token(), [&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2 && s.done > 4 * 1024 * 1024 && !cancelled.exchange(true))
+                cs.cancel();
+        });
+        QVERIFY(cancelled);
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(o->verification, Verification::Skipped);
+        QVERIFY2(o->verificationDetail.contains(QStringLiteral("not verified")), qPrintable(o->verificationDetail));
+        QCOMPARE(o->outputs, QStringList{dest});
+        QCOMPARE(snapshotFolder(dest), snapshotFolder(src));
+        QVERIFY(!QFileInfo::exists(dest + ".part"));
+    }
+
+    // What a power cut leaves: a staging folder with the job's marker in it
+    // is replaced by the next run; one without the marker is refused, not touched.
+    void extractLeftoverStagingIsOursOnlyWithTheMarker()
+    {
+        const QString src = freshGame("leftover-src");
+        const QString img = m_tmp.filePath("leftover.ffpkg");
+        QVERIFY(runJob(ufs2::kinds::kBuild, buildParams(src, img)).ok());
+        const QString ours = m_tmp.filePath("leftover-out/ours");
+        QVERIFY(mktext(ours + ".part/half.bin", "half of an earlier run"));
+        QVERIFY(mktext(ours + ".part/.fw-extract-staging", ""));
+        auto o = runJob(ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", ours}});
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(snapshotFolder(ours), snapshotFolder(src));
+        QVERIFY(!QFileInfo::exists(ours + ".part"));
+        const QString theirs = m_tmp.filePath("leftover-out/theirs");
+        QVERIFY(mktext(theirs + ".part/theirs.txt", "theirs"));
+        o = runJob(ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", theirs}});
+        FWTEST_COMPARE_ERROR(o, ErrorCode::AlreadyExists);
+        QCOMPARE(readAll(theirs + ".part/theirs.txt"), QByteArray("theirs"));
+        QVERIFY(!QFileInfo::exists(theirs));
+    }
+
+    // An edit whose verification is cancelled is applied: the names and sizes
+    // of the edited tree are still checked (what runs with verification
+    // turned off), the contents are not, and the outcome says so.
+    void editCancelDuringVerificationIsApplied()
+    {
+        const QString src = freshGame("evcancel-src", 64 * 1024 * 1024);
+        const QString img = m_tmp.filePath("evcancel.ffpkg");
+        QVERIFY(runJob(ufs2::kinds::kBuild, buildParams(src, img)).ok());
+        CancellationSource cs;
+        std::atomic<bool> cancelled{false};
+        auto o = runJob(ufs2::kinds::kEdit, QJsonObject{{"image", img}, {"operations", QJsonArray{QJsonObject{{"op", "mkdir"}, {"path", "/added"}}}}},
+                        {}, cs.token(), [&](const ProgressSnapshot& s) {
+                            if (s.phaseIndex == 2 && s.done > 4 * 1024 * 1024 && !cancelled.exchange(true))
+                                cs.cancel();
+                        });
+        QVERIFY(cancelled);
+        QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
+        QCOMPARE(o->verification, Verification::Skipped);
+        QVERIFY2(o->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(o->verificationDetail));
+        QCOMPARE(o->outputs, QStringList{img});
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
+        auto r = Ufs2Reader::open(img);
+        QVERIFY(r.ok());
+        CancellationToken token;
+        auto tree = r.value()->loadTree(token);
+        QVERIFY(tree.ok());
+        QVERIFY(tree->find("/added") >= 0);
+        QCOMPARE(tree->nodes[size_t(tree->find("/data/big.pak"))].size, qint64(64 * 1024 * 1024));
     }
 
     void replaceExistingOnlyWhenAsked()
@@ -314,7 +505,7 @@ private slots:
         QVERIFY2(o.error().message.contains("built and verified"), qPrintable(o.error().toLogString()));
         QVERIFY2(o.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(o.error().toLogString()));
         QCOMPARE(readAll(out), QByteArray("old"));
-        QVERIFY(!QFileInfo::exists(out + ".part"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         auto r = Ufs2Reader::open(kept);
         QVERIFY(r.ok());
         CancellationToken token;
@@ -334,7 +525,7 @@ private slots:
         QVERIFY2(o.error().message.contains("edited image was built and verified"), qPrintable(o.error().toLogString()));
         QVERIFY2(o.error().message.contains(QDir::toNativeSeparators(keptEdit)), qPrintable(o.error().toLogString()));
         QCOMPARE(sha(kept), before);
-        QVERIFY(!QFileInfo::exists(kept + ".part"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(kept)));
         r = Ufs2Reader::open(keptEdit);
         QVERIFY(r.ok());
         auto tree = r.value()->loadTree(token);
@@ -382,7 +573,8 @@ private slots:
     }
 
     // The image plus the reserve must fit the drive before anything is
-    // written. The reserve is set to its largest value (64 GiB); on a drive
+    // written; an interrupted build's leftover is removed first. The reserve
+    // is set to its largest value (64 GiB); on a drive
     // with more room than that, a sparse file makes the image large enough to
     // exceed the rest, so the refusal does not depend on how full this PC is.
     void freeSpaceIsChecked()
@@ -402,12 +594,15 @@ private slots:
             if (allocated < 0 || allocated > 64 * 1024 * 1024)
                 QSKIP("this file system does not create sparse files");
         }
+        // What an interrupted build of this image left goes before the check,
+        // which must count its space as free (no file is left after it).
+        QVERIFY(mktext(PartFile::partPathFor(out), "left by a crash"));
         QVERIFY(m_store->setValue(general::keys::kFreeSpaceMarginMiB, 65536).ok());
         auto o = runJob(ufs2::kinds::kBuild, buildParams(src, out));
         m_store->reset(general::keys::kFreeSpaceMarginMiB);
         FWTEST_COMPARE_ERROR(o, ErrorCode::InsufficientSpace);
         QVERIFY2(o.error().message.startsWith(QStringLiteral("Not enough space on")), qPrintable(o.error().message));
-        QVERIFY(!QFileInfo::exists(out) && !QFileInfo::exists(out + ".part"));
+        QVERIFY(!QFileInfo::exists(out) && !QFileInfo::exists(PartFile::partPathFor(out)));
     }
 
     void deleteSourceOnlyAfterFullVerification()
@@ -523,8 +718,8 @@ private slots:
         auto o = runJob(ufs2::kinds::kEdit, QJsonObject{{"image", img}, {"operations", ops}});
         QVERIFY2(o.ok(), o.ok() ? "" : qPrintable(o.error().toLogString()));
         QCOMPARE(o->verification, Verification::Passed);
-        QCOMPARE(m_phasesSeen, (QStringList{"Reading image", "Writing image", "Verifying", "Replacing original"}));
-        QVERIFY(!QFileInfo::exists(img + ".part") && !QFileInfo::exists(img + ".old"));
+        QCOMPARE(m_phasesSeen, (QStringList{"Reading image", "Writing image", "Verifying", "Checking structure", "Verifying", "Replacing original"}));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)) && !QFileInfo::exists(img + ".old"));
         auto r = Ufs2Reader::open(img);
         QVERIFY(r.ok());
         CancellationToken token;
@@ -547,18 +742,150 @@ private slots:
         QVERIFY(!o.ok());
         FWTEST_COMPARE_ERROR(o, ErrorCode::AlreadyExists);
         QCOMPARE(sha(img), before);
-        QVERIFY(!QFileInfo::exists(img + ".part"));
-        // A cancelled edit too.
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
+        // An edit cancelled while the new image is written too (a cancel
+        // during its verification keeps the edit: editCancelDuringVerificationIsApplied).
         CancellationSource cs;
         o = runJob(ufs2::kinds::kEdit,
                    QJsonObject{{"image", img}, {"operations", QJsonArray{QJsonObject{{"op", "mkdir"}, {"path", "/x"}}}}}, {}, cs.token(),
                    [&](const ProgressSnapshot& snap) {
-                       if (snap.phaseIndex == 2)
+                       if (snap.phaseIndex == 1)
                            cs.cancel();
                    });
         QVERIFY(!o.ok() && o.error().isCancelled());
         QCOMPARE(sha(img), before);
-        QVERIFY(!QFileInfo::exists(img + ".part"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
+    }
+
+    // What the job monitor is given for every job kind here, with every
+    // verification setting: the bar never falls back, never stands full while
+    // a stage still has work to do, and has reached the end of the work when
+    // the job ends (a verification that is off, or compares names and sizes
+    // only, takes no or only a small share). When the structure check and the
+    // compare share Verifying, the check is its first half and the compare,
+    // the long part, fills the rest instead of running at "99 %".
+    void progressRunsToTheEndAndNeverFallsBack()
+    {
+        const QString src = freshGame("progress-src", 8 * 1024 * 1024);
+        const auto audited = [&](const QString& kind, const QJsonObject& params, const QVariantMap& overrides,
+                                 fwtest::ProgressAudit& audit) -> QString {
+            auto r = runJob(kind, params, overrides, {}, {}, &audit);
+            if (!r.ok())
+                return r.error().toLogString();
+            if (r->verification == Verification::Failed)
+                return r->verificationDetail;
+            return audit.problems().join(u'\n');
+        };
+        // The bar and the stage's own share when the compare began after the check.
+        const auto compareStart = [](const fwtest::ProgressAudit& audit) {
+            bool checked = false;
+            for (const ProgressSnapshot& s : audit.seen()) {
+                checked = checked || s.phase == QLatin1String("Checking structure");
+                if (checked && s.phase == QLatin1String("Verifying"))
+                    return std::pair{s.overallFraction, s.phaseProgress};
+            }
+            return std::pair{-1.0, -1.0};
+        };
+        const QVariantMap off{{general::keys::kVerifyAfterBuild, false}};
+        const QVariantMap structure{{general::keys::kVerifyMode, QStringLiteral("structure")}};
+        const QString img = m_tmp.filePath("progress/full.ffpkg");
+        for (const auto& [name, overrides] : {std::pair{"full", QVariantMap()}, std::pair{"off", off}, std::pair{"structure", structure}}) {
+            fwtest::ProgressAudit audit;
+            const QString out = m_tmp.filePath(QStringLiteral("progress/%1.ffpkg").arg(QLatin1String(name)));
+            const QString problems = audited(ufs2::kinds::kBuild, buildParams(src, out), overrides, audit);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("build, verification %1: %2").arg(QLatin1String(name), problems)));
+            if (overrides.isEmpty()) {
+                const auto [bar, stage] = compareStart(audit);
+                QVERIFY2(stage >= 0.0 && stage <= 0.51, qPrintable(QString::number(stage)));
+                QVERIFY2(bar > 0.6 && bar < 0.83, qPrintable(QString::number(bar)));
+            }
+        }
+        for (const auto& [name, overrides] : {std::pair{"full", QVariantMap()}, std::pair{"off", off}, std::pair{"structure", structure}}) {
+            fwtest::ProgressAudit audit;
+            const QJsonObject p{{"image", img}, {"output", m_tmp.filePath(QStringLiteral("progress/x-%1").arg(QLatin1String(name)))}};
+            const QString problems = audited(ufs2::kinds::kExtract, p, overrides, audit);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("extract, verification %1: %2").arg(QLatin1String(name), problems)));
+        }
+        for (const auto& [name, overrides] : {std::pair{"full", QVariantMap()}, std::pair{"structure", structure}}) {
+            fwtest::ProgressAudit withFolder, alone;
+            QString problems = audited(ufs2::kinds::kVerify, QJsonObject{{"image", img}, {"source", src}}, overrides, withFolder);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("verify, %1: %2").arg(QLatin1String(name), problems)));
+            problems = audited(ufs2::kinds::kVerify, QJsonObject{{"image", img}}, overrides, alone);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("verify alone, %1: %2").arg(QLatin1String(name), problems)));
+        }
+        for (const auto& [name, overrides] : {std::pair{"full", QVariantMap()}, std::pair{"off", off}}) {
+            const QString local = m_tmp.filePath(QStringLiteral("progress-local/%1.bin").arg(QLatin1String(name)));
+            QVERIFY(mkfile(local, 300000, 7));
+            const QJsonArray ops{QJsonObject{{"op", "add"}, {"path", QStringLiteral("/%1.bin").arg(QLatin1String(name))}, {"source", local}}};
+            fwtest::ProgressAudit audit;
+            const QString problems = audited(ufs2::kinds::kEdit, QJsonObject{{"image", img}, {"operations", ops}}, overrides, audit);
+            QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("edit, verification %1: %2").arg(QLatin1String(name), problems)));
+            if (overrides.isEmpty()) {
+                const auto [bar, stage] = compareStart(audit);
+                QVERIFY2(stage >= 0.0 && stage <= 0.51, qPrintable(QString::number(stage)));
+                QVERIFY2(bar > 0.5 && bar < 0.76, qPrintable(QString::number(bar)));
+            }
+        }
+    }
+
+    // The queue declares a job's shares for its own settings before run(),
+    // and a job that runs an image build (zstd packs) takes the build's shares
+    // from it: they are the shares the job runs with, for every verification
+    // setting. Each stage the job enters begins where those shares put it.
+    void declaredSharesAreTheOnesTheJobRuns()
+    {
+        const QString src = freshGame("shares-src");
+        const QString img = m_tmp.filePath("shares/img.ffpkg");
+        {
+            auto built = runJob(ufs2::kinds::kBuild, buildParams(src, img));
+            QVERIFY2(built.ok(), built.ok() ? "" : qPrintable(built.error().toLogString()));
+        }
+        const QVariantMap off{{general::keys::kVerifyAfterBuild, false}};
+        const QVariantMap structure{{general::keys::kVerifyMode, QStringLiteral("structure")}};
+        struct Case {
+            QString what, kind;
+            QJsonObject params;
+        };
+        int n = 0;
+        const auto next = [&](const QString& name) { return m_tmp.filePath(QStringLiteral("shares/%1-%2").arg(name).arg(++n)); };
+        for (const auto& [name, overrides] : {std::pair{"full", QVariantMap()}, std::pair{"off", off}, std::pair{"structure", structure}}) {
+            const QJsonArray ops{QJsonObject{{"op", "mkdir"}, {"path", QStringLiteral("/added-%1").arg(QLatin1String(name))}}};
+            const QString editable = next(QStringLiteral("edit")) + QStringLiteral(".ffpkg");
+            QVERIFY(QFile::copy(img, editable));
+            const std::vector<Case> cases = {
+                {QStringLiteral("build"), ufs2::kinds::kBuild, buildParams(src, next(QStringLiteral("build")) + QStringLiteral(".ffpkg"))},
+                {QStringLiteral("extract"), ufs2::kinds::kExtract, QJsonObject{{"image", img}, {"output", next(QStringLiteral("x"))}}},
+                {QStringLiteral("verify"), ufs2::kinds::kVerify, QJsonObject{{"image", img}, {"source", src}}},
+                {QStringLiteral("verify alone"), ufs2::kinds::kVerify, QJsonObject{{"image", img}}},
+                {QStringLiteral("edit"), ufs2::kinds::kEdit, QJsonObject{{"image", editable}, {"operations", ops}}},
+            };
+            for (const Case& c : cases) {
+                const QString what = QStringLiteral("%1, verification %2").arg(c.what, QLatin1String(name));
+                auto job = m_jobs.create(c.kind, c.params, overrides);
+                QVERIFY2(job.ok(), qPrintable(what));
+                auto normalized = m_store->normalizeOverrides(overrides);
+                QVERIFY(normalized.ok());
+                const QList<double> declared = (*job)->phaseWeights(m_store->snapshot(*normalized));
+                QCOMPARE(declared.size(), (*job)->phases().size());
+                double sum = 0.0;
+                for (const double d : declared)
+                    sum += d;
+                QVERIFY(sum > 0.0);
+                fwtest::ProgressAudit audit;
+                auto r = runJob(c.kind, c.params, overrides, {}, {}, &audit);
+                QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(what + u' ' + r.error().toLogString()));
+                QVERIFY2(audit.problems().isEmpty(), qPrintable(what + QStringLiteral(": ") + audit.problems().join(u'\n')));
+                const QStringList names = (*job)->phases();
+                double before = 0.0;
+                for (int i = 0; i < names.size(); ++i) {
+                    const double at = audit.fractionWhen([&](const ProgressSnapshot& s) { return s.phaseNames == names && s.phaseIndex == i; });
+                    if (at >= 0.0)
+                        QVERIFY2(std::abs(at - before / sum) < 0.005,
+                                 qPrintable(QStringLiteral("%1: stage %2 began at %3, declared %4").arg(what).arg(i).arg(at).arg(before / sum)));
+                    before += declared[i];
+                }
+            }
+        }
     }
 
     void summariesCountInTheSingular()

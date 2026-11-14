@@ -301,8 +301,14 @@ Status ImageWriter::resize(qint64 size)
 
 Status ImageWriter::close()
 {
-    FW_TRY(flush());
+    FW_TRY(flushBuffer());
+    // On the drive, not only in the system's cache, before the image is
+    // checked or replaces anything (as the exFAT and FFPKG writers do): a power
+    // cut after the final rename cannot leave a damaged image under that name.
+    FW_TRY(flushToDisk(m_file, QStringLiteral("the image")));
     m_file.close();
+    if (m_file.error() != QFileDevice::NoError)
+        return Error(ErrorCode::IoError, QStringLiteral("Could not write the image."), m_file.errorString());
     return success();
 }
 

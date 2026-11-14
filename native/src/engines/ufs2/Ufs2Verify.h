@@ -30,13 +30,20 @@ struct CompareReport {
     QStringList missing; // expected but not in the image
     QStringList extra;   // in the image but not expected
     QStringList changed; // different type, size or content
+    // The comparison was cancelled after it had already found a difference:
+    // the report is partial, and it fails (never set on a report that is ok).
+    bool cancelled = false;
 
     bool ok() const { return missing.isEmpty() && extra.isEmpty() && changed.isEmpty(); }
     QString summary(CompareDepth depth) const;
 };
 
 // Compares `image` (from its root, or `fsPath`) with `expected`. Progress
-// advances by expected bytes compared (Full) or by files (Structure).
+// advances by expected bytes compared (Full) or by one unit and one file per
+// file compared (Structure: declare the stage's total in files).
+// A cancel returns Error::cancelled(), unless a difference was found before
+// it: then the partial report is returned (CompareReport::cancelled), so the
+// work is treated as not verifying. verifyExtracted() does the same.
 Result<CompareReport> compareImage(const Ufs2Reader& image, const SourceTree& expected, CompareDepth depth,
                                    const CancellationToken& token, ProgressReporter* progress,
                                    qint64 bufferBytes = 4 * 1024 * 1024, const QString& fsPath = QStringLiteral("/"));

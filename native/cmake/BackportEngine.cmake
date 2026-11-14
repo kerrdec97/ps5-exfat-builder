@@ -38,6 +38,9 @@ if(_engine_src)
     if(NOT EXISTS "${_engine_src}")
         message(FATAL_ERROR "FW_BACKPORT_ENGINE_EXE does not exist: ${_engine_src}")
     endif()
+    # A local copy replaced in place re-runs configure, and with it the
+    # SHA-256 check below (the copy step alone would bundle any file).
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_engine_src}")
     file(SHA256 "${_engine_src}" _engine_hash)
     if(NOT _engine_hash STREQUAL FW_BACKPORT_ENGINE_SHA256)
         if(NOT FW_BACKPORT_ENGINE_EXE)

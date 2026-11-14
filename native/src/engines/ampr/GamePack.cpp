@@ -108,10 +108,15 @@ QString folderCaseFor(const std::vector<GameItem>& items, const QString& wanted)
 }
 
 // ampr_emu.index for `files` (the game's files as the game sees them; names
-// and case as stored).
-Result<bool> writeAmprIndex(const QString& folder, std::vector<pfs::AmprFile> files)
+// and case as stored). The files it leaves out because the runtime could not
+// list them are a warning in the job's log and outcome, as in the builds.
+Result<bool> writeAmprIndex(const QString& folder, std::vector<pfs::AmprFile> files, QStringList& warnings, const Log& log)
 {
     pfs::AmprToolRows rows = pfs::amprToolRows(std::move(files));
+    if (const QString w = pfs::amprLeftOutLogLine(rows.skippedRuntime); !w.isEmpty()) {
+        warnings << w;
+        log.warn(w);
+    }
     const QByteArray index = pfs::buildAmprIndex(rows.rows);
     if (index.isEmpty())
         return false;
@@ -120,10 +125,10 @@ Result<bool> writeAmprIndex(const QString& folder, std::vector<pfs::AmprFile> fi
 }
 
 // ampr_emu.index for the files of `folder` as they are on disk.
-Result<bool> writeAmprIndexForFolder(const QString& folder, const CancellationToken& token)
+Result<bool> writeAmprIndexForFolder(const QString& folder, const CancellationToken& token, QStringList& warnings, const Log& log)
 {
     FW_TRY_ASSIGN(pfs::AmprLocalScan scan, pfs::scanAmprFolder(folder, token));
-    return writeAmprIndex(folder, std::move(scan.files));
+    return writeAmprIndex(folder, std::move(scan.files), warnings, log);
 }
 
 pfs::AmprFile amprFile(const GameItem& it, qint64 size)
@@ -180,9 +185,29 @@ StagedFolder::~StagedFolder()
 {
     if (!m_owned)
         return;
-    if (!m_committed)
+    if (!m_committed && !m_kept)
         (void)removeTreeSafely(m_stage, m_parent);
     QFile::remove(m_marker);
+}
+
+Status StagedFolder::commitOrKeep(const QString& what)
+{
+    Status st = commit();
+    if (st.ok())
+        return st;
+    QString kept = uniquePath(m_final + QStringLiteral(".new"));
+    if (!renameWithoutCopying(m_stage, kept))
+        kept = m_stage; // it stays under its working name
+    m_kept = true;
+    Error e = st.error();
+    e.detail = e.detail.isEmpty() ? e.message : e.message + u' ' + e.detail;
+    // The finished work is saved: a retry of the job would only make another
+    // full copy of it, so the queue must not retry this by itself.
+    if (e.code == ErrorCode::IoError)
+        e.code = ErrorCode::PermissionDenied;
+    e.message = QStringLiteral("%1, but the folder %2 could not be used. The files were saved in %3.")
+                    .arg(what, native(m_final), native(kept));
+    return e;
 }
 
 Status StagedFolder::commit()
@@ -193,12 +218,16 @@ Status StagedFolder::commit()
     const bool existed = QFileInfo(m_final).isDir();
     if (existed && !QDir().rmdir(m_final))
         return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(native(m_final)));
-    if (!QDir().rename(m_stage, m_final)) {
+    // A virus scanner or the search indexer that still has a file of the
+    // folder open refuses the rename for a moment: it is tried again.
+    QString why;
+    if (!renameWithoutCopying(m_stage, m_final, &why)) {
         if (existed)
             QDir().mkdir(m_final);
         return Error(ErrorCode::IoError,
                      QStringLiteral("Could not rename the finished folder to %1. Close any program using it and try again.")
-                         .arg(native(m_final)));
+                         .arg(native(m_final)),
+                     why);
     }
     m_committed = true;
     return success();
@@ -454,13 +483,23 @@ Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString
     if (o.verify) {
         if (progress && o.verifyPhase >= 0)
             progress->beginPhase(o.verifyPhase, pr.storedBytes);
-        FW_TRY(verifyWrittenZstdPack(outFolder, pr, token, progress));
-        log.info(QStringLiteral("Read every pack volume back: all %1 chunks match.").arg(formatCount(qint64(pr.index.chunks.size()))));
+        // A cancel here keeps the finished folder, as with the check turned
+        // off; a pack that does not read back as written fails as always, and
+        // while the app is closing nothing is kept (the cancel stands).
+        const Status checked = verifyWrittenZstdPack(outFolder, pr, token, progress);
+        rep.verifyCancelled = !checked.ok() && checked.error().code != ErrorCode::VerificationFailed && token.keepFinishedWork();
+        if (!checked.ok() && !rep.verifyCancelled)
+            return checked.error();
+        if (rep.verifyCancelled)
+            log.warn(QStringLiteral("Checking the packs was cancelled, so they are not verified."));
+        else
+            log.info(QStringLiteral("Read every pack volume back: all %1 chunks match.").arg(formatCount(qint64(pr.index.chunks.size()))));
     }
 
     // ampr_emu.index lists every file of the game as the game sees it: the
     // loose files, the new runtime and the packed files (served from the packs),
-    // so AMPR path ids keep working.
+    // so AMPR path ids keep working. Written whatever the token says: the
+    // folder is complete only with it.
     std::vector<pfs::AmprFile> indexFiles;
     indexFiles.reserve(loose.size() + packed.size() + 1);
     for (const Loose& l : loose)
@@ -473,7 +512,7 @@ Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString
         rt.mtime = runtimeTime;
         indexFiles.push_back(amprFile(rt, runtime.size()));
     }
-    FW_TRY_ASSIGN(rep.amprIndexWritten, writeAmprIndex(outFolder, std::move(indexFiles)));
+    FW_TRY_ASSIGN(rep.amprIndexWritten, writeAmprIndex(outFolder, std::move(indexFiles), rep.warnings, log));
     rep.elapsedMs = timer.elapsed();
     return rep;
 }
@@ -557,7 +596,7 @@ Result<UnpackReport> unpackGame(std::shared_ptr<GameFiles> source, const QString
         rep.bytes += it.size;
     }
     if (hadAmprIndex && o.refreshAmprIndex && rep.kind != PackKind::None) {
-        FW_TRY_ASSIGN(rep.amprIndexWritten, writeAmprIndexForFolder(outFolder, token));
+        FW_TRY_ASSIGN(rep.amprIndexWritten, writeAmprIndexForFolder(outFolder, token, rep.warnings, log));
         if (rep.amprIndexWritten)
             log.info(QStringLiteral("Wrote a fresh ampr_emu.index for the unpacked files."));
     }

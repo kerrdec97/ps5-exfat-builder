@@ -138,9 +138,15 @@ ConsoleHero::ConsoleHero(AppContext& ctx, QWidget* parent) : QWidget(parent), m_
     nl->addWidget(m_subtitle);
     ih->addWidget(names, 1);
 
-    // Address, port, find, connect.
+    // Address, port, find, connect; the two fields are named above them (a
+    // placeholder alone is gone once something is typed).
     m_controls = new QWidget(this);
-    auto* ch = hbox(m_controls, space::sm);
+    auto* ch = new QGridLayout(m_controls);
+    ch->setContentsMargins(0, 0, 0, 0);
+    ch->setHorizontalSpacing(space::sm);
+    ch->setVerticalSpacing(space::xs);
+    m_hostLabel = label(FW_TR("Address"), TextStyle::Overline, color::fg_4, m_controls);
+    m_portLabel = label(FW_TR("Port"), TextStyle::Overline, color::fg_4, m_controls);
     m_host = textInput(QStringLiteral("192.168.1.40"), true, m_controls);
     m_host->setMinimumWidth(150);
     m_host->setMaximumWidth(200);
@@ -154,10 +160,15 @@ ConsoleHero::ConsoleHero(AppContext& ctx, QWidget* parent) : QWidget(parent), m_
     m_find = new FindConsoleButton(ctx, m_controls);
     m_connect = button(FW_TR("Connect"), ButtonVariant::Primary, QStringLiteral("plug"), m_controls);
     m_connect->setMinimumWidth(124);
-    ch->addWidget(m_host, 1);
-    ch->addWidget(m_port);
-    ch->addWidget(m_find);
-    ch->addWidget(m_connect);
+    m_hostLabel->setBuddy(m_host);
+    m_portLabel->setBuddy(m_port);
+    ch->addWidget(m_hostLabel, 0, 0);
+    ch->addWidget(m_portLabel, 0, 1);
+    ch->addWidget(m_host, 1, 0);
+    ch->addWidget(m_port, 1, 1);
+    ch->addWidget(m_find, 1, 2);
+    ch->addWidget(m_connect, 1, 3);
+    ch->setColumnStretch(0, 1);
 
     // Services.
     auto* rule = hairline(this);
@@ -196,6 +207,10 @@ void ConsoleHero::relayout()
 {
     m_grid->removeWidget(m_identity);
     m_grid->removeWidget(m_controls);
+    // Beside the address fields the line is short: a long sentence ("…
+    // search the network" in German) goes on in a second line instead of
+    // being cut. Narrow, it has the card's whole width.
+    m_subtitle->setMaxLines(m_narrow ? 1 : 2);
     if (m_narrow) {
         m_grid->addWidget(m_identity, 0, 0);
         m_grid->addWidget(m_controls, 1, 0, Qt::AlignLeft);
@@ -257,6 +272,7 @@ void ConsoleHero::setState(State state, const QString& detail)
     setButtonIcon(m_connect, on ? QStringLiteral("unplug") : busy ? QStringLiteral("close") : QStringLiteral("plug"));
     m_connect->setEnabled(true);
     update();
+    emit stateChanged(state);
 }
 
 void ConsoleHero::setSubtitle(const QString& text)
@@ -307,10 +323,11 @@ void ConsoleHero::paintEvent(QPaintEvent*)
     const bool on = m_state == State::Connected;
     blob(QPointF(r.left() + 60, r.top() + 50), 220, on ? withAlpha(color::success, 34) : withAlpha(color::accent, 60));
     blob(QPointF(r.right() - 180, r.top() - 30), 260, withAlpha(color::accent_2, 40));
-    // A large, faint console glyph on the right.
+    // A large, faint console glyph that runs off the bottom right corner,
+    // below the address fields and buttons rather than behind them.
     const int gs = int(std::min(r.height() * 1.1, 200.0));
-    p.setOpacity(0.06);
-    p.drawPixmap(QRect(int(r.right() - gs - 24), int(r.top() - gs * 0.12), gs, gs), iconPixmap(QStringLiteral("ps5"), gs, color::fg_0, devicePixelRatioF()));
+    p.setOpacity(0.04);
+    p.drawPixmap(QRect(int(r.right() - gs * 0.78), int(r.bottom() - gs * 0.7), gs, gs), iconPixmap(QStringLiteral("ps5"), gs, color::fg_0, devicePixelRatioF()));
     p.setOpacity(1);
     // The signature gradient along the top edge.
     p.fillRect(QRectF(r.left(), r.top(), r.width(), 2), accentGradient(QRectF(r.left(), r.top(), r.width(), 2), on ? 230 : 140));

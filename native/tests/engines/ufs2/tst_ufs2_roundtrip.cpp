@@ -4,6 +4,7 @@
 
 #include "Ufs2TestUtil.h"
 
+#include "engines/BenchSettings.h"
 #include "engines/ufs2/Ufs2Check.h"
 #include "engines/ufs2/Ufs2Edit.h"
 #include "engines/ufs2/Ufs2Verify.h"
@@ -13,6 +14,8 @@
 #include <QScopeGuard>
 #include <QStorageInfo>
 #include <QTemporaryDir>
+
+#include <functional>
 
 using namespace ufs2test;
 
@@ -226,6 +229,50 @@ private slots:
         st = compare(CompareDepth::Structure);
         QVERIFY(std::any_of(st.changed.begin(), st.changed.end(), [](const QString& s) { return s.startsWith(QStringLiteral("emptydir")); }));
         QVERIFY(!st.summary(CompareDepth::Structure).isEmpty());
+    }
+
+    // A compare of names and sizes counts one unit per file, so the stage it
+    // runs in (its total in files, as the jobs declare it) moves while it
+    // runs and ends full; a file of another size is counted too. The same
+    // for the check of extracted files.
+    void structureCompareMovesItsStage()
+    {
+        const QString src = m_tmp.filePath("structure-progress");
+        QVERIFY(makeGameTree(src));
+        const QString img = m_tmp.filePath("structure-progress.ffpkg");
+        QVERIFY(buildImage(src, img).ok());
+        auto r = Ufs2Reader::open(img);
+        QVERIFY(r.ok());
+        CancellationToken token;
+        QVERIFY(mktext(src + "/sce_sys/param.json", "{\"changed\":true}")); // another size than in the image
+        auto tree = scanLocalFolder(src, token);
+        QVERIFY(tree.ok());
+        QVERIFY(tree->fileCount > 3);
+        const auto stageDone = [](ProgressReporter& pr, qint64 files, const std::function<bool(ProgressReporter*)>& run) {
+            pr.setPhases({QStringLiteral("Comparing")});
+            pr.beginPhase(0, files, files, false);
+            return run(&pr) ? pr.snapshot().done : qint64(-1);
+        };
+        ProgressReporter compared(ProgressReporter::Sink{}, 0);
+        const qint64 done = stageDone(compared, tree->fileCount, [&](ProgressReporter* pr) {
+            auto cmp = compareImage(*r.value(), tree.value(), CompareDepth::Structure, token, pr);
+            return cmp.ok() && cmp->changed.size() == 1 && cmp->missing.isEmpty() && cmp->extra.isEmpty();
+        });
+        QCOMPARE(done, tree->fileCount);
+
+        auto inImage = r.value()->loadTree(token);
+        QVERIFY(inImage.ok());
+        const QString dest = m_tmp.filePath("structure-progress-x");
+        QVERIFY(QDir().mkpath(dest));
+        auto ex = extractTree(inImage.value(), dest, token, nullptr);
+        QVERIFY(ex.ok());
+        QVERIFY(mktext(dest + "/sce_sys/param.json", "{\"changed\":true}"));
+        ProgressReporter checked(ProgressReporter::Sink{}, 0);
+        const qint64 checkedDone = stageDone(checked, inImage->fileCount, [&](ProgressReporter* pr) {
+            auto v = verifyExtracted(inImage.value(), ex.value(), CompareDepth::Structure, token, pr);
+            return v.ok() && v->changed.size() == 1;
+        });
+        QCOMPARE(checkedDone, inImage->fileCount);
     }
 
     void corruptionIsDetected()
@@ -572,6 +619,11 @@ private slots:
         // the amount in the large ones: the default of 48 keeps an ordinary
         // test run light (the same code runs, on less data); for numbers
         // worth quoting set 192 or more on a machine that does nothing else.
+        // FW_BENCH_BUFFER_MIB sets the I/O buffers as performance.ioBufferMiB
+        // does in the app (the writer and the comparison run on one thread,
+        // so the mode and FW_BENCH_THREADS change nothing here).
+        const benchsettings::Performance perf = benchsettings::fromEnvironment();
+        QVERIFY2(perf.problem.isEmpty(), qPrintable(perf.problem));
         const int asked = qEnvironmentVariableIntValue("FW_UFS2_BENCH_MIB");
         const qint64 bigBytes = qint64(asked > 0 ? asked : 48) * 1024 * 1024 / 6;
         const QString src = m_tmp.filePath("bench");
@@ -583,7 +635,9 @@ private slots:
         auto tree = scanLocalFolder(src, token);
         QVERIFY(tree.ok());
         const QString img = m_tmp.filePath("bench.ffpkg");
-        Ufs2Writer w(tree.value(), WriterOptions{});
+        WriterOptions wo;
+        wo.ioBufferBytes = perf.bufferBytes;
+        Ufs2Writer w(tree.value(), wo);
         auto st = w.write(img, token, nullptr);
         QVERIFY(st.ok());
         auto r = Ufs2Reader::open(img);
@@ -594,13 +648,14 @@ private slots:
         const qint64 checkMs = t.elapsed();
         QVERIFY(c.ok() && c->ok());
         t.restart();
-        auto cmp = compareImage(*r.value(), tree.value(), CompareDepth::Full, token, nullptr);
+        auto cmp = compareImage(*r.value(), tree.value(), CompareDepth::Full, token, nullptr, perf.bufferBytes);
         const qint64 cmpMs = std::max<qint64>(1, t.elapsed());
         QVERIFY(cmp.ok() && cmp->ok());
         auto mbps = [](qint64 bytes, qint64 ms) { return double(bytes) / (1024.0 * 1024.0) / (double(std::max<qint64>(1, ms)) / 1000.0); };
-        qInfo("benchmark: %lld files, %.1f MiB; write %lld ms = %.0f MiB/s; structure check %lld ms; full compare %lld ms = %.0f MiB/s",
-              tree->fileCount, double(tree->totalBytes) / 1048576.0, st->elapsedMs, mbps(tree->totalBytes, st->elapsedMs), checkMs,
-              cmpMs, mbps(tree->totalBytes, cmpMs));
+        qInfo("benchmark: %lld files, %.1f MiB, %lld MiB buffers; write %lld ms = %.0f MiB/s; structure check %lld ms; full compare "
+              "%lld ms = %.0f MiB/s",
+              tree->fileCount, double(tree->totalBytes) / 1048576.0, perf.bufferBytes / (1024 * 1024), st->elapsedMs,
+              mbps(tree->totalBytes, st->elapsedMs), checkMs, cmpMs, mbps(tree->totalBytes, cmpMs));
     }
 };
 

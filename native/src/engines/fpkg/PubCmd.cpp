@@ -111,13 +111,14 @@ ToolLine classifyToolLine(const QString& line)
     return l;
 }
 
-ImgVerifyFindings sortImgVerifyErrors(const QStringList& errors)
+ImgVerifyFindings sortImgVerifyErrors(const QStringList& errors, bool sdkFieldsExpected)
 {
     static const char* const expected[] = {
         "Format of the SELF file is not valid",
         "SDK version must be",
         "Required System Software version < Required SDK version",
     };
+    const int knownCount = sdkFieldsExpected ? 3 : 1;
     static const char* const summary[] = {"Number of Error(s)", "Number of Warning(s)", "Result :"};
     ImgVerifyFindings f;
     for (const QString& raw : errors) {
@@ -130,8 +131,8 @@ ImgVerifyFindings sortImgVerifyErrors(const QStringList& errors)
         if (skip)
             continue;
         bool known = false;
-        for (const char* s : expected)
-            known = known || e.contains(QLatin1String(s), Qt::CaseInsensitive);
+        for (int i = 0; i < knownCount; ++i)
+            known = known || e.contains(QLatin1String(expected[i]), Qt::CaseInsensitive);
         if (known)
             ++f.expected;
         else
@@ -575,6 +576,8 @@ Result<ToolRunResult> runPubTool(const ToolRunOptions& o, const CancellationToke
                 r.warnings << l.text;
             if (o.onLine && l.kind != LineKind::Dropped)
                 o.onLine(l);
+            if (o.onAnyLine)
+                o.onAnyLine(l.raw);
         },
         [&](int steps) {
             r.barSteps = steps;
@@ -590,6 +593,8 @@ Result<ToolRunResult> runPubTool(const ToolRunOptions& o, const CancellationToke
                 r.warnings << l.text;
             if (o.onLine && l.kind != LineKind::Dropped)
                 o.onLine(l);
+            if (o.onAnyLine)
+                o.onAnyLine(l.raw);
         },
         {}, false);
 

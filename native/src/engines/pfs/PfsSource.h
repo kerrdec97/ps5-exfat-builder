@@ -54,6 +54,7 @@ struct SourcePlan {
     bool amprGenerated = false; // the plan's ampr_emu.index was built here (added, or put in place of the dump's)
     AmprIndexAction amprAction = AmprIndexAction::Off; // what was decided about it, for the log
     QStringList excludedSamples; // first few excluded paths, for the log
+    QStringList amprLeftOut; // amprGenerated: files its index leaves out (AmprIndexDecision::leftOut)
 };
 
 Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, const CancellationToken& token);

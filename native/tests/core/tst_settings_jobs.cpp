@@ -23,6 +23,9 @@
 #include <QFileInfo>
 #include <QTest>
 
+#include <atomic>
+#include <cmath>
+
 using namespace fw;
 
 namespace {
@@ -34,24 +37,56 @@ public:
     QString kind() const override { return QStringLiteral("test.fake"); }
     QString title() const override { return m_p.value(QStringLiteral("title")).toString(QStringLiteral("Fake")); }
     QStringList phases() const override { return {QStringLiteral("One"), QStringLiteral("Two")}; }
+    // Three worker threads give the first phase three quarters of the bar.
+    using Job::phaseWeights;
+    QList<double> phaseWeights(const SettingsValues& s) const override
+    {
+        return s.integer(general::keys::kWorkerThreads) == 3 ? QList<double>{3, 1} : phaseWeights();
+    }
     QJsonObject parameters() const override { return m_p; }
+    bool runsWhileHeld() const override { return m_p.value(QStringLiteral("system")).toBool(); }
     Status validate(const SettingsValues&) const override
     {
         if (m_p.value(QStringLiteral("invalid")).toBool())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Bad job"));
         return success();
     }
+    // The titles of the jobs in the order they began to run.
+    static QStringList& runOrder()
+    {
+        static QStringList order;
+        return order;
+    }
+    static QMutex& runOrderMutex()
+    {
+        static QMutex m;
+        return m;
+    }
+    // What the last cancelled job saw: 1 the app closing, 0 a Cancel, -1 none yet.
+    static std::atomic<int>& cancelledByShutdown()
+    {
+        static std::atomic<int> seen{-1};
+        return seen;
+    }
     Result<JobOutcome> run(JobContext& ctx) override
     {
+        {
+            QMutexLocker lock(&runOrderMutex());
+            runOrder() << title();
+        }
         const int steps = m_p.value(QStringLiteral("steps")).toInt(10);
         const int stepMs = m_p.value(QStringLiteral("stepMs")).toInt(5);
         ctx.progress->beginPhase(0, steps);
         for (int i = 0; i < steps; ++i) {
-            if (!ctx.token.checkpoint())
-                return Error::cancelled();
+            if (!ctx.token.checkpoint()) {
+                cancelledByShutdown() = ctx.token.isShutdown() ? 1 : 0;
+                return m_p.value(QStringLiteral("keepAfterCancel")).toBool() ? afterCancel(ctx) : Error::cancelled();
+            }
             QThread::msleep(stepMs);
             ctx.progress->advance(1);
         }
+        if (m_p.value(QStringLiteral("failAfterFirst")).toBool())
+            return Error(ErrorCode::IoError, QStringLiteral("Disk on fire"));
         ctx.progress->beginPhase(1, 1);
         ctx.progress->advance(1);
         if (m_p.value(QStringLiteral("fail")).toBool())
@@ -76,6 +111,22 @@ public:
     }
 
 private:
+    // As a job whose verification a cancel stopped (GitHub #97): it keeps its
+    // finished work when it may, runs a last check of "checkMs" on a token
+    // only closing the app stops, writes "keptFile" for the test to see, and
+    // then fails as a kept image fails that cannot take its name.
+    Result<JobOutcome> afterCancel(JobContext& ctx)
+    {
+        if (!ctx.token.keepFinishedWork())
+            return Error(ErrorCode::IoError, QStringLiteral("A read was cut short by the cancel")); // the cancel's own doing
+        if (const int ms = m_p.value(QStringLiteral("checkMs")).toInt(); ms > 0 && !ctx.token.untilShutdown().sleepFor(ms))
+            return Error::cancelled();
+        if (const QString kept = m_p.value(QStringLiteral("keptFile")).toString(); !kept.isEmpty())
+            (void)writeFileAtomic(kept, "kept");
+        return Error(ErrorCode::PermissionDenied, QStringLiteral("The image was built, but could not replace out.bin because that file "
+                                                                 "is in use. It was saved as out (new).bin."));
+    }
+
     QJsonObject m_p;
 };
 
@@ -232,9 +283,9 @@ private slots:
         auto n = store.importLegacy(legacy);
         QVERIFY(n.ok());
         QCOMPARE(calls, 1);
-        QCOMPARE(n.value(), 3); // two mapped keys and the importer's one
+        QCOMPARE(n.value(), 2); // one mapped key (shutdown_action is never taken over) and the importer's one
         QCOMPARE(QDir::cleanPath(store.value(general::keys::kDefaultOutputDir).toString()), QDir::cleanPath(b));
-        QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("sleep"));
+        QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("none"));
         QCOMPARE(store.value(general::keys::kAutoRetryCount).toInt(), 5); // clamped
     }
 
@@ -279,6 +330,49 @@ private slots:
         QVERIFY(n.ok());
         QCOMPARE(n.value(), 1);
         QCOMPARE(store.value(general::keys::kWorkerThreads).toInt(), 4);
+    }
+
+    // A list of folders is joined on import: the folders already there stay
+    // first, the imported ones that are new (compared as paths) follow.
+    void legacyImportJoinsAFolderList()
+    {
+        fwtest::Registry reg;
+        const QString key = QStringLiteral("library.folders");
+        const SettingDef* def = reg.schema->find(key);
+        QVERIFY(def && def->folderList);
+        const QString legacy = m_root.filePath(QStringLiteral("legacy-folders.json"));
+        QVERIFY(fwtest::writeTextFile(legacy, R"({"lib_folders": ["D:\\PS5\\Games", "g:/games/", "  ", "E:\\More"]})"));
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("s9/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(key, QStringList{QStringLiteral("G:\\Games")}).ok());
+        auto n = store.importLegacy(legacy);
+        QVERIFY(n.ok());
+        QCOMPARE(n.value(), 1);
+        QCOMPARE(store.value(key).toStringList(),
+                 (QStringList{QStringLiteral("G:\\Games"), QStringLiteral("D:\\PS5\\Games"), QStringLiteral("E:\\More")}));
+    }
+
+    // Reset section and Reset all leave a setting that is the user's own
+    // list (keptOnReset); reset() of that key still resets it.
+    void resetLeavesSettingsKeptOnReset()
+    {
+        fwtest::Registry reg;
+        const QString key = QStringLiteral("library.folders");
+        const SettingDef* def = reg.schema->find(key);
+        QVERIFY(def && def->keptOnReset);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("s10/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(key, QStringList{QStringLiteral("D:\\Games")}).ok());
+        QVERIFY(store.setValue(general::keys::kMaxConcurrentJobs, 2).ok());
+        QSignalSpy spy(&store, &SettingsStore::changed);
+        store.resetSection(def->section);
+        store.resetAll();
+        QCOMPARE(store.value(key).toStringList(), QStringList{QStringLiteral("D:\\Games")});
+        QVERIFY(store.isDefault(general::keys::kMaxConcurrentJobs));
+        for (const auto& call : spy)
+            QVERIFY(call.at(0).toString() != key);
+        store.reset(key);
+        QVERIFY(store.isDefault(key));
     }
 
     // ---- queue ------------------------------------------------------------
@@ -389,10 +483,35 @@ private slots:
         QVERIFY(waitForState(q, b.value(), JobState::Failed));
         QCOMPARE(q.record(a.value())->error->code, ErrorCode::IoError);
         QCOMPARE(q.record(b.value())->error->code, ErrorCode::VerificationFailed);
+        // A job that failed its verification is not complete: no 100 %.
+        const double failedAt = q.record(b.value())->progress.overallFraction;
+        QVERIFY2(failedAt > 0.9 && failedAt < 1.0, qPrintable(QString::number(failedAt)));
         // Retry creates a new job from the same parameters.
         auto again = q.retry(a.value());
         QVERIFY(again.ok());
         QVERIFY(waitForState(q, again.value(), JobState::Failed));
+    }
+
+    // The queue declares a job's stage shares for the settings the job runs
+    // with, its own overrides included, before the job begins.
+    void queueDeclaresTheSharesForTheJobsSettings()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q13/settings.json")));
+        QVERIFY(store.load().ok());
+        JobQueue q(store, reg.jobs);
+        auto weighted = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("failAfterFirst"), true}},
+                                  {{general::keys::kWorkerThreads, 3}});
+        auto plain = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("failAfterFirst"), true}});
+        QVERIFY(weighted.ok() && plain.ok());
+        QVERIFY(waitForState(q, weighted.value(), JobState::Failed));
+        QVERIFY(waitForState(q, plain.value(), JobState::Failed));
+        // Both stopped at the end of their first phase.
+        const double w = q.record(weighted.value())->progress.overallFraction;
+        const double p = q.record(plain.value())->progress.overallFraction;
+        QVERIFY2(std::abs(w - 0.75) < 0.01, qPrintable(QString::number(w)));
+        QVERIFY2(std::abs(p - 0.5) < 0.01, qPrintable(QString::number(p)));
     }
 
     void cancelRunningAndQueuedJobs()
@@ -410,6 +529,66 @@ private slots:
         QCOMPARE(q.record(waiting.value())->state, JobState::Cancelled);
         q.cancel(slow.value());
         QVERIFY(waitForState(q, slow.value(), JobState::Cancelled, 5000));
+    }
+
+    // A job that keeps its finished work after a cancel (GitHub #97) and then
+    // cannot give it its name: the queue reports that error, which says where
+    // the work is, instead of a plain "Cancelled".
+    void aKeptJobsLaterErrorIsReported()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q4k/settings.json")));
+        QVERIFY(store.load().ok());
+        JobQueue q(store, reg.jobs);
+        auto kept = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("steps"), 1000}, {QStringLiteral("stepMs"), 10},
+                                                            {QStringLiteral("keepAfterCancel"), true}});
+        QVERIFY(kept.ok());
+        QVERIFY(waitForState(q, kept.value(), JobState::Running));
+        q.cancel(kept.value());
+        QVERIFY(waitForState(q, kept.value(), JobState::Failed, 5000));
+        const auto rec = q.record(kept.value());
+        QVERIFY(rec && rec->error);
+        QCOMPARE(rec->error->code, ErrorCode::PermissionDenied);
+        QVERIFY2(rec->error->message.contains(QStringLiteral("out (new).bin")), qPrintable(rec->error->message));
+    }
+
+    // Closing the app keeps nothing a job has not finished: a job that would
+    // keep its work after a Cancel does not, and one the user cancelled that
+    // runs its last check on the work it keeps is stopped there, so the app
+    // does not wait for that check to end.
+    void closingTheAppKeepsNothingUnfinished()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q4s/settings.json")));
+        QVERIFY(store.load().ok());
+        const QString keptA = m_root.filePath(QStringLiteral("q4s/a.kept")), keptB = m_root.filePath(QStringLiteral("q4s/b.kept"));
+        {
+            JobQueue q(store, reg.jobs);
+            auto a = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("steps"), 1000}, {QStringLiteral("stepMs"), 10},
+                                                             {QStringLiteral("keepAfterCancel"), true}, {QStringLiteral("keptFile"), keptA}});
+            QVERIFY(a.ok());
+            QVERIFY(waitForState(q, a.value(), JobState::Running));
+            QVERIFY(q.shutdown(5000));
+        }
+        QVERIFY(!QFileInfo::exists(keptA));
+        {
+            JobQueue q(store, reg.jobs);
+            auto b = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("steps"), 1000}, {QStringLiteral("stepMs"), 10},
+                                                             {QStringLiteral("keepAfterCancel"), true}, {QStringLiteral("checkMs"), 60000},
+                                                             {QStringLiteral("keptFile"), keptB}});
+            QVERIFY(b.ok());
+            QVERIFY(waitForState(q, b.value(), JobState::Running));
+            q.cancel(b.value());
+            QCOMPARE(q.record(b.value())->state, JobState::Cancelling);
+            QTest::qWait(200); // the job is in its last check
+            QElapsedTimer closing;
+            closing.start();
+            QVERIFY(q.shutdown(20000));
+            QVERIFY2(closing.elapsed() < 10000, qPrintable(QString::number(closing.elapsed())));
+        }
+        QVERIFY(!QFileInfo::exists(keptB));
     }
 
     void pauseAndResume()
@@ -686,6 +865,32 @@ private slots:
         QVERIFY(waitForState(q2, recs[1].id, JobState::Succeeded));
     }
 
+    // A running job learns why it was stopped: by the user's Cancel, or by
+    // the app closing. Only a Cancel keeps work that was being verified; when
+    // the app closes the queue cannot record what the job does any more, so
+    // the job discards it and comes back as interrupted.
+    void closingTheAppIsToldApartFromACancel()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q14/settings.json")));
+        QVERIFY(store.load().ok());
+        const QJsonObject longJob{{QStringLiteral("steps"), 1000}, {QStringLiteral("stepMs"), 10}};
+        JobQueue q(store, reg.jobs);
+        FakeJob::cancelledByShutdown() = -1;
+        auto cancelled = q.enqueue(QStringLiteral("test.fake"), longJob);
+        QVERIFY(cancelled.ok());
+        QVERIFY(waitForState(q, cancelled.value(), JobState::Running));
+        q.cancel(cancelled.value());
+        QVERIFY(waitForState(q, cancelled.value(), JobState::Cancelled));
+        QCOMPARE(FakeJob::cancelledByShutdown().load(), 0);
+        auto closed = q.enqueue(QStringLiteral("test.fake"), longJob);
+        QVERIFY(closed.ok());
+        QVERIFY(waitForState(q, closed.value(), JobState::Running));
+        QVERIFY(q.shutdown(5000));
+        QCOMPARE(FakeJob::cancelledByShutdown().load(), 1);
+    }
+
     // A waiting job that no longer validates (its drive is unplugged) is kept
     // as Interrupted with the reason, not dropped from the queue.
     void restoredJobThatCannotRunIsKept()
@@ -718,7 +923,8 @@ private slots:
     }
 
     // A queue file that cannot be read is reported and set aside, not
-    // silently replaced by an empty queue at the next save.
+    // silently replaced by an empty queue at the next save. One set aside
+    // earlier is kept too: a second damaged file gets a name of its own.
     void damagedQueueFileIsSetAside()
     {
         fwtest::Registry reg;
@@ -726,20 +932,26 @@ private slots:
         const QString queueFile = m_root.filePath(QStringLiteral("q13/queue.json"));
         SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q13/settings.json")));
         QVERIFY(store.load().ok());
-        for (const QByteArray& damaged : {QByteArray("{ \"jobs\": [ {\"kind\": \"test.fake\""), QByteArray("[1, 2]"),
-                                          QByteArray("{\"jobs\": \"none\"}")}) {
+        const QList<QByteArray> damagedFiles{QByteArray("{ \"jobs\": [ {\"kind\": \"test.fake\""), QByteArray("[1, 2]"),
+                                             QByteArray("{\"jobs\": \"none\"}")};
+        const QStringList asideNames{QStringLiteral("queue.json.damaged"), QStringLiteral("queue.json (2).damaged"),
+                                     QStringLiteral("queue.json (3).damaged")};
+        for (qsizetype i = 0; i < damagedFiles.size(); ++i) {
+            const QByteArray& damaged = damagedFiles.at(i);
             QVERIFY(fwtest::writeTextFile(queueFile, damaged));
             JobQueue q(store, reg.jobs);
             q.setPersistencePath(queueFile);
             const Status st = q.restoreQueue();
             QVERIFY(!st.ok());
             QCOMPARE(st.error().code, ErrorCode::CorruptData);
-            QVERIFY2(st.error().message.contains(QStringLiteral("queue.json.damaged")), qPrintable(st.error().message));
+            QVERIFY2(st.error().message.contains(asideNames.at(i)), qPrintable(st.error().message));
             QVERIFY(q.records().empty());
             QVERIFY(!QFile::exists(queueFile));
-            QFile aside(queueFile + QStringLiteral(".damaged"));
-            QVERIFY(aside.open(QIODevice::ReadOnly));
-            QCOMPARE(aside.readAll(), damaged);
+            for (qsizetype k = 0; k <= i; ++k) {
+                QFile aside(QFileInfo(queueFile).dir().filePath(asideNames.at(k)));
+                QVERIFY(aside.open(QIODevice::ReadOnly));
+                QCOMPARE(aside.readAll(), damagedFiles.at(k));
+            }
             // The queue works on from empty.
             QVERIFY(q.enqueue(QStringLiteral("test.fake"), {}).ok());
             QVERIFY(QFile::exists(queueFile));
@@ -838,6 +1050,249 @@ private slots:
         QCOMPARE(finished.count(), 1);
         QCOMPARE(finished.first().at(0).toInt(), 1);
         QCOMPARE(w.lastRunJobIds(), QStringList{a.value()});
+    }
+
+    // GitHub #96: a job that runs beside the queue (the update check a few
+    // seconds after start, a problem report) is not a run of the user's: alone
+    // it starts no countdown and no "queue finished", and in a run it is not
+    // counted.
+    void completionWatcherLeavesOutJobsBesideTheQueue()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q16/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep")).ok());
+        JobQueue q(store, reg.jobs);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        QSignalSpy finished(&w, &QueueCompletionWatcher::queueFinished);
+        auto check = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Update check")}, {QStringLiteral("system"), true}});
+        QVERIFY(check.ok());
+        QVERIFY(q.record(check.value())->runsWhileHeld);
+        QVERIFY(waitForState(q, check.value(), JobState::Succeeded));
+        QTest::qWait(100);
+        QCOMPARE(finished.count(), 0);
+        QCOMPARE(due.count(), 0);
+        // A failed one does not block the action of a run either.
+        auto user = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Build")}, {QStringLiteral("steps"), 30}});
+        auto failing = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("system"), true}, {QStringLiteral("fail"), true}});
+        QVERIFY(user.ok() && failing.ok());
+        QVERIFY(QTest::qWaitFor([&] { return due.count() == 1; }, 5000));
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(finished.first().at(0).toInt(), 1);
+        QCOMPARE(finished.first().at(1).toInt(), 0);
+        QCOMPARE(w.lastRunJobIds(), QStringList{user.value()});
+    }
+
+    // A queue restored at start-up never arms the action: not the restore,
+    // not taking its jobs out, not cancelling a waiting one, also when the
+    // watcher was there before the restore. A restored job that the queue
+    // then runs in this session is part of that session's run.
+    void completionWatcherIgnoresARestoredQueue()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        const QString queueFile = m_root.filePath(QStringLiteral("q17/queue.json"));
+        const auto saved = [](const QString& title, JobState state) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("test.fake")},
+                               {QStringLiteral("title"), title},
+                               {QStringLiteral("state"), jobStateName(state)},
+                               {QStringLiteral("params"), QJsonObject{{QStringLiteral("title"), title}}}};
+        };
+        QVERIFY(fwtest::writeTextFile(queueFile, QJsonDocument(QJsonObject{{QStringLiteral("version"), 1},
+                                                                           {QStringLiteral("jobs"), QJsonArray{saved(QStringLiteral("Was running"), JobState::Running),
+                                                                                                               saved(QStringLiteral("Interrupted before"), JobState::Interrupted),
+                                                                                                               saved(QStringLiteral("Waiting 1"), JobState::Queued),
+                                                                                                               saved(QStringLiteral("Waiting 2"), JobState::Queued)}}})
+                                                     .toJson()));
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q17/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("shutdown")).ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueOnlyIfOk, false).ok()); // the widest rule: any ended job would count
+        JobQueue q(store, reg.jobs);
+        q.setPersistencePath(queueFile);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        QSignalSpy finished(&w, &QueueCompletionWatcher::queueFinished);
+        QVERIFY(q.restoreQueue().ok());
+        QVERIFY(q.isHeld());
+        QString waiting1, waiting2;
+        QStringList interrupted;
+        for (const JobRecord& r : q.records()) {
+            if (r.title == QLatin1String("Waiting 1"))
+                waiting1 = r.id;
+            else if (r.title == QLatin1String("Waiting 2"))
+                waiting2 = r.id;
+            else if (r.state == JobState::Interrupted)
+                interrupted << r.id;
+        }
+        QCOMPARE(interrupted.size(), 2);
+        QTest::qWait(100);
+        q.cancel(waiting1);
+        for (const QString& id : interrupted)
+            QVERIFY(q.remove(id));
+        QTest::qWait(100);
+        QCOMPARE(due.count(), 0);
+        QCOMPARE(finished.count(), 0);
+        // "Start queue": the restored job runs now, in this session.
+        q.holdQueue(false);
+        QVERIFY(waitForState(q, waiting2, JobState::Succeeded));
+        QVERIFY(QTest::qWaitFor([&] { return due.count() == 1; }, 5000));
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(finished.first().at(0).toInt(), 1);
+        QCOMPARE(finished.first().at(2).toInt(), 1); // the one cancelled while it waited
+        QCOMPARE(w.lastRunJobIds(), (QStringList{waiting1, waiting2}));
+    }
+
+    // A job that failed, waits for its automatic retry and is cancelled then
+    // had run: with "Only if every job succeeded" the computer stays on.
+    void aJobCancelledWhileWaitingToRetryCountsAsStarted()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q18/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep")).ok());
+        QVERIFY(store.setValue(general::keys::kAutoRetryCount, 1).ok());
+        QVERIFY(store.setValue(general::keys::kAutoRetryDelay, 600).ok());
+        JobQueue q(store, reg.jobs);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        QSignalSpy finished(&w, &QueueCompletionWatcher::queueFinished);
+        auto good = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Good")}});
+        auto flaky = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Flaky q18")}, {QStringLiteral("failTimes"), 5}});
+        QVERIFY(good.ok() && flaky.ok());
+        QVERIFY(QTest::qWaitFor([&] {
+            auto r = q.record(flaky.value());
+            return r && r->isWaitingToRetry();
+        }, 5000));
+        QVERIFY(!q.record(flaky.value())->started.isValid()); // reset for the retry
+        q.cancel(flaky.value());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 1; }, 5000));
+        QCOMPARE(finished.first().at(0).toInt(), 1);
+        QCOMPARE(finished.first().at(2).toInt(), 1);
+        QCOMPARE(due.count(), 0);
+    }
+
+    // Retry on a job interrupted in an earlier session: the retry is the job
+    // now, and the old record does not come back at the next start.
+    void aRetriedInterruptedJobIsNotRestoredAgain()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        const QString queueFile = m_root.filePath(QStringLiteral("q19/queue.json"));
+        QVERIFY(fwtest::writeTextFile(queueFile, QJsonDocument(QJsonObject{{QStringLiteral("version"), 1},
+                                                                           {QStringLiteral("jobs"), QJsonArray{QJsonObject{
+                                                                                                        {QStringLiteral("kind"), QStringLiteral("test.fake")},
+                                                                                                        {QStringLiteral("title"), QStringLiteral("Cut off")},
+                                                                                                        {QStringLiteral("state"), jobStateName(JobState::Running)},
+                                                                                                        {QStringLiteral("params"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Cut off")}}}}}}})
+                                                     .toJson()));
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q19/settings.json")));
+        QVERIFY(store.load().ok());
+        const auto savedStates = [&] {
+            QStringList states;
+            QFile f(queueFile);
+            if (f.open(QIODevice::ReadOnly))
+                for (const QJsonValue& v : QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("jobs")).toArray())
+                    states << v.toObject().value(QStringLiteral("state")).toString();
+            return states;
+        };
+        {
+            JobQueue q(store, reg.jobs);
+            q.setPersistencePath(queueFile);
+            QVERIFY(q.restoreQueue().ok());
+            QCOMPARE(int(q.records().size()), 1);
+            const JobRecord old = q.records().front();
+            QCOMPARE(old.state, JobState::Interrupted);
+            QCOMPARE(savedStates(), QStringList{jobStateName(JobState::Interrupted)});
+            auto again = q.retry(old.id);
+            QVERIFY(again.ok());
+            QVERIFY(waitForState(q, again.value(), JobState::Succeeded));
+            QCOMPARE(q.record(old.id)->state, JobState::Interrupted); // still listed in this session
+            QVERIFY(savedStates().isEmpty());
+        }
+        JobQueue q2(store, reg.jobs);
+        q2.setPersistencePath(queueFile);
+        QVERIFY(q2.restoreQueue().ok());
+        QVERIFY(q2.records().empty());
+    }
+
+    // "Build 3 images" with the queue idle or paused: the jobs run in the
+    // order given, ahead of the other waiting jobs, which keep waiting.
+    void startNowRunsSeveralJobsInTheirOrder()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q20/settings.json")));
+        QVERIFY(store.load().ok());
+        JobQueue q(store, reg.jobs);
+        q.holdQueue(true);
+        auto other = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Other q20")}});
+        QStringList batch;
+        for (const QString& t : {QStringLiteral("A q20"), QStringLiteral("B q20"), QStringLiteral("C q20")}) {
+            auto r = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), t}});
+            QVERIFY(r.ok());
+            batch << r.value();
+        }
+        {
+            QMutexLocker lock(&FakeJob::runOrderMutex());
+            FakeJob::runOrder().clear();
+        }
+        q.startNow(batch);
+        for (const QString& id : batch)
+            QVERIFY(waitForState(q, id, JobState::Succeeded));
+        QStringList order;
+        {
+            QMutexLocker lock(&FakeJob::runOrderMutex());
+            order = FakeJob::runOrder();
+        }
+        QCOMPARE(order, (QStringList{QStringLiteral("A q20"), QStringLiteral("B q20"), QStringLiteral("C q20")}));
+        QCOMPARE(q.record(other.value())->state, JobState::Queued);
+        q.holdQueue(false);
+        QVERIFY(waitForState(q, other.value(), JobState::Succeeded));
+    }
+
+    // Cancel while paused: the job leaves Paused for Cancelling and ends
+    // Cancelled once, in the history too, and it counts as a job that had run.
+    void cancelWhilePausedEndsCancelled()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q21/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep")).ok());
+        JobHistory history(m_root.filePath(QStringLiteral("q21/history.jsonl")));
+        JobQueue q(store, reg.jobs);
+        q.setHistory(&history);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        QSignalSpy finished(&w, &QueueCompletionWatcher::queueFinished);
+        QSignalSpy ended(&q, &JobQueue::jobFinished);
+        auto ok = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Before q21")}});
+        auto id = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Paused q21")}, {QStringLiteral("steps"), 1000}, {QStringLiteral("stepMs"), 10}});
+        QVERIFY(ok.ok() && id.ok());
+        QVERIFY(waitForState(q, id.value(), JobState::Running));
+        q.pauseJob(id.value());
+        QCOMPARE(q.record(id.value())->state, JobState::Paused);
+        q.cancel(id.value());
+        QCOMPARE(q.record(id.value())->state, JobState::Cancelling);
+        q.resumeJob(id.value()); // no way back from Cancelling
+        QCOMPARE(q.record(id.value())->state, JobState::Cancelling);
+        q.pauseJob(id.value());
+        QCOMPARE(q.record(id.value())->state, JobState::Cancelling);
+        QVERIFY(waitForState(q, id.value(), JobState::Cancelled, 5000));
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 1; }, 5000));
+        int endedPaused = 0;
+        for (const QList<QVariant>& args : ended)
+            endedPaused += args.at(0).toString() == id.value() ? 1 : 0;
+        QCOMPARE(endedPaused, 1);
+        int inHistory = 0;
+        for (const HistoryEntry& h : history.recent(50))
+            inHistory += h.id == id.value() && h.state == jobStateName(JobState::Cancelled) ? 1 : 0;
+        QCOMPARE(inHistory, 1);
+        QCOMPARE(due.count(), 0); // it had started: "Only if every job succeeded" keeps the computer on
     }
 
     // "Clear history" that cannot remove the file keeps showing the history:

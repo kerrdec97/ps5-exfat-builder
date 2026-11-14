@@ -20,42 +20,83 @@
 namespace fw::crash {
 
 namespace {
-std::wstring g_folder; // pre-computed: no allocation inside the handler
+// Pre-computed: no allocation inside the handler. The folder in its
+// long-path form plus "\crash-": the names work in a folder of any length
+// (the app is not long-path aware, and folder + name may pass MAX_PATH where
+// the folder alone does not).
+std::wstring g_prefix;
 
 #ifdef Q_OS_WIN
-LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
+// Static, not on the stack: a stack overflow may be what crashed.
+constexpr size_t kNameChars = 32768 + 64;
+wchar_t g_dmp[kNameChars];
+wchar_t g_txt[kNameChars];
+volatile LONG g_state = 0; // 0 = no report yet, 1 = being written, 2 = written
+
+std::wstring longPrefix(const QString& folder)
+{
+    QString native = QDir::toNativeSeparators(QDir::cleanPath(QFileInfo(folder).absoluteFilePath()));
+    while (native.endsWith(u'\\'))
+        native.chop(1);
+    const QString longForm = QStringLiteral("\\\\?\\");
+    if (!native.startsWith(longForm))
+        native = native.startsWith(QStringLiteral("\\\\")) ? QStringLiteral("\\\\?\\UNC\\") + native.mid(2) : longForm + native;
+    return (native + QStringLiteral("\\crash-")).toStdWString();
+}
+
+// Writes the minidump and the text report; returns how many were written.
+int writeReport(EXCEPTION_POINTERS* info)
 {
     // No heap allocation and no locks in here: the crash may have happened
     // inside the allocator or while a log sink held its mutex.
+    if (g_prefix.empty())
+        return 0;
     SYSTEMTIME st;
     GetLocalTime(&st);
-    wchar_t dmp[1024], txt[1024];
     const auto name = [&](wchar_t* out, const wchar_t* ext) {
-        swprintf(out, 1024, L"%ls\\crash-%04u%02u%02u-%02u%02u%02u%ls", g_folder.c_str(), st.wYear, st.wMonth, st.wDay,
-                 st.wHour, st.wMinute, st.wSecond, ext);
+        return swprintf(out, kNameChars, L"%ls%04u%02u%02u-%02u%02u%02u%ls", g_prefix.c_str(), st.wYear, st.wMonth, st.wDay,
+                        st.wHour, st.wMinute, st.wSecond, ext) > 0;
     };
-    name(dmp, L".dmp");
-    name(txt, L".txt");
-    HANDLE f = CreateFileW(dmp, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (!name(g_dmp, L".dmp") || !name(g_txt, L".txt"))
+        return 0; // a folder longer than Windows allows
+    int written = 0;
+    HANDLE f = CreateFileW(g_dmp, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION mei{};
         mei.ThreadId = GetCurrentThreadId();
         mei.ExceptionPointers = info;
         mei.ClientPointers = FALSE;
-        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), f,
-                          MINIDUMP_TYPE(MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory), &mei, nullptr, nullptr);
+        if (MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), f,
+                              MINIDUMP_TYPE(MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory), info ? &mei : nullptr,
+                              nullptr, nullptr))
+            ++written;
         CloseHandle(f);
     }
-    HANDLE t = CreateFileW(txt, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE t = CreateFileW(g_txt, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (t != INVALID_HANDLE_VALUE) {
         char text[256];
         const int n = std::snprintf(text, sizeof(text), "%s %s crashed: exception 0x%08lX at %p\r\n", build::kProductName,
                                     build::kVersion, info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0ul,
                                     info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : nullptr);
-        DWORD written = 0;
-        WriteFile(t, text, DWORD(n > 0 ? n : 0), &written, nullptr);
+        DWORD bytes = 0;
+        if (WriteFile(t, text, DWORD(n > 0 ? n : 0), &bytes, nullptr))
+            ++written;
         CloseHandle(t);
     }
+    return written;
+}
+
+LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
+{
+    // One report: a second thread that crashes meanwhile waits for the first
+    // one's files (the name buffers are shared), then lets Windows end it.
+    if (InterlockedCompareExchange(&g_state, 1, 0) != 0) {
+        for (int i = 0; i < 600 && g_state == 1; ++i)
+            Sleep(100);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    writeReport(info);
+    InterlockedExchange(&g_state, 2);
     // The next start finds the report and offers it (MainWindow's crash banner).
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -81,10 +122,23 @@ void onTerminate()
 void install(const QString& crashFolder)
 {
     QDir().mkpath(crashFolder);
-    g_folder = QDir::toNativeSeparators(crashFolder).toStdWString();
+#ifdef Q_OS_WIN
+    g_prefix = longPrefix(crashFolder);
+#else
+    g_prefix = QDir::toNativeSeparators(crashFolder).toStdWString();
+#endif
     std::set_terminate(onTerminate);
 #ifdef Q_OS_WIN
     SetUnhandledExceptionFilter(unhandledFilter);
+#endif
+}
+
+int writeReportForTesting()
+{
+#ifdef Q_OS_WIN
+    return writeReport(nullptr);
+#else
+    return 0;
 #endif
 }
 

@@ -3,6 +3,8 @@
 
 #include "connect/update/Module.h"
 #include "core/BuildInfo.h"
+#include "core/FileUtil.h"
+#include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Settings.h"
 #include "jobs/JobQueue.h"
@@ -12,9 +14,11 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QScopeGuard>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -383,7 +387,45 @@ private slots:
         QFile f(dl->outcome->outputs.first());
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex(), hash);
-        QVERIFY(!QFile::exists(dl->outcome->outputs.first() + QStringLiteral(".part")));
+        QVERIFY(!QFile::exists(PartFile::partPathFor(dl->outcome->outputs.first())));
+    }
+
+    // The cache folder is the app's own: "<program>.part" and
+    // "<program>.fw.part" there are what an interrupted download left (a
+    // crash, a power cut, the app being ended), so they go before the next
+    // download and do not stay for good. Other files in the folder stay.
+    void downloadRemovesItsOwnInterruptedPartFiles()
+    {
+        clearUpdatesDir();
+        MiniHttp http;
+        QVERIFY(http.listen());
+        const QString version = QStringLiteral("9.0.3");
+        const QByteArray payload = programBytes('o');
+        const QByteArray hash = QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex();
+        http.routes[QStringLiteral("/latest")] = {200, v5Release(http.base(), version)};
+        http.routes[assetPath(version, kProgram)] = {200, payload};
+        http.routes[assetPath(version, QStringLiteral("SHA256SUMS.txt"))] = {200, sumsLine(payload)};
+        const QString finalPath = QDir(updatesDir()).filePath(kProgram);
+        QVERIFY(fwtest::writeTextFile(finalPath + QStringLiteral(".part"), "half of an interrupted download"));
+        QVERIFY(fwtest::writeTextFile(finalPath + QStringLiteral(".fw.part"), "another one"));
+        QVERIFY(fwtest::writeTextFile(QDir(updatesDir()).filePath(QStringLiteral("notes.txt")), "other"));
+        auto ring = std::make_shared<RingBufferSink>(1000);
+        Logger::instance().addSink(ring);
+        const auto detach = qScopeGuard([&] { Logger::instance().removeSink(ring); });
+
+        Env env(m_root.filePath(QStringLiteral("e5")));
+        auto check = env.run(update::kCheckJob, {{QStringLiteral("apiUrl"), http.base() + QStringLiteral("/latest")}});
+        QVERIFY(check && check->state == JobState::Succeeded);
+        auto dl = env.run(update::kDownloadJob, {{QStringLiteral("release"), check->outcome->details}});
+        QVERIFY(dl);
+        QVERIFY2(dl->state == JobState::Succeeded, dl->error ? qPrintable(dl->error->toLogString()) : "");
+        QFile f(finalPath);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex(), hash);
+        QCOMPARE(QDir(updatesDir()).entryList(QDir::Files, QDir::Name), (QStringList{kProgram, QStringLiteral("notes.txt")}));
+        // No warning to delete a file by hand.
+        for (const LogRecord& r : ring->records())
+            QVERIFY2(!(r.level == LogLevel::Warning && r.message.contains(QStringLiteral(".part"))), qPrintable(r.message));
     }
 
     void checkReportsNewerReleaseWithoutDownload()
@@ -425,7 +467,7 @@ private slots:
         const QJsonObject rel = check->outcome->details;
         const QString sumsPath = assetPath(version, QStringLiteral("SHA256SUMS.txt"));
         const QString finalPath = QDir(updatesDir()).filePath(kProgram);
-        auto nothingLeft = [&] { return !QFile::exists(finalPath) && !QFile::exists(finalPath + QStringLiteral(".part")); };
+        auto nothingLeft = [&] { return !QFile::exists(finalPath) && !QFile::exists(PartFile::partPathFor(finalPath)); };
 
         // No checksum file → refused.
         auto noSums = env.run(update::kDownloadJob, {{QStringLiteral("release"), rel}});
@@ -563,7 +605,7 @@ private slots:
         QCOMPARE(away->state, JobState::Failed);
         QCOMPARE(away->error->code, ErrorCode::VerificationFailed);
         QVERIFY(!QFile::exists(QDir(updatesDir()).filePath(kProgram)));
-        QVERIFY(!QFile::exists(QDir(updatesDir()).filePath(kProgram + QStringLiteral(".part"))));
+        QVERIFY(!QFile::exists(PartFile::partPathFor(QDir(updatesDir()).filePath(kProgram))));
     }
 
     void olderOrMissingReleaseIsUpToDate()

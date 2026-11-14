@@ -9,6 +9,7 @@
 #include "engines/ampr/Module.h"
 #include "engines/exfat/ExfatJobs.h"
 #include "engines/exfat/Module.h"
+#include "engines/exfat/PlatformFs.h"
 #include "engines/exfat/SourceScan.h"
 #include "engines/fpkg/BackportUpdate.h"
 #include "engines/fpkg/DumpRules.h"
@@ -59,36 +60,80 @@ private:
 };
 
 // Forwards a child job's progress into the parent's phases offset by `offset`.
+// The parent's phase list (`parentPhases`) holds the child's phases after its
+// own; a child's step named like one of them is not shown as a step.
 class ChildProgress {
 public:
-    ChildProgress(ProgressReporter* parent, int offset)
-        : m_parent(parent), m_offset(offset),
+    ChildProgress(ProgressReporter* parent, int offset, QStringList parentPhases)
+        : m_parent(parent), m_offset(offset), m_parentPhases(std::move(parentPhases)),
           m_reporter([this](const ProgressSnapshot& s) { forward(s); }, 100)
     {
     }
     ProgressReporter* reporter() { return &m_reporter; }
 
 private:
+    // The child's reporter reports every phase and step it enters at once
+    // (with nothing done yet), so the parent enters each one in turn: a
+    // phase the child enters again, or a step inside one, goes on from where
+    // the parent's stage stood instead of finding it full.
     void forward(const ProgressSnapshot& s)
     {
         std::lock_guard lock(m_mutex);
-        if (s.phaseIndex != m_phase) {
-            m_phase = s.phaseIndex;
+        // The child's reports can arrive out of order from its worker
+        // threads: one taken before the last forwarded is overtaken (a lower
+        // count in it is no phase entered again).
+        if (s.sequence != 0 && s.sequence <= m_sequence)
+            return;
+        m_sequence = s.sequence;
+        if (s.phaseNames != m_names) { // the child declared other phases: it starts over
+            m_names = s.phaseNames;
+            m_phase = -1;
+            m_step.clear();
+            m_total = -1;
+            m_done = 0;
+        } else if (s.phaseIndex < m_phase) {
+            return; // a report that was overtaken by the next phase's
+        }
+        // A step (beginStep) shows under its own name inside the child's phase.
+        const QString step = s.phase != s.phaseNames.value(s.phaseIndex) && !m_parentPhases.contains(s.phase) ? s.phase : QString();
+        const bool entered = s.phaseIndex != m_phase || step != m_step;
+        const bool again = !entered && s.done < m_done; // the child's phase entered again
+        if (entered && !step.isEmpty()) {
+            if (s.phaseIndex != m_phase)
+                m_parent->beginPhase(m_offset + s.phaseIndex, 0, 0, s.unitIsBytes);
+            m_parent->beginStep(step, s.total, s.filesTotal, s.unitIsBytes);
+            m_files = 0;
+        } else if (entered || again || (s.total != m_total && s.done == 0)) {
             m_parent->beginPhase(m_offset + s.phaseIndex, s.total, s.filesTotal, s.unitIsBytes);
+            m_files = 0;
         } else if (s.total != m_total) {
             m_parent->setTotal(s.total);
         }
+        m_phase = s.phaseIndex;
+        m_step = step;
         m_total = s.total;
+        m_done = s.done;
         m_parent->setDone(s.done);
+        // The files done, as the parent counts them: what was added since.
+        if (s.filesDone > m_files) {
+            m_parent->advanceFiles(s.filesDone - m_files);
+            m_files = s.filesDone;
+        }
         if (!s.currentItem.isEmpty())
             m_parent->setCurrentItem(s.currentItem);
     }
 
     ProgressReporter* m_parent;
     int m_offset;
+    QStringList m_parentPhases;
     std::mutex m_mutex;
+    QStringList m_names; // the child's phases
     int m_phase = -1;
+    QString m_step;
     qint64 m_total = -1;
+    qint64 m_done = 0;
+    qint64 m_files = 0;   // files done forwarded in the current phase or step
+    quint64 m_sequence = 0;
     ProgressReporter m_reporter;
 };
 
@@ -170,18 +215,14 @@ public:
     {
         FW_TRY(validate(ctx.settings));
         const QStringList ph = phases();
-        QList<double> weights = {0.02, 0.5, 0.06};
-        for (int i = 3; i < ph.size(); ++i)
-            weights << 0.42 / std::max<qsizetype>(1, ph.size() - 3);
-        ctx.progress->setPhases(ph, weights);
+        ctx.progress->setPhases(ph, phaseWeights(ctx.settings));
         ctx.progress->beginPhase(0, 0);
 
         QString src = QFileInfo(source()).absoluteFilePath();
         if (archive::isZipSource(src)) {
             FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
-            // Unpacking reports as a phase of its own, which replaced the job's.
-            ctx.progress->setPhases(ph, weights);
+            // The unpacking was a step inside Preparing; Preparing goes on from there.
             ctx.progress->beginPhase(0, 0);
         }
         const QString outDir = QFileInfo(output()).absolutePath();
@@ -215,6 +256,10 @@ public:
                                                                             : QStringLiteral("everything except system files"),
                               format(), native(work)));
         FW_TRY_ASSIGN(ampr::PackGameReport rep, ampr::packGame(files, staged, o, ctx.token, ctx.progress, ctx.log));
+        // A cancel while the packs are checked stops the job: the image, the
+        // job's real work, is not made yet.
+        if (ctx.token.isCancelled())
+            return Error::cancelled();
         for (const QString& l : rep.looseSummary)
             ctx.log.info(QStringLiteral("Kept loose: %1").arg(l));
         if (!rep.droppedFiles.isEmpty())
@@ -232,13 +277,15 @@ public:
         // its files (that would drop the packed files), no per-file PFS
         // compression (the volumes keep their exact sizes), and nothing deleted.
         sub.settings = childSettings(ctx.settings);
-        ChildProgress cp(ctx.progress, 3);
+        ChildProgress cp(ctx.progress, 3, ph);
         // The child's own phase list, so each of its phases gets its index
         // (a build that never declares them would stay on its first).
-        cp.reporter()->setPhases(child->phases(), child->phaseWeights());
+        cp.reporter()->setPhases(child->phases(), child->phaseWeights(sub.settings));
         sub.progress = cp.reporter();
         FW_TRY(child->validate(sub.settings));
-        FW_TRY_ASSIGN(JobOutcome out, child->run(sub));
+        auto built = child->run(sub);
+        cp.reporter()->flush(); // its last progress, which the throttle may have held back
+        FW_TRY_ASSIGN(JobOutcome out, std::move(built));
         out.warnings = rep.warnings + out.warnings;
         out.details.insert(QStringLiteral("zstd"),
                            QJsonObject{{QStringLiteral("level"), rep.level},
@@ -257,7 +304,46 @@ public:
         return out;
     }
 
+    // Preparing, Packing and Checking packs, then the image build's phases,
+    // which share the rest as the build itself shares its bar (it builds
+    // from the packed folder, never from an archive).
+    QList<double> phaseWeights() const override
+    {
+        QList<double> child;
+        if (auto c = makeChild(QFileInfo(output()).absolutePath()); c.ok())
+            child = (*c)->phaseWeights();
+        return weights(child, true);
+    }
+    // For the settings: the build's shares for the settings it gets (no
+    // Verifying when verification is off), no Checking packs when the packs
+    // are not read back.
+    QList<double> phaseWeights(const SettingsValues& settings) const override
+    {
+        QList<double> child;
+        if (auto c = makeChild(QFileInfo(output()).absolutePath()); c.ok())
+            child = (*c)->phaseWeights(childSettings(settings));
+        return weights(child, ampr::readPackSettings(settings, m_p).verify);
+    }
+
 private:
+    // An archived dump is unpacked in Preparing first: that takes a share
+    // like the image builds give it (they give a ZIP source's first stage
+    // 0.3), the rest is scaled down.
+    QList<double> weights(const QList<double>& child, bool checkPacks) const
+    {
+        const double prepare = archive::isZipSource(source()) ? 0.3 : 0.02;
+        const double scale = (1.0 - prepare) / 0.98;
+        QList<double> w = checkPacks ? QList<double>{prepare, 0.5 * scale, 0.06 * scale} : QList<double>{prepare, 0.56 * scale, 0.0};
+        const double build = 0.42 * scale;
+        const qsizetype n = std::max<qsizetype>(0, phases().size() - 3);
+        double sum = 0.0;
+        for (qsizetype i = 0; i < n; ++i)
+            sum += std::max(0.0, child.value(i, 1.0));
+        for (qsizetype i = 0; i < n; ++i)
+            w << (sum > 0.0 ? build * std::max(0.0, child.value(i, 1.0)) / sum : build / double(n));
+        return w;
+    }
+
     QString source() const { return m_p.value(QStringLiteral("source")).toString(); }
     QString output() const { return m_p.value(QStringLiteral("output")).toString(); }
     QString format() const { return m_p.value(QStringLiteral("format")).toString().toLower(); }
@@ -407,50 +493,76 @@ public:
         if (verify) {
             // Every written file read back against the source (through the packs).
             ctx.progress->beginPhase(2, r->bytes);
-            FW_TRY_ASSIGN(auto again, openGameFiles(source(), ctx.token));
-            std::shared_ptr<ampr::GameFiles> src = again;
-            if (unpack || kind == ampr::PackKind::None) {
-                FW_TRY_ASSIGN(src, ampr::logicalGame(again, ctx.token));
-            } else {
-                src = std::make_shared<PlainView>(again);
-            }
-            std::vector<char> a(size_t(4) << 20), b(size_t(4) << 20);
-            qint64 compared = 0;
-            for (int i = 0; i < int(src->items().size()); ++i) {
-                const ampr::GameItem& it = src->items()[size_t(i)];
-                if (it.isDir)
-                    continue;
-                if (it.path.compare(QStringLiteral("ampr_emu.index"), Qt::CaseInsensitive) == 0 && r->amprIndexWritten)
-                    continue; // rewritten for the unpacked files
-                // Where the extraction put it (never a path outside the stage).
-                auto written = childPathInside(stage, r->hostPath(it.path));
-                QFile f(written.ok() ? *written : QString());
-                if ((!written.ok() || !f.exists()) && r->droppedFiles.contains(it.path))
-                    continue; // left out on purpose (old journal and logs)
-                if (!written.ok() || !f.open(QIODevice::ReadOnly) || f.size() != it.size)
-                    return Error(ErrorCode::VerificationFailed, QStringLiteral("%1 did not extract correctly.").arg(it.path));
-                for (qint64 pos = 0; pos < it.size;) {
-                    if (!ctx.token.checkpoint())
-                        return Error::cancelled();
-                    const qint64 want = std::min<qint64>(qint64(a.size()), it.size - pos);
-                    FW_TRY_ASSIGN(const qint64 n, src->read(i, pos, a.data(), want));
-                    if (n <= 0 || f.read(b.data(), n) != n || std::memcmp(a.data(), b.data(), size_t(n)) != 0)
-                        return Error(ErrorCode::VerificationFailed, QStringLiteral("%1 does not match the source.").arg(it.path));
-                    pos += n;
-                    ctx.progress->advance(n);
+            auto compared = [&]() -> Result<qint64> {
+                FW_TRY_ASSIGN(auto again, openGameFiles(source(), ctx.token));
+                std::shared_ptr<ampr::GameFiles> src = again;
+                if (unpack || kind == ampr::PackKind::None) {
+                    FW_TRY_ASSIGN(src, ampr::logicalGame(again, ctx.token));
+                } else {
+                    src = std::make_shared<PlainView>(again);
                 }
-                ++compared;
+                std::vector<char> a(size_t(4) << 20), b(size_t(4) << 20);
+                qint64 files = 0;
+                for (int i = 0; i < int(src->items().size()); ++i) {
+                    const ampr::GameItem& it = src->items()[size_t(i)];
+                    if (it.isDir)
+                        continue;
+                    if (it.path.compare(QStringLiteral("ampr_emu.index"), Qt::CaseInsensitive) == 0 && r->amprIndexWritten)
+                        continue; // rewritten for the unpacked files
+                    // Where the extraction put it (never a path outside the stage).
+                    auto written = childPathInside(stage, r->hostPath(it.path));
+                    QFile f(written.ok() ? *written : QString());
+                    if ((!written.ok() || !f.exists()) && r->droppedFiles.contains(it.path))
+                        continue; // left out on purpose (old journal and logs)
+                    if (!written.ok() || !f.open(QIODevice::ReadOnly) || f.size() != it.size)
+                        return Error(ErrorCode::VerificationFailed, QStringLiteral("%1 did not extract correctly.").arg(it.path));
+                    for (qint64 pos = 0; pos < it.size;) {
+                        if (!ctx.token.checkpoint())
+                            return Error::cancelled();
+                        const qint64 want = std::min<qint64>(qint64(a.size()), it.size - pos);
+                        FW_TRY_ASSIGN(const qint64 n, src->read(i, pos, a.data(), want));
+                        if (n <= 0 || f.read(b.data(), n) != n || std::memcmp(a.data(), b.data(), size_t(n)) != 0)
+                            return Error(ErrorCode::VerificationFailed, QStringLiteral("%1 does not match the source.").arg(it.path));
+                        pos += n;
+                        ctx.progress->advance(n);
+                    }
+                    ++files;
+                }
+                return files;
+            }();
+            if (!compared.ok() && compared.error().code != ErrorCode::VerificationFailed && ctx.token.keepFinishedWork()) {
+                // Cancel while the finished extraction is verified (GitHub #97):
+                // the files are kept, as with verification turned off (not
+                // when the app is closing: the cancel then stands). A difference
+                // found meanwhile still fails it.
+                o.verification = Verification::Skipped;
+                o.verificationDetail = QStringLiteral("Verification was cancelled, so the extracted files are not verified.");
+                o.details.insert(QStringLiteral("verificationCancelled"), true);
+                ctx.log.warn(o.verificationDetail);
+            } else {
+                if (!compared.ok())
+                    return compared.takeError();
+                o.verification = Verification::Passed;
+                o.verificationDetail = *compared == 1 ? QStringLiteral("1 file read back, identical")
+                                                      : QStringLiteral("%1 files read back, all identical").arg(formatCount(*compared));
             }
-            o.verification = Verification::Passed;
-            o.verificationDetail = compared == 1 ? QStringLiteral("1 file read back, identical")
-                                                 : QStringLiteral("%1 files read back, all identical").arg(formatCount(compared));
+        } else {
+            o.verification = Verification::Skipped;
+            o.verificationDetail = QStringLiteral("Verification is turned off in Settings.");
         }
         // Into place: a pre-existing empty folder goes, the stage takes its name.
-        if (QFileInfo(out).isDir() && !QDir().rmdir(out))
-            return Error(ErrorCode::IoError, QStringLiteral("Could not replace the empty folder %1.").arg(native(out)));
-        if (!QDir().rename(stage, out))
-            return Error(ErrorCode::IoError,
-                         QStringLiteral("Could not rename the finished folder to %1. Close any program using it and try again.").arg(native(out)));
+        // When that cannot be done (the folder is open in another program),
+        // the finished files are not deleted: they keep a free name next to it.
+        if ((QFileInfo(out).isDir() && !QDir().rmdir(out)) || !renameWithoutCopying(stage, out)) {
+            guard.keep = true;
+            const QString kept = exfat::keepStagedFolder(stage, out);
+            // Not an IoError: a retry would only extract another full copy.
+            return Error(ErrorCode::PermissionDenied,
+                         QStringLiteral("The files were extracted%1, but the folder %2 could not be used because it is "
+                                        "open in another program. They were saved in %3.")
+                             .arg(o.verification == Verification::Passed ? QStringLiteral(" and verified") : QString(),
+                                  native(out), native(kept)));
+        }
         guard.keep = true;
         o.outputs = {out};
         o.warnings = r->warnings + ampr::renamedWarnings(r->renamed);

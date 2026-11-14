@@ -427,7 +427,7 @@ private slots:
             QVERIFY(out.size() > 0);
             qInfo("%s: %s, %lld bytes, %s", qPrintable(f), qPrintable(out.fileName()), out.size(), qPrintable(rec->outcome->verificationDetail));
         }
-        QVERIFY(!QFile::exists(QDir(outDir).filePath(QStringLiteral("PPSA01342 Ghost of Yōtei (01.000.000).exfat.part"))));
+        QVERIFY(!QFile::exists(PartFile::partPathFor(QDir(outDir).filePath(QStringLiteral("PPSA01342 Ghost of Yōtei (01.000.000).exfat")))));
         q.clearFinished();
     }
 
@@ -595,15 +595,25 @@ private slots:
         QVERIFY2(m_page->sourceMessage().contains(QStringLiteral("2 games")), qPrintable(m_page->sourceMessage()));
         q.holdQueue(true);
         QVERIFY(addToQueue().isEmpty());
-        // Choosing one of them.
-        bool clicked = false;
-        for (QPushButton* b : m_page->findChildren<QPushButton*>())
-            if (b->accessibleName() == QStringLiteral("Use PPSA00002-app") && b->isVisibleTo(m_page)) {
-                b->click();
-                clicked = true;
-                break;
-            }
-        QVERIFY(clicked);
+        // Choosing one of them: each game is a row of its own, as wide as the
+        // card, with "Use this game" at its end; Enter on a row chooses it too.
+        QList<QAbstractButton*> rows;
+        for (QAbstractButton* b : m_page->findChildren<QAbstractButton*>())
+            if (b->accessibleName().startsWith(QLatin1String("Use PPSA0000")) && b->isVisibleTo(m_page))
+                rows << b;
+        QCOMPARE(rows.size(), 2);
+        QVERIFY(!qobject_cast<QPushButton*>(rows.first())); // not a link-like text button
+        QTRY_VERIFY2(rows.first()->width() > m_page->sourceCard()->width() - 2 * theme::space::lg - 4,
+                     qPrintable(QStringLiteral("%1 of %2").arg(rows.first()->width()).arg(m_page->sourceCard()->width())));
+        QCOMPARE(rows.first()->width(), rows.last()->width());
+        QVERIFY(rows.first()->height() >= 40);
+        QAbstractButton* second = nullptr;
+        for (QAbstractButton* b : rows)
+            if (b->accessibleName() == QStringLiteral("Use PPSA00002-app"))
+                second = b;
+        QVERIFY(second);
+        second->setFocus();
+        QTest::keyClick(second, Qt::Key_Return);
         QVERIFY(QTest::qWaitFor([&] { return m_page->summary().isGame && m_page->summary().titleId == QStringLiteral("PPSA00002"); }, 15000));
 
         // No game at all: a clear message, no walk over the whole tree.
@@ -620,6 +630,30 @@ private slots:
         QTest::qWait(300);
         QCOMPARE(clean(m_page->summary().folder), clean(m_game));
         QVERIFY(m_page->gameRootChoices().isEmpty());
+    }
+
+    // A '&' in a game's folder name is shown as it is and never becomes an
+    // Alt shortcut of the window ("Tom&Jerry" would make Alt+J pick that game,
+    // "Ratchet & Clank" would take Alt+Space, the system menu key).
+    void gameRowsTakeNoShortcutFromFolderNames()
+    {
+        m_page->setFormat(jobs::kFormatExfat);
+        const QString two = path(QStringLiteral("wrap-amp"));
+        QVERIFY(makeDump(two + QStringLiteral("/Tom&Jerry/PPSA00003-app"), QStringLiteral("Game C"), QStringLiteral("PPSA00003")));
+        QVERIFY(makeDump(two + QStringLiteral("/Ratchet & Clank/PPSA00004-app"), QStringLiteral("Game D"), QStringLiteral("PPSA00004")));
+        m_page->setSource(two);
+        QVERIFY(QTest::qWaitFor([&] { return m_page->gameRootChoices().size() == 2; }, 15000));
+        QList<QAbstractButton*> rows;
+        for (QAbstractButton* b : m_page->findChildren<QAbstractButton*>())
+            if (b->accessibleName().startsWith(QLatin1String("Use PPSA0000")) && b->isVisibleTo(m_page))
+                rows << b;
+        QCOMPARE(rows.size(), 2);
+        for (QAbstractButton* row : rows) {
+            QVERIFY2(row->shortcut().isEmpty(), qPrintable(row->accessibleName() + QStringLiteral(": ") + row->shortcut().toString()));
+            QVERIFY(row->toolTip().contains(u'&')); // the whole path, '&' and all
+        }
+        m_page->setSource(m_game);
+        QVERIFY(QTest::qWaitFor([&] { return m_page->summary().isGame && clean(m_page->summary().folder) == clean(m_game); }, 15000));
     }
 
     void fileNamesFollowTheTemplateAndCanBeEdited()
@@ -1246,8 +1280,83 @@ private slots:
         m_page->setFormat(jobs::kFormatExfat);
     }
 
+    // FPKG App: the Title says which language it renames (#94), and a game
+    // with a DLC emulator says that its DLC data goes into the package, with
+    // the way to the list. Every card of the form shows its step.
+    void packageCardExplainsTitleAndDlc()
+    {
+        m_page->showForm();
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("format"), pages::kFormatFpkg},
+                                                     {QStringLiteral("packageType"), QStringLiteral("app")}});
+        QVERIFY(selectSource(m_asciiGame));
+        const auto shown = [&](const QString& text) {
+            for (QLabel* l : m_page->findChildren<QLabel*>())
+                if (l->text() == text && l->isVisibleTo(m_page))
+                    return true;
+            return false;
+        };
+        QVERIFY(shown(QStringLiteral("Written for the default language of param.json. A console set to another language shows that "
+                                     "language's own name.")));
+        const QString note = QStringLiteral("This game has a DLC emulator (dlc_emu.ini): DLC data in its mount folders is packed with the game.");
+        QVERIFY(!shown(note)); // this game has none
+
+        const QString withDlc = path(QStringLiteral("Dumps/PPSA01235-app"));
+        QVERIFY(makeDump(withDlc, QStringLiteral("DLC Game"), QStringLiteral("PPSA01235"), QStringLiteral("UP0000-PPSA01235_00-DLCGAME000000000")));
+        QVERIFY(fwtest::writeTextFile(withDlc + QStringLiteral("/dlc_emu.ini"), "[PSAC]\ncontent_id=UP0000-PPSA01235_00-DLCGAME000000001\n"));
+        QVERIFY(selectSource(withDlc));
+        QVERIFY(shown(note));
+        ui::Link* edit = nullptr;
+        for (ui::Link* l : m_page->packageCard()->findChildren<ui::Link*>())
+            if (l->text() == QStringLiteral("Edit the DLC list"))
+                edit = l;
+        QVERIFY(edit && edit->isVisibleTo(m_page));
+        // "Keep the DLC emulator" off, for this job or in Settings: the package
+        // leaves dlc_emu.ini out, so the note and the way to the list go too.
+        ui::JobOptionsPanel* fpkgOptions = m_page->optionsPanel(pages::kFormatFpkg);
+        QVERIFY(fpkgOptions && fpkgOptions->row(fpkg::keys::kKeepDlcEmulator));
+        fpkgOptions->setOverride(fpkg::keys::kKeepDlcEmulator, false);
+        QVERIFY(!shown(note));
+        QVERIFY(!edit->isVisibleTo(m_page));
+        fpkgOptions->setOverride(fpkg::keys::kKeepDlcEmulator, true);
+        QVERIFY(shown(note));
+        auto& settings = m_ctx->settings();
+        QVERIFY(settings.setValue(fpkg::keys::kKeepDlcEmulator, false).ok());
+        QVERIFY(!shown(note));
+        QVERIFY(settings.setValue(fpkg::keys::kKeepDlcEmulator, true).ok());
+        QVERIFY(shown(note));
+        QSignalSpy nav(m_page, &pages::Page::navigateRequested);
+        emit edit->activated();
+        QCOMPARE(nav.count(), 1);
+        const auto request = nav.first().first().value<pages::NavRequest>();
+        QCOMPARE(request.page, QStringLiteral("library"));
+        QCOMPARE(request.args.value(QStringLiteral("tab")).toString(), QStringLiteral("dlc"));
+        QCOMPARE(clean(request.args.value(QStringLiteral("dlcFolder")).toString()), clean(withDlc));
+        m_window->navigate(QStringLiteral("build"));
+        // Another package type is not this game's package: nothing to say.
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("addon")}});
+        QVERIFY(!shown(note));
+        m_window->navigate(QStringLiteral("build"), {{QStringLiteral("packageType"), QStringLiteral("app")}});
+        QVERIFY(shown(note));
+
+        // The steps: Format 2, Package 3, Save to 4 with FPKG; Save to 3 for an image.
+        const auto steps = [&] {
+            QStringList out;
+            for (ui::Badge* b : m_page->findChildren<ui::Badge*>())
+                if (b->text().startsWith(QLatin1String("Step ")) && b->isVisibleTo(m_page))
+                    out << b->text();
+            out.sort();
+            return out;
+        };
+        QCOMPARE(steps(), (QStringList{QStringLiteral("Step 2"), QStringLiteral("Step 3"), QStringLiteral("Step 4")}));
+        m_page->setFormat(jobs::kFormatExfat);
+        QCOMPARE(steps(), (QStringList{QStringLiteral("Step 2"), QStringLiteral("Step 3")}));
+        QVERIFY(!shown(note)); // the Package card is not shown for an image
+        m_page->setSource({});
+    }
+
     // The five format tiles: one row where there is room, three and two below
-    // that, then pairs, then a single column; and a tile is where a click on
+    // that, then pairs, then a single column; a last row with fewer tiles
+    // shares the whole width (no empty slot); and a tile is where a click on
     // its place lands. Pure geometry, so it holds on the offscreen platform.
     void formatTilesWrapByWidth()
     {
@@ -1285,16 +1394,26 @@ private slots:
         const QList<QPair<int, int>> arrangements{{1000, 5}, {700, 3}, {450, 2}, {300, 1}}; // width, tiles per row
         for (const auto& [width, perRow] : arrangements) {
             QCOMPARE(rows(width), (5 + perRow - 1) / perRow);
-            const int tileW = (width - (perRow - 1) * gap) / perRow;
             for (int i = 0; i < titles.size(); ++i) {
                 tiles->resize(width, tiles->heightForWidth(width)); // the page's layout may have had its say meanwhile
-                const QPoint middle((i % perRow) * (tileW + gap) + tileW / 2, (i / perRow) * (tileH + gap) + tileH / 2);
+                const int row = i / perRow;
+                const int inRow = std::min<int>(perRow, int(titles.size()) - row * perRow); // the last row may hold fewer
+                const int tileW = (width - (inRow - 1) * gap) / inRow;
+                const QPoint middle((i % perRow) * (tileW + gap) + tileW / 2, row * (tileH + gap) + tileH / 2);
                 QVERIFY2(tiles->rect().contains(middle), qPrintable(QStringLiteral("%1 px, tile %2").arg(width).arg(i)));
                 QTest::mouseClick(tiles, Qt::LeftButton, Qt::NoModifier, middle);
                 QVERIFY2(tiles->accessibleDescription() == QStringLiteral("Selected: ") + titles.at(i),
                          qPrintable(QStringLiteral("%1 px, tile %2: %3").arg(width).arg(i).arg(tiles->accessibleDescription())));
             }
         }
+        // Three and two: the package and the packed folder fill their row, edge to edge.
+        auto* option = dynamic_cast<pages::OptionTiles*>(tiles);
+        QVERIFY(option);
+        tiles->resize(700, tiles->heightForWidth(700));
+        QCOMPARE(option->tileRect(3).left(), 0);
+        QCOMPARE(option->tileRect(4).right(), 699);
+        QCOMPARE(option->tileRect(3).width(), option->tileRect(4).width());
+        QCOMPARE(option->tileRect(0).right() + 1 + gap, option->tileRect(1).left());
     }
 
     // Library › right-click a game › "Pack with zstd…": the Build page opens

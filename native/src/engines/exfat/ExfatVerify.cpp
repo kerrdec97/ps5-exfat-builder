@@ -44,7 +44,11 @@ QString VerifyReport::summary() const
     s += first.join(QStringLiteral("; "));
     if (n > first.size())
         s += QStringLiteral("; and %1 more").arg(formatCount(n - first.size()));
-    return s.endsWith(u'.') ? s : s + u'.'; // a problem may be a whole sentence already
+    if (!s.endsWith(u'.')) // a problem may be a whole sentence already
+        s += u'.';
+    if (cancelled)
+        s += QStringLiteral(" Verification was cancelled after that, so there may be more.");
+    return s;
 }
 
 QJsonObject VerifyReport::toJson(int maxMismatches) const
@@ -68,6 +72,8 @@ QJsonObject VerifyReport::toJson(int maxMismatches) const
     o.insert(QStringLiteral("structureProblems"), QJsonArray::fromStringList(structureProblems));
     o.insert(QStringLiteral("warnings"), QJsonArray::fromStringList(warnings));
     o.insert(QStringLiteral("elapsedMs"), double(elapsedMs));
+    if (cancelled)
+        o.insert(QStringLiteral("cancelled"), true);
     return o;
 }
 
@@ -329,11 +335,16 @@ Result<VerifyReport> verifyImage(const QString& imagePath, const std::vector<Exp
         }
         for (auto& t : pool)
             t.join();
-        if (anyCancelled || token.isCancelled())
-            return Error::cancelled();
-        if (fatal)
-            return *fatal;
         report.bytesCompared = bytes.load();
+        if (anyCancelled || token.isCancelled()) {
+            // A problem found before the cancel fails verification all the
+            // same; only a check that had found nothing yet is just cancelled.
+            if (report.passed())
+                return Error::cancelled();
+            report.cancelled = true;
+        } else if (fatal) {
+            return *fatal;
+        }
     }
     std::sort(report.mismatches.begin(), report.mismatches.end(),
               [](const Mismatch& a, const Mismatch& b) { return a.path < b.path; });

@@ -12,6 +12,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <optional>
 
 namespace fw {
 class AppContext;
@@ -23,9 +24,14 @@ Tone toneForState(JobState state);
 QString stateIcon(JobState state);           // row state glyph
 QString waitingText(const JobRecord& r, int maxAttempts); // "Retrying in 25 s · attempt 2 of 3" or ""
 QString finishedNote(const JobRecord& r);    // "Verified · 12 min 40 s", "2 warnings"
-// A rough estimate for the whole running job, in ms; -1 when unknown.
-// (ProgressSnapshot::etaMs is the current stage only.)
+// The whole running job's time left, in ms; -1 when unknown or not running.
+// The reporter's smoothed estimate (ProgressSnapshot::jobEtaMs; etaMs is the
+// current stage only); for a record no reporter made (a demo) a rough one
+// from the elapsed time and the share done.
 qint64 jobTimeLeftMs(const JobRecord& r);
+// What a running job's row says in full (its tooltip): the stage, the units
+// and files done, the speed now and on average, and the time left.
+QString runningDetailText(const JobRecord& r);
 
 // What the queue's one switch does next, from the queue's state (the user's
 // jobs; system jobs do not count):
@@ -38,6 +44,32 @@ enum class QueueSwitch { Pause, Start, Resume };
 QueueSwitch queueSwitch(bool held, int running, int waiting);
 // "Start queue (3)"; without the number for less than two waiting jobs.
 QString startQueueText(int waiting);
+// The end of the header chip while an end-of-queue action is chosen
+// (general.afterQueueAction): "then sleep"; "" for none or an unknown name.
+QString afterQueueText(const QString& actionName);
+
+// A job's meta line, "Build FPKG package · FPKG · 31.6 GB → D:\PS5\Packages":
+// when it does not fit, only the destination is cut, in its middle; the kind,
+// the format and the size stay whole. The tooltip has the whole line.
+class MetaLine : public QLabel {
+    Q_OBJECT
+public:
+    explicit MetaLine(QWidget* parent = nullptr);
+    void setFullText(const QString& text);
+    QString fullText() const { return m_text; }
+    // Where the destination starts: after the last "→ ", else after the last
+    // " · " when what follows is a path; 0 when the whole line is a path.
+    static int pathStart(const QString& text);
+    QSize minimumSizeHint() const override;
+
+protected:
+    void resizeEvent(QResizeEvent* e) override;
+    void changeEvent(QEvent* e) override;
+
+private:
+    void relayout();
+    QString m_text;
+};
 
 class JobRow : public QWidget {
     Q_OBJECT
@@ -79,10 +111,13 @@ protected:
     void contextMenuEvent(QContextMenuEvent* e) override;
     void enterEvent(QEnterEvent* e) override;
     void leaveEvent(QEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
     void showMenu(const QPoint& globalPos);
     void rebuildActions();
+    void fitMiddle(); // Queue rows: the note column gives way to the title in a narrow list
+    QString m_noteText; // the note in full (shown cut to its column)
     Variant m_variant;
     QString m_id;
     JobState m_state = JobState::Queued;
@@ -119,6 +154,9 @@ public:
     JobQueueModel& model() { return m_model; }
     void setEmptyWidget(QWidget* w);
     QStringList visibleIds() const;
+    // Screenshot mode only: a made-up job listed first, as if the queue held
+    // it (the filter applies); std::nullopt takes it away.
+    void setDemoRecord(const std::optional<JobRecord>& record);
 signals:
     void selectionChanged(const QString& id);
     void activated(const QString& id);
@@ -156,6 +194,7 @@ private:
     QWidget* m_empty = nullptr;
     QTimer m_tick;
     bool m_rebuildPending = false;
+    std::optional<JobRecord> m_demo; // screenshot mode
 };
 
 class ActivityWell;
@@ -167,11 +206,17 @@ public:
     void refresh();
     JobList* list() const { return m_list; } // the rows under the running block (tests)
     QPushButton* startQueueButton() const { return m_start; }
+    QString footerText() const;    // "3 waiting · then sleep" (tests)
     // The job the page's monitor shows: the dock hides its own running block
     // for it (nothing is shown twice). "" = none.
     void setWatchedJob(const QString& id);
     QString watchedJob() const { return m_watched; }
     QString runningJob() const { return m_runningId; }
+    // Screenshot mode only: the made-up job a page's monitor shows (running
+    // or finished) counts as a job of the queue, so the dock says what it
+    // would say for it: the count, the time left, its row once it has ended.
+    // A record with an empty id takes it away.
+    void setDemoRunning(const JobRecord& record);
 signals:
     void openQueueRequested();
     void openJobRequested(const QString& id);
@@ -187,17 +232,18 @@ private:
     QPushButton* m_start; // "Start queue (n)", while a list waits to be started
     Card* m_running;
     ElideLabel* m_runTitle;
-    ElideLabel* m_runMeta;
+    MetaLine* m_runMeta;
     ProgressBlock* m_progress;
     ActivityWell* m_tail;
     IconButton* m_runWatch;
     IconButton* m_runPause;
     IconButton* m_runCancel;
     JobList* m_list;
-    QLabel* m_footer;
+    QLabel* m_footer; // ends in "· then sleep" while an end-of-queue action is chosen
     EmptyState* m_empty;
     QString m_runningId;
     QString m_watched;
+    std::optional<JobRecord> m_demo; // screenshot mode
 };
 
 } // namespace fw::ui

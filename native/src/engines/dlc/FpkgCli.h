@@ -27,7 +27,8 @@ inline const QString kFpkgCliEnvVar = QStringLiteral("FW_FPKG_CLI");
 
 struct FpkgCli {
     QString exe;          // absolute path ("" = not found)
-    QStringList problems; // cannot be used
+    QStringList problems; // cannot be used (English: also the DLC jobs' error text)
+    QStringList shownProblems; // the same texts in the interface language, for the DLC engine row
     QStringList warnings;
     bool ok() const { return !exe.isEmpty() && problems.isEmpty(); }
 };

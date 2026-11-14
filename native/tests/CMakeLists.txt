@@ -53,10 +53,32 @@ foreach(test_src ${FW_TESTS})
     # QT_FORCE_STDERR_LOGGING: without it Qt Test sends its report to the
     # debugger channel on Windows when there is no console, and CTest (and
     # Testing/Temporary/LastTest.log) would show nothing of a failure.
+    # FW_NO_POWER_ACTIONS: no test may put the computer to sleep or shut it
+    # down, whatever it arms (power::perform also refuses in any tst_ program).
     set(_isolated "${CMAKE_CURRENT_BINARY_DIR}/isolated/${test_name}")
     set_tests_properties(${test_name} PROPERTIES
         TIMEOUT 900
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1;FW_OFFLINE=1;FW_AMPR_RUNTIME=${FW_AMPR_RUNTIME_BUNDLE};FW_DATA_DIR=${_isolated}/appdata;D97BETA_CONFIG_DIR=${_isolated}/backport-config;D97BETA_DATA_DIR=${_isolated}/backport-data;D97BETA_ENGINE_HOME=${_isolated}/backport-engine-home")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1;FW_OFFLINE=1;FW_NO_POWER_ACTIONS=1;FW_AMPR_RUNTIME=${FW_AMPR_RUNTIME_BUNDLE};FW_DATA_DIR=${_isolated}/appdata;D97BETA_CONFIG_DIR=${_isolated}/backport-config;D97BETA_DATA_DIR=${_isolated}/backport-data;D97BETA_ENGINE_HOME=${_isolated}/backport-engine-home")
+endforeach()
+
+# A test program started by hand (not through CTest, which sets
+# FW_AMPR_RUNTIME) finds the bundled ampr-emu-ng runtime where the app looks
+# for it: engines/ampr-emu-ng/ next to the program. The copy follows the
+# bundle, so a build without the runtime leaves none behind.
+if(CMAKE_CONFIGURATION_TYPES)
+    set(_fw_test_exe_dirs "")
+    foreach(cfg ${CMAKE_CONFIGURATION_TYPES})
+        list(APPEND _fw_test_exe_dirs "${CMAKE_CURRENT_BINARY_DIR}/${cfg}")
+    endforeach()
+else()
+    set(_fw_test_exe_dirs "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
+foreach(dir ${_fw_test_exe_dirs})
+    if(FW_AMPR_RUNTIME_BUNDLE)
+        configure_file("${FW_AMPR_RUNTIME_BUNDLE}" "${dir}/engines/ampr-emu-ng/libSceAmpr.sprx" COPYONLY)
+    else()
+        file(REMOVE "${dir}/engines/ampr-emu-ng/libSceAmpr.sprx")
+    endif()
 endforeach()
 
 # Programs that write gigabytes or load every core never run side by side, so

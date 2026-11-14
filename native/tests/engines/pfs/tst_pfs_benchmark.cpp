@@ -1,9 +1,13 @@
-// PFS throughput benchmark: the native builder with one thread and with every
-// core on the same input. Logs MB/s (source bytes per second) and checks that
-// both produce the same bytes. Size, level and repeats: FW_PFS_BENCH_MIB
+// PFS throughput benchmark: the native builder with one thread and with the
+// worker threads of the Performance settings (every core by default) on the
+// same input, then extraction (decompression) and full verification of the
+// image just built. Logs MB/s (source bytes per second) and checks that both
+// builds produce the same bytes. Size, level and repeats: FW_PFS_BENCH_MIB
 // (default 24), FW_PFS_BENCH_LEVEL (default 9, the app's default),
 // FW_PFS_BENCH_REPEAT (default 1; the best run is kept, which evens out a busy
-// machine).
+// machine). FW_BENCH_MODE / FW_BENCH_THREADS choose the threads the way the
+// app does (engines/BenchSettings.h); FW_PFS_BENCH_SINGLE=0 leaves the
+// one-thread build out (it does not depend on the mode).
 //
 // With FW_LAZY_MKPFS_DIR naming a checkout of Lazy_MkPFS (it is not part of
 // this repository; the references were made with commit 78bdd00) and a
@@ -13,7 +17,9 @@
 
 #include "engines/pfs/PfsBuilder.h"
 #include "engines/pfs/PfsSource.h"
+#include "engines/pfs/PfsVerify.h"
 
+#include "engines/BenchSettings.h"
 #include "engines/pfs/PfsTestUtil.h"
 #include "support/TestSupport.h"
 
@@ -157,7 +163,11 @@ private slots:
         m_mib = envInt("FW_PFS_BENCH_MIB", 24);
         m_level = int(envInt("FW_PFS_BENCH_LEVEL", 9));
         m_repeat = int(envInt("FW_PFS_BENCH_REPEAT", 1));
-        m_cores = std::max(1, QThread::idealThreadCount());
+        m_single = qEnvironmentVariable("FW_PFS_BENCH_SINGLE").trimmed() != u"0";
+        m_perf = benchsettings::fromEnvironment();
+        QVERIFY2(m_perf.problem.isEmpty(), qPrintable(m_perf.problem));
+        m_cores = m_perf.threads;
+        qInfo("PFS benchmark settings: %s", qPrintable(m_perf.describe()));
         m_lazy = findLazy();
     }
 
@@ -192,15 +202,21 @@ private slots:
             in.plan = std::move(plan).value();
         }
 
-        const NativeRun one = runNative(in, 1, m_level, m_work.filePath(QStringLiteral("n1.ffpfsc")));
-        QVERIFY2(one.error.isEmpty(), qPrintable(one.error));
+        NativeRun one;
+        if (m_single) {
+            one = runNative(in, 1, m_level, m_work.filePath(QStringLiteral("n1.ffpfsc")));
+            QVERIFY2(one.error.isEmpty(), qPrintable(one.error));
+        }
         const QString pyOut = m_work.filePath(QStringLiteral("lazy.ffpfsc"));
+        const QString manyOut = m_work.filePath(QStringLiteral("nn.ffpfsc"));
         NativeRun many;
         std::optional<double> py;
         QString noLazy = m_lazy.whyNot;
         for (int r = 0; r < m_repeat; ++r) {
-            const NativeRun n = runNative(in, m_cores, m_level, m_work.filePath(QStringLiteral("nn.ffpfsc")));
+            const NativeRun n = runNative(in, m_cores, m_level, manyOut);
             QVERIFY2(n.error.isEmpty(), qPrintable(n.error));
+            if (r > 0)
+                QCOMPARE(n.sha, many.sha);
             if (r == 0 || n.seconds < many.seconds)
                 many = n;
             if (m_lazy.python.isEmpty())
@@ -211,20 +227,53 @@ private slots:
             if (!py || *p < *py)
                 py = p;
         }
-        QCOMPARE(one.sha, many.sha);
+        if (m_single)
+            QCOMPARE(one.sha, many.sha);
         qInfo("writer thread with %d threads: read %.2f s, waiting %.2f s, write %.2f s", m_cores,
               many.stats.readSeconds, many.stats.waitSeconds, many.stats.writeSeconds);
-        QString line = QStringLiteral("PFS benchmark, %1, %2 MiB, level %3: native 1 thread %4 MB/s (%5 s), native %6 threads "
-                                      "%7 MB/s (%8 s, best of %9)")
-                           .arg(mode == u"file" ? QStringLiteral("image -> .ffpfsc") : QStringLiteral("folder -> .ffpfsc"))
-                           .arg(m_mib)
-                           .arg(m_level)
-                           .arg(mbps(bytes, one.seconds), 0, 'f', 1)
-                           .arg(one.seconds, 0, 'f', 2)
-                           .arg(m_cores)
-                           .arg(mbps(bytes, many.seconds), 0, 'f', 1)
-                           .arg(many.seconds, 0, 'f', 2)
-                           .arg(m_repeat);
+        const QString what = mode == u"file" ? QStringLiteral("image -> .ffpfsc") : QStringLiteral("folder -> .ffpfsc");
+        QString line = QStringLiteral("PFS benchmark, %1, %2 MiB, level %3: ").arg(what).arg(m_mib).arg(m_level);
+        if (m_single)
+            line += QStringLiteral("native 1 thread %1 MB/s (%2 s), ").arg(mbps(bytes, one.seconds), 0, 'f', 1).arg(one.seconds, 0, 'f', 2);
+        line += QStringLiteral("native %1 threads %2 MB/s (%3 s, best of %4); image %5 bytes = %6 % of the source")
+                    .arg(m_cores)
+                    .arg(mbps(bytes, many.seconds), 0, 'f', 1)
+                    .arg(many.seconds, 0, 'f', 2)
+                    .arg(m_repeat)
+                    .arg(many.stats.imageBytes)
+                    .arg(100.0 * double(many.stats.imageBytes) / double(bytes), 0, 'f', 2);
+
+        // Reading it back: unpack the image (the nested folder image of a
+        // folder build is unpacked directly) and verify it in full, as the
+        // build job does.
+        {
+            const QString xdir = m_work.filePath(QStringLiteral("x-") + mode);
+            ExtractOptions eo;
+            eo.freeSpaceMargin = 0;
+            QElapsedTimer t;
+            t.start();
+            auto x = extractImage(manyOut, xdir, eo, CancellationToken());
+            const double xs = double(t.nsecsElapsed()) / 1e9;
+            QVERIFY2(x.ok(), x.ok() ? "" : qPrintable(x.error().toLogString()));
+            QDir(xdir).removeRecursively();
+            VerifyExpectation ex;
+            ex.format = OutputFormat::Container;
+            if (in.isFolder) {
+                ex.kind = VerifyExpectation::Kind::Folder;
+                ex.plan = &in.plan;
+            } else {
+                ex.kind = VerifyExpectation::Kind::File;
+                ex.file = in.file;
+                ex.fileName = QFileInfo(in.file).fileName().toLatin1();
+            }
+            t.restart();
+            auto v = verifyImage(manyOut, ex, VerifyDepth::Full, CancellationToken());
+            const double vs = double(t.nsecsElapsed()) / 1e9;
+            QVERIFY2(v.ok(), v.ok() ? "" : qPrintable(v.error().toLogString()));
+            QVERIFY2(v->passed, qPrintable(v->problems.join(u'\n')));
+            qInfo("PFS read-back, %s, %lld MiB, level %d: extract %.1f MB/s (%.2f s, %lld files), full verify %.1f MB/s (%.2f s)",
+                  qPrintable(what), m_mib, m_level, mbps(x->bytes, xs), xs, x->files, mbps(bytes, vs), vs);
+        }
 
         if (py) {
             line += QStringLiteral("; Lazy_MkPFS --cpu-count %1: %2 MB/s (%3 s)")
@@ -247,10 +296,12 @@ private:
     QTemporaryDir m_appData;
     QTemporaryDir m_work;
     Lazy m_lazy;
+    benchsettings::Performance m_perf;
     qint64 m_mib = 24;
     int m_level = 9;
     int m_repeat = 1;
     int m_cores = 1;
+    bool m_single = true;
 };
 
 QTEST_GUILESS_MAIN(TestPfsBenchmark)

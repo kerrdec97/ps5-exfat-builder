@@ -29,9 +29,12 @@ void placeAmprIndex(SourceTree& tree, const QString& indexFile);
 struct AmprPlacement {
     pfs::AmprIndexAction action = pfs::AmprIndexAction::Off;
     QString indexFile; // set when the tree got a new index: the file in `tempDir` that holds it
+    QStringList leftOut; // the same: files it does not list (pfs::amprLeftOutLogLine)
 };
 // Decides and, when the image gets a new index, writes it into `tempDir` and
-// places it in `tree`.
+// places it in `tree`. The root's index, new or the dump's own, is called
+// exactly ampr_emu.index in the tree: the one name the runtime opens (for the
+// dump's own, whatever `mode` is, when the game has fakelib/libSceAmpr.sprx).
 Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const QString& tempDir);
 
 // For a verification against a folder: when `image` holds the index of the

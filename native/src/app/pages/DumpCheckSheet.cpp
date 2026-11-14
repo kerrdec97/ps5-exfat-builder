@@ -131,14 +131,14 @@ constexpr int kGroupRow = size::badge + 12; // a heading with its badge
 constexpr int kFindingRow = size::rowCompact;
 
 // A path that is too long keeps both ends; a sentence keeps its beginning.
-class FindingDelegate : public QStyledItemDelegate {
+class FindingDelegate : public ItemDelegate {
 public:
-    using QStyledItemDelegate::QStyledItemDelegate;
+    using ItemDelegate::ItemDelegate;
 
 protected:
     void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override
     {
-        QStyledItemDelegate::initStyleOption(option, index);
+        ItemDelegate::initStyleOption(option, index);
         option->textElideMode = index.column() == 1 ? Qt::ElideRight : Qt::ElideMiddle;
     }
 };
@@ -355,8 +355,9 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
     detailRow->setVisible(m_list->topLevelItemCount() > 0);
     body()->addWidget(caption(i18n::translate(kReadOnlyLine), this));
 
-    auto* copy = addButton(FW_TR("Copy report"), Role::Safe);
-    QObject::disconnect(copy, &QPushButton::clicked, this, nullptr); // copying keeps the sheet open
+    // An information sheet: Copy report at the start of the row (it keeps the
+    // sheet open), Close the default button (focus, Enter, Esc) in the secondary look.
+    auto* copy = addButton(FW_TR("Copy report"), Role::Aside);
     connect(copy, &QPushButton::clicked, this, [this, copy] {
         if (auto* cb = QApplication::clipboard())
             cb->setText(m_report);
@@ -367,7 +368,7 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
     auto* backport = addButton(FW_TR("Backport…"), Role::Safe);
     backport->setToolTip(FW_TR("Open this game in the Backport tab (restore originals, or backport again)"));
     connect(backport, &QPushButton::clicked, this, &DumpCheckSheet::backportRequested);
-    addButton(FW_TR("Close"), Role::Primary);
+    addButton(FW_TR("Close"), Role::Close);
 }
 
 QString DumpCheckSheet::selectedPath() const

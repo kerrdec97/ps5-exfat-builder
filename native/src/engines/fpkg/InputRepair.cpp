@@ -506,7 +506,9 @@ Result<QStringList> readNpbindIds(const QByteArray& d)
         return bad(QStringLiteral("its version, size or SHA-1 is not valid"));
     const qint64 entrySize = qFromBigEndian<quint32>(d.constData() + 0x14);
     const qint64 count = qFromBigEndian<quint32>(d.constData() + 0x1C);
-    if (entrySize < 4 || 0x80 + count * entrySize > 0x200)
+    // Divided, not multiplied: two 32-bit values can overflow the product and
+    // let a crafted file walk past its end.
+    if (entrySize < 4 || entrySize > 0x180 || count > (0x200 - 0x80) / entrySize)
         return bad(QStringLiteral("%1 entries of %2 bytes do not fit").arg(count).arg(entrySize));
     static const QRegularExpression npwr(QStringLiteral("^NPWR[0-9]{5}_[0-9]{2}$"));
     QStringList ids;

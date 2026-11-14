@@ -192,8 +192,11 @@ QString folderNameProblem(const QString& name)
         return QStringLiteral("The name contains a character Windows does not allow (< > : \" / \\ | ? *).");
     if (name.endsWith(u'.') || name.endsWith(u' '))
         return QStringLiteral("The name ends with a dot or a space, which Windows removes.");
-    static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?$"),
-                                             QRegularExpression::CaseInsensitiveOption);
+    // Also with spaces before the extension, the console devices and the
+    // superscript digits Windows reads as digits (core/PathSafety's set).
+    static const QRegularExpression reserved(
+        QStringLiteral("^(CON|PRN|AUX|NUL|CONIN\\$|CONOUT\\$|COM[1-9¹²³]|LPT[1-9¹²³])( *\\..*)?$"),
+        QRegularExpression::CaseInsensitiveOption);
     if (reserved.match(name).hasMatch())
         return QStringLiteral("The name is reserved by Windows.");
     if (name.size() > 240)
@@ -276,10 +279,12 @@ QString sanitizeImageName(const QString& input)
     }
     name.truncate(units);
     trimEnds(name);
-    // A device name is reserved with an extension too ("NUL.backup"), so the
-    // underscore goes right after it.
-    static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?$"),
-                                             QRegularExpression::CaseInsensitiveOption);
+    // A device name is reserved with an extension too ("NUL.backup", also
+    // "NUL .backup"), so the underscore goes right after it. The set is
+    // folderNameProblem()'s.
+    static const QRegularExpression reserved(
+        QStringLiteral("^(CON|PRN|AUX|NUL|CONIN\\$|CONOUT\\$|COM[1-9¹²³]|LPT[1-9¹²³])( *\\..*)?$"),
+        QRegularExpression::CaseInsensitiveOption);
     if (const auto m = reserved.match(name); m.hasMatch())
         name.insert(m.capturedEnd(1), u'_');
     return name;

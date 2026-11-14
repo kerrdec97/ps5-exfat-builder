@@ -7,6 +7,7 @@
 
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/Module.h"
+#include "core/FileUtil.h"
 #include "core/Settings.h"
 #include "engines/general/Module.h"
 #include "engines/integration/AmprFtp.h"
@@ -231,7 +232,7 @@ private slots:
         QCOMPARE(local->verification, Verification::Passed);
         QVERIFY(readAll(copy + QStringLiteral("/ampr_emu.index")) == expected);
         QCOMPARE(local->outputs, QStringList{QDir(copy).filePath(QStringLiteral("ampr_emu.index"))});
-        QVERIFY(!QFileInfo::exists(copy + QStringLiteral("/ampr_emu.index.part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(copy + QStringLiteral("/ampr_emu.index"))));
     }
 
     void refusesAParentFolderAndBadParameters()

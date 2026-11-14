@@ -155,6 +155,16 @@ bool amprToolSkips(const QByteArray& indexedPath)
     return own.count(keyFor(indexedPath)) > 0;
 }
 
+bool amprRuntimeAccepts(const QByteArray& indexedPath)
+{
+    if (indexedPath.size() > 1023 || !indexedPath.startsWith("/app0/") || indexedPath.contains('\\') || indexedPath.contains('\0'))
+        return false;
+    for (const QByteArray& c : indexedPath.mid(6).split('/'))
+        if (c.isEmpty() || c == "." || c == ".." || c.size() > 255)
+            return false;
+    return true;
+}
+
 AmprToolRows amprToolRows(std::vector<AmprFile> files)
 {
     // Byte order of the relative paths decides which of two case-only
@@ -173,6 +183,11 @@ AmprToolRows amprToolRows(std::vector<AmprFile> files)
         }
         if (indexed.contains('\t') || indexed.contains('\n') || indexed.contains('\r')) {
             out.skippedControl << QString::fromUtf8(f.relPath);
+            continue;
+        }
+        // One row the runtime refuses would make it set the whole index aside.
+        if (!amprRuntimeAccepts(indexed)) {
+            out.skippedRuntime << QString::fromUtf8(f.relPath);
             continue;
         }
         const QByteArray key = keyFor(indexed);
@@ -244,6 +259,19 @@ QString amprActionLogLine(AmprIndexAction action)
     return {};
 }
 
+QString amprLeftOutLogLine(const QStringList& leftOut)
+{
+    if (leftOut.isEmpty())
+        return {};
+    QString shown = leftOut.mid(0, 3).join(QStringLiteral("; "));
+    if (leftOut.size() > 3)
+        shown += QStringLiteral("; and %1 more").arg(leftOut.size() - 3);
+    return QStringLiteral("ampr_emu.index: %1 file(s) left out (the AMPR runtime cannot list a name longer than 255 bytes, a path "
+                          "longer than 1023 bytes or a backslash): %2")
+        .arg(leftOut.size())
+        .arg(shown);
+}
+
 AmprIndexDecision decideAmprIndex(AmprMode mode, const AmprIndexState& state, const std::function<QByteArray()>& fresh,
                                   const std::function<Result<QByteArray>()>& existing)
 {
@@ -273,12 +301,14 @@ AmprIndexDecision decideAmprIndex(AmprMode mode, const AmprIndexState& state, co
     } else if (mode == AmprMode::Refresh) {
         d.action = AmprIndexAction::RebuiltAlways;
     } else {
-        // An index of another size cannot match; one that cannot be read is
-        // replaced like one that does not match.
+        // Up to date means the bytes this build would write: the runtime reads
+        // every field of every row, the times too (fstat of a file opened
+        // through the emulator reports them). An index of another size cannot
+        // match; one that cannot be read is replaced like one that does not.
         bool same = false;
         if (state.indexSize == index.size()) {
             const Result<QByteArray> old = existing();
-            same = old.ok() && (old.value() == index || amprIndexesDifferOnlyInTimes(old.value(), index));
+            same = old.ok() && old.value() == index;
         }
         d.action = same ? AmprIndexAction::KeptUpToDate : AmprIndexAction::Rebuilt;
     }

@@ -25,12 +25,15 @@
 #include "app/ui/Widgets.h"
 #include "engines/ampr/Module.h"
 #include "engines/gameinfo/Module.h"
+#include "engines/general/Module.h"
 #include "support/TestSupport.h"
 
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -39,9 +42,12 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
 #include <QTimer>
 #include <QTreeWidgetItemIterator>
 #include <QUrl>
+
+#include <atomic>
 
 using namespace fw;
 
@@ -112,6 +118,32 @@ QByteArray fileBytes(const QString& path)
     QFile f(path);
     return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
 }
+
+std::atomic<bool> g_gateOpen{true};
+
+// Uses the paths in its parameters as a job of that shape does (an "image" as
+// a verify or an upload, a "source" folder it reads, an "output" folder it
+// saves into; the default busyPaths() name them) and runs until the test
+// opens the gate.
+class ImageUsingJob : public Job {
+public:
+    explicit ImageUsingJob(QJsonObject params) : m_params(std::move(params)) {}
+    QString kind() const override { return QStringLiteral("test.image-in-use"); }
+    QString title() const override { return QStringLiteral("Uses an image"); }
+    QJsonObject parameters() const override { return m_params; }
+    Result<JobOutcome> run(JobContext& ctx) override
+    {
+        while (!g_gateOpen.load()) {
+            if (!ctx.token.checkpoint())
+                return Error::cancelled();
+            QThread::msleep(5);
+        }
+        return JobOutcome{};
+    }
+
+private:
+    QJsonObject m_params;
+};
 
 } // namespace
 
@@ -490,6 +522,76 @@ private slots:
         page->openImage({});
     }
 
+    // GitHub #97: Extract and Convert show "Verify after …" up front. It
+    // starts at Settings' "Verify every output", is that row of the job
+    // options (hidden while the switch shows), is sent with the job, and an
+    // extraction queued with it off is not verified. Where the action's job
+    // has no verification step (a PFS image's extraction) there is no switch.
+    void verifyAfterSwitchIsThisJobsVerification()
+    {
+        auto* page = qobject_cast<pages::ImageToolsPage*>(m_window->page(QStringLiteral("imagetools")));
+        auto& q = m_ctx->queue();
+        const QString key = general::keys::kVerifyAfterBuild;
+        auto* panel = page->findChild<ui::JobOptionsPanel*>();
+        QVERIFY(panel && panel->row(key));
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_exfat}, {QStringLiteral("action"), QStringLiteral("extract")}});
+        QTRY_VERIFY_WITH_TIMEOUT(!page->isReading(), 15000);
+        ui::Switch* sw = page->verifySwitch();
+        QVERIFY(sw);
+        QVERIFY(sw->isVisibleTo(page));
+        QCOMPARE(sw->accessibleName(), QStringLiteral("Verify after extracting"));
+        QVERIFY(m_ctx->settings().value(key).toBool());
+        QVERIFY(sw->isChecked());
+        QVERIFY(panel->row(key)->isHidden());
+        // The setting moves a switch nobody changed for this job.
+        QVERIFY(m_ctx->settings().setValue(key, false).ok());
+        QVERIFY(!sw->isChecked());
+        m_ctx->settings().reset(key);
+        QVERIFY(sw->isChecked());
+
+        // Off for this job only: the override goes with the job, the setting stays.
+        sw->click();
+        QVERIFY(!sw->isChecked());
+        QCOMPARE(panel->overrides().value(key), QVariant(false));
+        QVERIFY(m_ctx->settings().value(key).toBool());
+        const QString dest = m_root.filePath(QStringLiteral("extract-unverified"));
+        page->setExtractDestination(dest);
+        q.holdQueue(true);
+        const QString id = newJob(q, [&] { page->queueButton()->click(); });
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->overrides.value(key), QVariant(false));
+        q.holdQueue(false);
+        QVERIFY(waitTerminal(q, id));
+        QVERIFY2(q.record(id)->state == JobState::Succeeded, qPrintable(q.record(id)->error ? q.record(id)->error->message : QString()));
+        QCOMPARE(q.record(id)->outcome->verification, Verification::Skipped);
+        QCOMPARE(fileBytes(dest + QStringLiteral("/data/notes.txt")), QByteArray("Hello, image!\n"));
+        page->showForm();
+
+        // Convert has its own, holding the same value.
+        page->setAction(pages::ImageToolsPage::Action::Convert);
+        ui::Switch* convert = page->verifySwitch();
+        QVERIFY(convert && convert != sw && convert->isVisibleTo(page));
+        QCOMPARE(convert->accessibleName(), QStringLiteral("Verify after converting"));
+        QVERIFY(!convert->isChecked());
+        convert->click();
+        QVERIFY(convert->isChecked() && sw->isChecked());
+        QVERIFY(!panel->overrides().contains(key)); // back at the setting
+        // The Verify action has no such switch; the options row shows again.
+        page->setAction(pages::ImageToolsPage::Action::Verify);
+        QVERIFY(!page->verifySwitch());
+        QVERIFY(!panel->row(key)->isHidden());
+
+        // A PFS image's extraction has no verification step.
+        m_window->navigate(QStringLiteral("imagetools"), {{QStringLiteral("image"), m_ffpfsc}, {QStringLiteral("action"), QStringLiteral("extract")}});
+        QTRY_VERIFY_WITH_TIMEOUT(!page->isReading(), 15000);
+        QCOMPARE(page->action(), pages::ImageToolsPage::Action::Extract);
+        QVERIFY(!page->verifySwitch());
+        QVERIFY(!sw->isVisibleTo(page));
+        page->openImage({});
+        panel->clearOverrides();
+        q.clearFinished();
+    }
+
     // An invalid value in a row that the chosen action hides cannot be
     // corrected there, is not sent, and so does not block the job.
     void errorInAHiddenJobSettingDoesNotBlock()
@@ -601,6 +703,64 @@ private slots:
         for (auto* l : hex->findChildren<QLabel*>())
             QVERIFY2(!l->text().startsWith(QStringLiteral("Preview · <b>")), qPrintable(l->text()));
         delete hex;
+    }
+
+    // The result and preview sheets are information sheets: Close is the
+    // default button (focused, Esc) in the secondary look, and the button that
+    // acts on the content ("Copy report", "Load more") sits at the start of
+    // the same row and leaves the sheet open.
+    void resultSheetsCloseQuietly()
+    {
+        const auto side = [](const QString& path) {
+            return QJsonObject{{QStringLiteral("path"), path}, {QStringLiteral("kind"), QStringLiteral("folder")},
+                               {QStringLiteral("files"), 2}, {QStringLiteral("dirs"), 1}, {QStringLiteral("bytes"), 10}};
+        };
+        const QJsonObject d{{QStringLiteral("a"), side(QStringLiteral("D:/a"))}, {QStringLiteral("b"), side(QStringLiteral("D:/b"))},
+                            {QStringLiteral("depth"), QStringLiteral("full")}, {QStringLiteral("identical"), false},
+                            {QStringLiteral("counts"), QJsonObject{{QStringLiteral("missing"), 1}, {QStringLiteral("differences"), 1}}},
+                            {QStringLiteral("missing"), QJsonArray{QStringLiteral("eboot.bin")}}};
+        const auto buttonOf = [](QWidget* sheet, const QString& text) -> QPushButton* {
+            for (QPushButton* b : sheet->findChildren<QPushButton*>())
+                if (b->text() == text)
+                    return b;
+            return nullptr;
+        };
+        // `afterAside` waits for what the aside button did (nothing for Copy report).
+        const auto check = [](ui::Sheet* sheet, QPushButton* aside, QPushButton* close, const auto& afterAside) {
+            QVERIFY(aside && close);
+            QSignalSpy finished(sheet, &ui::Sheet::finished);
+            sheet->open();
+            QTRY_VERIFY(close->hasFocus());
+            QVERIFY(close->property("variant").toString() != QLatin1String("primary"));
+            QCOMPARE(aside->parentWidget(), close->parentWidget()); // one button row
+            QCOMPARE(aside->y(), close->y());
+            QVERIFY(aside->mapTo(sheet, QPoint(0, 0)).x() < close->mapTo(sheet, QPoint(0, 0)).x());
+            QTRY_VERIFY_WITH_TIMEOUT(aside->isEnabled(), 15000);
+            aside->click();
+            QVERIFY(sheet->isOpen());
+            afterAside();
+            if (QTest::currentTestFailed())
+                return;
+            QVERIFY(sheet->isOpen());
+            QCOMPARE(finished.count(), 0);
+            QTest::keyClick(close, Qt::Key_Escape);
+            QTRY_COMPARE(finished.count(), 1);
+            QCOMPARE(finished.first().first().toInt(), 1); // Close, the second button
+        };
+        auto* compare = new pages::CompareResultSheet(m_window.get(), d, QStringLiteral("1 difference"));
+        check(compare, buttonOf(compare, QStringLiteral("Copy report")), buttonOf(compare, QStringLiteral("Close")), [] {});
+        if (QTest::currentTestFailed())
+            return;
+        // A file longer than one slice, so "Load more" has something to read.
+        const qint64 bigSize = QFileInfo(m_src + QStringLiteral("/data/big.bin")).size();
+        QVERIFY(bigSize > 2 * ui::kHexPreviewChunk);
+        auto* hex = new pages::HexPreviewSheet(m_window.get(), m_exfat, QStringLiteral("data/big.bin"), bigSize);
+        hex->start();
+        check(hex, hex->loadMoreButton(), buttonOf(hex, QStringLiteral("Close")), [hex] {
+            QTRY_VERIFY_WITH_TIMEOUT(!hex->isLoading(), 15000);
+            QCOMPARE(hex->loadedBytes(), 2 * ui::kHexPreviewChunk);
+            QVERIFY(hex->errorText().isEmpty());
+        });
     }
 
     // The comparison row follows comparisons of the open image only.
@@ -802,7 +962,94 @@ private slots:
         QCOMPARE(lib->renameImages({{image, name}}, &skipped), 0);
         QCOMPARE(skipped.size(), 1);
         QVERIFY(QFileInfo::exists(image));
-        m_ctx->queue().clearFinished();
+
+        // A change of case only renames the file itself.
+        const QString lower = name.toLower();
+        skipped.clear();
+        QCOMPARE(lib->renameImages({{dir + u'/' + name, lower}}, &skipped), 1);
+        QVERIFY2(QDir(dir).entryList(QDir::Files).contains(lower), qPrintable(QDir(dir).entryList(QDir::Files).join(u'|')));
+
+        // An image a running job uses is not renamed under it.
+        auto& q = m_ctx->queue();
+        g_gateOpen = false;
+        auto openGate = qScopeGuard([] { g_gateOpen = true; });
+        const auto startGated = [&](const QJsonObject& params) {
+            g_gateOpen = false;
+            const auto id = q.enqueue(std::make_unique<ImageUsingJob>(params));
+            if (!id.ok())
+                return QString();
+            q.startNow(id.value());
+            const bool running = QTest::qWaitFor([&] {
+                auto r = q.record(id.value());
+                return r && r->state == JobState::Running;
+            }, 10000);
+            return running ? id.value() : QString();
+        };
+        const QString busy = startGated({{QStringLiteral("image"), image}});
+        QVERIFY(!busy.isEmpty());
+        QVERIFY(q.isPathInUse(image));
+        QVERIFY(!q.isPathInUse(dir + u'/' + lower));
+        skipped.clear();
+        QCOMPARE(lib->renameImages({{image, QStringLiteral("renamed while busy.exfat")}}, &skipped), 0);
+        QCOMPARE(skipped, QStringList{QStringLiteral("my game.exfat: in use or read-only")});
+        QVERIFY(QFileInfo::exists(image));
+        QVERIFY(!QFileInfo::exists(dir + QStringLiteral("/renamed while busy.exfat")));
+        g_gateOpen = true;
+        QVERIFY(waitTerminal(q, busy));
+        QVERIFY(!q.isPathInUse(image));
+
+        // A job that only saves into the images' folder (an FPKG or DLC
+        // "Save to" folder) does not hold the images already in it …
+        const QString saving = startGated({{QStringLiteral("output"), dir}});
+        QVERIFY(!saving.isEmpty());
+        QVERIFY(q.isPathInUse(dir)); // the folder itself is the job's
+        QVERIFY(!q.isPathInUse(image));
+        skipped.clear();
+        QCOMPARE(lib->renameImages({{image, QStringLiteral("renamed beside a build.exfat")}}, &skipped), 1);
+        QVERIFY2(skipped.isEmpty(), qPrintable(skipped.join(u'|')));
+        QCOMPARE(lib->renameImages({{dir + QStringLiteral("/renamed beside a build.exfat"), QStringLiteral("my game.exfat")}}, &skipped), 1);
+        QVERIFY(QFileInfo::exists(image));
+        g_gateOpen = true;
+        QVERIFY(waitTerminal(q, saving));
+        // … but one that reads the folder (an upload of it) does.
+        const QString reading = startGated({{QStringLiteral("source"), dir}});
+        QVERIFY(!reading.isEmpty());
+        QVERIFY(q.isPathInUse(image));
+        skipped.clear();
+        QCOMPARE(lib->renameImages({{image, QStringLiteral("renamed while read.exfat")}}, &skipped), 0);
+        QCOMPARE(skipped, QStringList{QStringLiteral("my game.exfat: in use or read-only")});
+        g_gateOpen = true;
+        QVERIFY(waitTerminal(q, reading));
+        QVERIFY(QFileInfo::exists(image));
+#ifdef Q_OS_WIN
+        // Held open by another program (Qt opens files without delete sharing,
+        // so the rename is refused): never copied to the new name instead,
+        // which is minutes on the UI thread for an image. A copy would have
+        // been made and removed again in the folder. Each refusal is at once,
+        // not after a second of retries on the UI thread.
+        {
+            QFile holder(image), second(dir + u'/' + lower);
+            QVERIFY(holder.open(QIODevice::ReadOnly));
+            QVERIFY(second.open(QIODevice::ReadOnly));
+            QTest::qWait(30);
+            const QDateTime folderChanged = QFileInfo(dir).lastModified();
+            skipped.clear();
+            QElapsedTimer t;
+            t.start();
+            QCOMPARE(lib->renameImages({{image, QStringLiteral("renamed while open.exfat")},
+                                        {dir + u'/' + lower, QStringLiteral("renamed while open 2.exfat")}},
+                                       &skipped),
+                     0);
+            const qint64 took = t.elapsed();
+            QVERIFY2(took < 800, qPrintable(QStringLiteral("%1 ms").arg(took)));
+            QCOMPARE(skipped, (QStringList{QStringLiteral("my game.exfat: in use or read-only"),
+                                           QStringLiteral("%1: in use or read-only").arg(lower)}));
+            QVERIFY(!QFileInfo::exists(dir + QStringLiteral("/renamed while open.exfat")));
+            QVERIFY(!QFileInfo::exists(dir + QStringLiteral("/renamed while open 2.exfat")));
+            QCOMPARE(QFileInfo(dir).lastModified(), folderChanged);
+        }
+#endif
+        q.clearFinished();
     }
 
     void reportListsTruncatedGroups()

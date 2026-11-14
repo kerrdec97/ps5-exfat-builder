@@ -15,6 +15,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <limits>
 #include <map>
 
 namespace fw::tools {
@@ -543,7 +544,8 @@ Result<StripResult> stripLanguages(const StripPlan& plan, const CancellationToke
 }
 
 Result<RestoreResult> restoreLanguageBackup(const QString& backupZip, const QString& gameRoot,
-                                            const CancellationToken& token, ProgressReporter* progress)
+                                            const CancellationToken& token, ProgressReporter* progress,
+                                            qint64 freeSpaceMarginBytes)
 {
     if (!isGameRoot(gameRoot))
         return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 is not a game folder (no eboot.bin).").arg(QDir::toNativeSeparators(gameRoot)));
@@ -581,7 +583,15 @@ Result<RestoreResult> restoreLanguageBackup(const QString& backupZip, const QStr
                 return true;
         return false;
     };
-    qint64 total = 0;
+    const QDir root(QDir(gameRoot).absolutePath());
+    qint64 total = 0, needed = 0; // all of it; what is not in the game yet
+    // The sizes come from the ZIP's own headers: added without overflow, so a
+    // size no file can have asks for more space than any drive has instead
+    // of turning the check off.
+    const auto add = [](qint64 sum, quint64 size) {
+        constexpr qint64 kMax = std::numeric_limits<qint64>::max();
+        return size > quint64(kMax - sum) ? kMax : sum + qint64(size);
+    };
     for (const auto& e : r.entries()) {
         if (e.name == QLatin1String(kManifestName))
             continue;
@@ -594,14 +604,17 @@ Result<RestoreResult> restoreLanguageBackup(const QString& backupZip, const QStr
             return Error(ErrorCode::CorruptData,
                          QStringLiteral("%1 holds a file that its list of removed items does not cover (%2); nothing was restored.")
                              .arg(zipName, e.name.left(200)));
-        total += qint64(e.uncompressedSize);
+        total = add(total, e.uncompressedSize);
+        if (!e.isDirectory() && !QFileInfo::exists(root.filePath(safe)))
+            needed = add(needed, e.uncompressedSize);
     }
 
     RestoreResult result;
     result.backupGame = manifest.value(QStringLiteral("game")).toString();
-    const QDir root(QDir(gameRoot).absolutePath());
     result.otherGame = !result.backupGame.isEmpty()
                        && result.backupGame.compare(root.dirName(), Qt::CaseInsensitive) != 0;
+    // Before the first file, not half-way through the game.
+    FW_TRY(ensureFreeSpace(root.absolutePath(), needed, freeSpaceMarginBytes));
     if (progress)
         progress->begin(QStringLiteral("Restoring"), total);
     for (const auto& e : r.entries()) {
@@ -618,10 +631,12 @@ Result<RestoreResult> restoreLanguageBackup(const QString& backupZip, const QStr
             continue;
         }
         QDir().mkpath(QFileInfo(target).absolutePath());
+        // A game file called "<target>.part" is never taken for the temporary
+        // file (PartFile picks another name then).
         PartFile part(target);
         QFile out(toLongPath(part.partPath()));
         const auto failed = [&] { return Error(ErrorCode::IoError, QStringLiteral("Could not restore %1.").arg(e.name), out.errorString()); };
-        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly))
             return failed();
         FW_TRY(r.read(e, [&](const QByteArray& c) -> Status {
             if (out.write(c) != c.size())

@@ -20,7 +20,7 @@ namespace fw::exfat {
 QString keepStagedFolder(const QString& stage, const QString& output)
 {
     const QString kept = uniquePath(output + QStringLiteral(".new"));
-    return QDir().rename(stage, kept) ? kept : stage;
+    return renameWithoutCopying(stage, kept) ? kept : stage;
 }
 
 Error fileError(const QString& userMessage, const QFileDevice& file)
@@ -107,16 +107,24 @@ bool setPathTimes(const QString& path, const QDateTime& created, const QDateTime
 #endif
 }
 
-bool applyAttributes(const QString& path, quint16 attributes, bool isDir)
-{
 #ifdef Q_OS_WIN
-    const QString lp = toLongPath(path);
+// The attribute word SetFileAttributesW receives for these exFAT bits.
+static DWORD windowsAttributes(quint16 attributes, bool isDir)
+{
     DWORD a = attributes & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE);
     if (isDir)
         a |= FILE_ATTRIBUTE_DIRECTORY;
     if (a == 0)
         a = FILE_ATTRIBUTE_NORMAL;
-    return SetFileAttributesW(reinterpret_cast<const wchar_t*>(lp.utf16()), a) != 0;
+    return a;
+}
+#endif
+
+bool applyAttributes(const QString& path, quint16 attributes, bool isDir)
+{
+#ifdef Q_OS_WIN
+    const QString lp = toLongPath(path);
+    return SetFileAttributesW(reinterpret_cast<const wchar_t*>(lp.utf16()), windowsAttributes(attributes, isDir)) != 0;
 #else
     if (isDir || !(attributes & kAttrReadOnly))
         return true;
@@ -124,6 +132,51 @@ bool applyAttributes(const QString& path, quint16 attributes, bool isDir)
     const auto perms = f.permissions() & ~(QFileDevice::WriteOwner | QFileDevice::WriteUser | QFileDevice::WriteGroup
                                            | QFileDevice::WriteOther);
     return f.setPermissions(perms);
+#endif
+}
+
+bool finishOpenFile(QFile& file, bool times, const QDateTime& created, const QDateTime& modified, const QDateTime& accessed,
+                    bool attributes, quint16 attributeBits)
+{
+#ifdef Q_OS_WIN
+    if (!times && !attributes)
+        return true;
+    if (!file.isOpen() || !file.flush())
+        return false;
+    const int fd = file.handle();
+    if (fd < 0)
+        return false;
+    const HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    // Zero leaves a field as it is, like a null time for SetFileTime or a
+    // call that is not made. Times set through the handle are not changed by
+    // the file system when the handle is closed.
+    FILE_BASIC_INFO info{};
+    const auto put = [](LARGE_INTEGER& field, const QDateTime& t) {
+        if (!t.isValid())
+            return;
+        const FILETIME ft = toFileTime(t);
+        field.LowPart = ft.dwLowDateTime;
+        field.HighPart = LONG(ft.dwHighDateTime);
+    };
+    if (times) {
+        put(info.CreationTime, created);
+        put(info.LastAccessTime, accessed);
+        put(info.LastWriteTime, modified);
+    }
+    if (attributes)
+        info.FileAttributes = windowsAttributes(attributeBits, false);
+    return SetFileInformationByHandle(h, FileBasicInfo, &info, sizeof(info)) != 0;
+#else
+    Q_UNUSED(file);
+    Q_UNUSED(times);
+    Q_UNUSED(created);
+    Q_UNUSED(modified);
+    Q_UNUSED(accessed);
+    Q_UNUSED(attributes);
+    Q_UNUSED(attributeBits);
+    return false;
 #endif
 }
 

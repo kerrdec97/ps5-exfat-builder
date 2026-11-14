@@ -9,6 +9,7 @@
 #include "engines/exfat/Module.h"
 #include "engines/general/Module.h"
 #include "jobs/Job.h"
+#include "support/ProgressAudit.h"
 
 #include <QCryptographicHash>
 #include <QJsonObject>
@@ -46,10 +47,13 @@ struct JobEnv {
         return fw::SettingsValues(schema, {}, merged);
     }
 
-    // Validates and runs a job synchronously, like the queue's worker does.
+    // Validates and runs a job synchronously, like the queue's worker does
+    // (the phases and their weights declared as the queue declares them).
+    // `audit` watches the progress and gets the last state at the end.
     fw::Result<fw::JobOutcome> run(const QString& kind, const QJsonObject& params, const QVariantMap& overrides = {},
                                    fw::CancellationSource* cancel = nullptr,
-                                   std::function<void(const fw::ProgressSnapshot&)> sink = {}) const
+                                   std::function<void(const fw::ProgressSnapshot&)> sink = {},
+                                   fwtest::ProgressAudit* audit = nullptr) const
     {
         auto job = jobs.create(kind, params, overrides);
         if (!job.ok())
@@ -57,8 +61,17 @@ struct JobEnv {
         const fw::SettingsValues s = settings(overrides);
         if (auto v = job.value()->validate(s); !v.ok())
             return v.takeError();
-        fw::ProgressReporter reporter(std::move(sink), 0);
-        reporter.setPhases(job.value()->phases());
+        fw::ProgressReporter reporter(
+            [&](const fw::ProgressSnapshot& p) {
+                if (audit)
+                    audit->report(p);
+                if (sink)
+                    sink(p);
+            },
+            0);
+        if (audit)
+            audit->watch(&reporter);
+        reporter.setPhases(job.value()->phases(), job.value()->phaseWeights(s));
         fw::TempDir temp(QStringLiteral("exfat-test"));
         fw::JobContext ctx;
         ctx.jobId = QStringLiteral("test");
@@ -68,6 +81,11 @@ struct JobEnv {
         ctx.settings = s;
         ctx.tempDir = temp.path();
         auto r = job.value()->run(ctx);
+        if (audit) {
+            reporter.finish();
+            audit->finish(reporter.snapshot(), r.ok() && r->verification != fw::Verification::Failed);
+            audit->watch(nullptr);
+        }
         if (!r.ok() && ctx.token.isCancelled() && !r.error().isCancelled())
             return fw::Error::cancelled();
         return r;

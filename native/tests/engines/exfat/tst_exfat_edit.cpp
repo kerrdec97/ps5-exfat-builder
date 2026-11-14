@@ -14,6 +14,8 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <atomic>
+
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -302,7 +304,7 @@ private slots:
         QVERIFY2(r->newVolumeBytes > oldSize, qPrintable(r->summary()));
         QVERIFY(r->summary().contains(QStringLiteral("grew")));
         QCOMPARE(QFileInfo(img).size(), r->newVolumeBytes);
-        QVERIFY(!QFileInfo::exists(img + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
         QVERIFY(!QFileInfo::exists(img + QStringLiteral(".old")));
         expectIntact(img);
 
@@ -353,7 +355,7 @@ private slots:
         QVERIFY2(r.error().message.contains(QStringLiteral("edited image was built and verified")), qPrintable(err(r.error())));
         QVERIFY2(r.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(err(r.error())));
         QCOMPARE(readAllOf(img), original);
-        QVERIFY(!QFileInfo::exists(img + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
         expectIntact(kept);
         QVERIFY(treeOf(kept).find(QStringLiteral("data/medium.bin")) < 0);
         QVERIFY(treeOf(kept).find(QStringLiteral("data/big.bin")) > 0);
@@ -370,6 +372,36 @@ private slots:
         QVERIFY(!r->inPlace);
         QVERIFY(r->verification.passed());
         QCOMPARE(r->newVolumeBytes, r->oldVolumeBytes); // still fits: same size
+        expectIntact(img);
+        QVERIFY(treeOf(img).find(QStringLiteral("data/medium.bin")) < 0);
+    }
+
+    // What an interrupted rebuild left ("<image>.fw.part", as large as the
+    // image) is removed before the free space is checked, so a drive with
+    // room for one image is not short of it, and the retry leaves nothing.
+    // The refusal shows the order: no drive has room for that reserve.
+    void aRebuildRemovesItsLeftoverBeforeTheSpaceCheck()
+    {
+        const QString img = freshImage();
+        const QByteArray hash = fileHash(img);
+        const QString leftover = PartFile::partPathFor(img);
+        QVERIFY(QFile::copy(img, leftover)); // what the crash left
+        EditOptions o = options(false);
+        o.strategy = EditStrategy::Rebuild;
+        o.freeSpaceMarginBytes = qint64(1) << 60;
+        CancellationToken token;
+        const std::vector<EditOp> ops{op(EditOp::Kind::Delete, QStringLiteral("data/medium.bin"))};
+        auto r = editImage(img, ops, o, token);
+        FWTEST_COMPARE_ERROR(r, ErrorCode::InsufficientSpace);
+        QVERIFY(!QFileInfo::exists(leftover));
+        QCOMPARE(fileHash(img), hash);
+
+        QVERIFY(QFile::copy(img, leftover));
+        o.freeSpaceMarginBytes = 0;
+        r = editImage(img, ops, o, token);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY(!r->inPlace);
+        QVERIFY(!QFileInfo::exists(leftover));
         expectIntact(img);
         QVERIFY(treeOf(img).find(QStringLiteral("data/medium.bin")) < 0);
     }
@@ -430,7 +462,7 @@ private slots:
         QVERIFY2(r.error().isCancelled(), qPrintable(err(r.error())));
         QCOMPARE(fileHash(img), hash);
         QVERIFY(!QFileInfo::exists(editJournalPath(img)));
-        QVERIFY(!QFileInfo::exists(img + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
     }
 
     // The journal of a big in-place replacement is as large as the new file:
@@ -460,7 +492,237 @@ private slots:
         QVERIFY2(r.error().isCancelled(), qPrintable(err(r.error())));
         QCOMPARE(fileHash(img), hash);
         QVERIFY(!QFileInfo::exists(editJournalPath(img)));
-        QVERIFY(!QFileInfo::exists(editJournalPath(img) + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(editJournalPath(img))));
+    }
+
+    // A cancel while the written edit is verified keeps the edit, as finished
+    // work is kept when verification is turned off: names, sizes and the
+    // structure are checked instead, and the edit is reported as not verified.
+    void cancelDuringVerificationKeepsTheEdit_data()
+    {
+        QTest::addColumn<bool>("inPlace");
+        QTest::newRow("in place") << true;
+        QTest::newRow("rebuild") << false;
+    }
+    void cancelDuringVerificationKeepsTheEdit()
+    {
+        QFETCH(bool, inPlace);
+        const QString img = freshImage();
+        const QString local = path(QStringLiteral("verify-cancel-%1.bin").arg(inPlace));
+        QVERIFY(writeRandom(local, 20 * kMiB, 61));
+        const QString target = inPlace ? QStringLiteral("data/large.bin") : QStringLiteral("verify-cancel.bin");
+        const EditOp e = op(inPlace ? EditOp::Kind::Replace : EditOp::Kind::Add, target, local);
+        CancellationSource cancel;
+        std::atomic<bool> cancelled{false}; // reports come from several threads while comparing
+        ProgressReporter progress([&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2 && s.done > 2 * kMiB && !cancelled.exchange(true))
+                cancel.cancel();
+        }, 0);
+        progress.setPhases({QStringLiteral("Planning"), QStringLiteral("Writing"), QStringLiteral("Verifying")});
+        EditOptions o = options();
+        o.verify.bufferBytes = 1 * kMiB;
+        o.onPhase = [&](int phase, qint64 total, qint64 files, bool bytes) { progress.beginPhase(phase, total, files, bytes); };
+        auto r = editImage(img, {e}, o, cancel.token(), &progress);
+        QVERIFY(cancelled);
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QCOMPARE(r->inPlace, inPlace);
+        QVERIFY(r->verificationCancelled);
+        QVERIFY(!r->restored);
+        QVERIFY2(r->verification.passed(), qPrintable(r->verification.summary()));
+        QVERIFY(!r->verification.full); // names, sizes and structure only
+        QVERIFY(!QFileInfo::exists(editJournalPath(img)));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
+        expectIntact(img);
+        QCOMPARE(contentOf(img, target), readAllOf(local));
+    }
+
+    // Closing the app is no Cancel the user chose: an edit whose verification
+    // it stops is not kept unverified. An edit in place is undone, a rebuilt
+    // image is not used, and the image is as it was, byte for byte.
+    void closingTheAppDuringVerificationUndoesTheEdit_data()
+    {
+        QTest::addColumn<bool>("inPlace");
+        QTest::newRow("in place") << true;
+        QTest::newRow("rebuild") << false;
+    }
+    void closingTheAppDuringVerificationUndoesTheEdit()
+    {
+        QFETCH(bool, inPlace);
+        const QString img = freshImage();
+        const QByteArray hash = fileHash(img);
+        const QString local = path(QStringLiteral("verify-close-%1.bin").arg(inPlace));
+        QVERIFY(writeRandom(local, 20 * kMiB, 65));
+        const QString target = inPlace ? QStringLiteral("data/large.bin") : QStringLiteral("verify-close.bin");
+        const EditOp e = op(inPlace ? EditOp::Kind::Replace : EditOp::Kind::Add, target, local);
+        CancellationSource cancel;
+        std::atomic<bool> closed{false}; // reports come from several threads while comparing
+        ProgressReporter progress([&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2 && s.done > 2 * kMiB && !closed.exchange(true))
+                cancel.shutdown();
+        }, 0);
+        progress.setPhases({QStringLiteral("Planning"), QStringLiteral("Writing"), QStringLiteral("Verifying")});
+        EditOptions o = options();
+        o.verify.bufferBytes = 1 * kMiB;
+        o.onPhase = [&](int phase, qint64 total, qint64 files, bool bytes) { progress.beginPhase(phase, total, files, bytes); };
+        auto r = editImage(img, {e}, o, cancel.token(), &progress);
+        QVERIFY(closed);
+        QVERIFY(!r.ok());
+        QVERIFY2(r.error().isCancelled(), qPrintable(err(r.error())));
+        QCOMPARE(fileHash(img), hash);
+        QVERIFY(!QFileInfo::exists(editJournalPath(img)));
+        QVERIFY(!QFileInfo::exists(img + QStringLiteral(".part")));
+    }
+
+    // A difference the verification found before the cancel still undoes the
+    // edit: the image is put back byte for byte.
+    void aProblemFoundBeforeTheCancelStillUndoesTheEdit()
+    {
+        const QString img = freshImage();
+        const QByteArray hash = fileHash(img);
+        const ImageTree before = treeOf(img);
+        const bool largeFirst = entryOf(before, QStringLiteral("data/large.bin")).firstCluster
+                                < entryOf(before, QStringLiteral("data/medium.bin")).firstCluster;
+        const QString forLarge = path(QStringLiteral("first-large.bin")), forMedium = path(QStringLiteral("first-medium.bin"));
+        QVERIFY(writeRandom(forLarge, 2 * kMiB, 62));
+        QVERIFY(writeRandom(forMedium, 700 * 1024, 63)); // the size of medium.bin
+        // The file compared first changes after it was written into the image;
+        // the cancel comes once it was compared, while the other one is.
+        const QString changing = largeFirst ? forLarge : forMedium;
+        CancellationSource cancel;
+        ProgressReporter progress([&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2 && s.filesDone >= 1)
+                cancel.cancel();
+        }, 0);
+        progress.setPhases({QStringLiteral("Planning"), QStringLiteral("Writing"), QStringLiteral("Verifying")});
+        EditOptions o = options();
+        o.verify.threads = 1; // in image order
+        o.verify.bufferBytes = 64 * 1024;
+        o.onPhase = [&](int phase, qint64 total, qint64 files, bool bytes) {
+            progress.beginPhase(phase, total, files, bytes);
+            if (phase == 2)
+                flipByte(changing, 12345);
+        };
+        auto r = editImage(img, {op(EditOp::Kind::Replace, QStringLiteral("data/large.bin"), forLarge),
+                                 op(EditOp::Kind::Replace, QStringLiteral("data/medium.bin"), forMedium)},
+                           o, cancel.token(), &progress);
+        QVERIFY(cancel.token().isCancelled());
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY(r->inPlace);
+        QVERIFY(r->restored);
+        QVERIFY(!r->verificationCancelled);
+        QVERIFY(!r->verification.passed());
+        QVERIFY(r->verification.cancelled); // the other file was not compared
+        QVERIFY2(r->verification.summary().contains(QStringLiteral("differ")), qPrintable(r->verification.summary()));
+        QVERIFY2(r->verification.summary().contains(QStringLiteral("cancelled")), qPrintable(r->verification.summary()));
+        QCOMPARE(fileHash(img), hash);
+        QVERIFY(!QFileInfo::exists(editJournalPath(img)));
+    }
+
+    // After a cancel the quick check decides: a damaged rebuilt image is not
+    // swapped in, the original stays as it was.
+    void aFailedCheckAfterTheCancelKeepsTheOriginal()
+    {
+        const QString img = freshImage();
+        const QByteArray hash = fileHash(img);
+        const QString local = path(QStringLiteral("quick-check.bin"));
+        QVERIFY(writeRandom(local, 20 * kMiB, 64));
+        CancellationSource cancel;
+        EditOptions o = options();
+        o.onPhase = [&](int phase, qint64, qint64, bool) {
+            if (phase == 2) { // the structure was read already: the damage is for the check after the cancel
+                flipByte(PartFile::partPathFor(img), 12 * 512 + 100); // backup boot region
+                cancel.cancel();
+            }
+        };
+        auto r = editImage(img, {op(EditOp::Kind::Add, QStringLiteral("quick-check.bin"), local)}, o, cancel.token());
+        QVERIFY2(r.ok(), qPrintable(r.ok() ? QString() : err(r.error())));
+        QVERIFY(!r->inPlace);
+        QVERIFY(r->restored);
+        QVERIFY(!r->verificationCancelled);
+        QVERIFY(!r->verification.passed());
+        QCOMPARE(fileHash(img), hash);
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
+    }
+
+    // Closing the app is no Cancel: an edit that was being verified is undone
+    // (in place) or not swapped in (rebuilt), so the job can run again.
+    void closingDuringVerificationUndoesTheEdit_data()
+    {
+        QTest::addColumn<bool>("inPlace");
+        QTest::newRow("in place") << true;
+        QTest::newRow("rebuild") << false;
+    }
+    void closingDuringVerificationUndoesTheEdit()
+    {
+        QFETCH(bool, inPlace);
+        const QString img = freshImage();
+        const QByteArray hash = fileHash(img);
+        const QString local = path(QStringLiteral("verify-close-%1.bin").arg(inPlace));
+        QVERIFY(writeRandom(local, 20 * kMiB, 65));
+        const QString target = inPlace ? QStringLiteral("data/large.bin") : QStringLiteral("verify-close.bin");
+        const EditOp e = op(inPlace ? EditOp::Kind::Replace : EditOp::Kind::Add, target, local);
+        CancellationSource cancel;
+        std::atomic<bool> cancelled{false};
+        ProgressReporter progress([&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2 && s.done > 2 * kMiB && !cancelled.exchange(true))
+                cancel.cancel(CancellationToken::shutdownReason());
+        }, 0);
+        progress.setPhases({QStringLiteral("Planning"), QStringLiteral("Writing"), QStringLiteral("Verifying")});
+        EditOptions o = options();
+        o.verify.bufferBytes = 1 * kMiB;
+        o.onPhase = [&](int phase, qint64 total, qint64 files, bool bytes) { progress.beginPhase(phase, total, files, bytes); };
+        auto r = editImage(img, {e}, o, cancel.token(), &progress);
+        QVERIFY(cancelled);
+        QVERIFY(!r.ok());
+        QVERIFY2(r.error().isCancelled(), qPrintable(err(r.error())));
+        QCOMPARE(fileHash(img), hash);
+        QVERIFY(!QFileInfo::exists(editJournalPath(img)));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
+        expectIntact(img);
+    }
+
+    // The journal is written under its working name and renamed before the
+    // image is touched; after a crash that rename may be lost. A complete
+    // journal under that name, or under "<journal>.part" where 5.0.2 wrote
+    // it, is applied all the same.
+    void aJournalUnderItsWorkingNameIsApplied_data()
+    {
+        QTest::addColumn<bool>("olderName");
+        QTest::newRow("<journal>.fw.part") << false;
+        QTest::newRow("<journal>.part (5.0.2)") << true;
+    }
+    void aJournalUnderItsWorkingNameIsApplied()
+    {
+        QFETCH(bool, olderName);
+        const QString img = freshImage();
+        const QByteArray hash = fileHash(img);
+        EditOptions crash = options();
+        crash.testCrashAfterApply = true;
+        CancellationToken token;
+        QVERIFY(!editImage(img, {op(EditOp::Kind::Delete, QStringLiteral("eboot.bin"))}, crash, token).ok());
+        const QString journal = editJournalPath(img);
+        QVERIFY(fileHash(img) != hash);
+        const QString working = olderName ? journal + QStringLiteral(".part") : PartFile::partPathFor(journal);
+        QVERIFY(QFile::rename(journal, working));
+        auto rec = recoverInterruptedEdit(img);
+        QVERIFY2(rec.ok(), qPrintable(rec.ok() ? QString() : err(rec.error())));
+        QVERIFY(rec.value());
+        QCOMPARE(fileHash(img), hash);
+        QVERIFY(!QFileInfo::exists(working));
+        QVERIFY(!QFileInfo::exists(journal));
+        // An edit does not start beside a journal it could not remove.
+#ifdef Q_OS_WIN
+        QVERIFY(writeBytes(working, "not this edit's"));
+        {
+            QFile holder(working); // Qt opens files without delete sharing
+            QVERIFY(holder.open(QIODevice::ReadOnly));
+            auto refused = editImage(img, {op(EditOp::Kind::Delete, QStringLiteral("eboot.bin"))}, options(), token);
+            QVERIFY(!refused.ok());
+            QVERIFY2(refused.error().message.contains(QDir::toNativeSeparators(working)), qPrintable(err(refused.error())));
+        }
+        QCOMPARE(fileHash(img), hash);
+        QVERIFY(QFile::remove(working));
+#endif
     }
 
     // After a verified edit the journal is deleted. When that fails because
@@ -626,7 +888,7 @@ private slots:
         QVERIFY(r->verification.summary().contains(QStringLiteral("differ")));
         QCOMPARE(fileHash(img), hash);
         QVERIFY(!QFileInfo::exists(editJournalPath(img)));
-        QVERIFY(!QFileInfo::exists(img + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(img)));
     }
 
     // A replacement that cannot be read halfway through the apply rolls the

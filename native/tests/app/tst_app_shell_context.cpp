@@ -8,6 +8,7 @@
 #include "app/services/LauncherIdentity.h"
 #include "connect/ps5/Module.h"
 #include "core/Paths.h"
+#include "engines/gameinfo/Module.h"
 #include "engines/general/Module.h"
 #include "support/ClosedPort.h"
 #include "support/TestSupport.h"
@@ -190,6 +191,19 @@ private slots:
         ui::PayloadStore again; // what was saved loads again
         QCOMPARE(int(again.entries().size()), 1);
         QVERIFY(again.entries().front().lastSent.isValid());
+
+        // Damaged again, differently: the first copy stays, the second gets a
+        // name of its own, and the same damage read twice is kept once.
+        const QByteArray brokenAgain = "{\"payloads\": [ {\"name\": \"kstuff\" ";
+        QVERIFY(writeBytes(payloads, brokenAgain));
+        for (int i = 0; i < 2; ++i) {
+            ui::PayloadStore damaged;
+            QVERIFY(damaged.entries().empty());
+        }
+        const QString second = QDir(Paths::dataDir()).filePath(QStringLiteral("payloads.json (2).bad"));
+        QCOMPARE(readAll(payloads + QStringLiteral(".bad")), broken);
+        QCOMPARE(readAll(second), brokenAgain);
+        QVERIFY(!QFileInfo::exists(QDir(Paths::dataDir()).filePath(QStringLiteral("payloads.json (3).bad"))));
     }
 
     // The window icon is the brand mark in colour, in the sizes the shell asks for.
@@ -220,6 +234,123 @@ private slots:
         QCOMPARE(store.scanFolders().size(), 2);
         store.removeScanFolder(QStringLiteral("e:/DUMPS/"));
         QCOMPARE(store.scanFolders(), QStringList{QStringLiteral("D:/Games")});
+    }
+
+    // The Library page's folders are the "Library folders" setting: folders
+    // imported from version 4 or typed in Settings are scanned, and a folder
+    // added on the page is in Settings.
+    void libraryFoldersAreTheSetting()
+    {
+        const QString libraryJson = QDir(Paths::dataDir()).filePath(QStringLiteral("library.json"));
+        QFile::remove(libraryJson);
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        SettingsStore& s = ctx.settings();
+        const QString key = gameinfo::keys::kLibraryFolders;
+        s.reset(key);
+        const auto restore = qScopeGuard([&s, key] { s.reset(key); });
+
+        // An import of version 4.0.2's folders while the page's store exists.
+        ui::LibraryStore store; // bound to the running app's settings
+        QVERIFY(store.scanFolders().isEmpty());
+        QSignalSpy changed(&store, &ui::LibraryStore::changed);
+        const QString legacy = m_root.filePath(QStringLiteral("v4-folders.json"));
+        QVERIFY(writeBytes(legacy, R"({"lib_folders": ["D:\\PS5\\Games", "E:\\Jeux vid\u00e9o"], "language": "en"})"));
+        QVERIFY(s.importLegacy(legacy).ok());
+        const QString accented = QString::fromUtf8("E:/Jeux vid\xc3\xa9o");
+        QCOMPARE(store.scanFolders(), (QStringList{QStringLiteral("D:/PS5/Games"), accented}));
+        QVERIFY(changed.count() >= 1);
+        QVERIFY(readAll(libraryJson).contains("D:/PS5/Games"));
+
+        // A folder added on the page is in Settings (as the Settings page writes folders).
+        store.addScanFolder(QStringLiteral("F:/More"));
+        QCOMPARE(s.value(key).toStringList(),
+                 (QStringList{QStringLiteral("D:\\PS5\\Games"), QDir::toNativeSeparators(accented), QStringLiteral("F:\\More")}));
+        // One removed in Settings leaves the page.
+        QVERIFY(s.setValue(key, QStringList{QStringLiteral("F:\\More")}).ok());
+        QCOMPARE(store.scanFolders(), QStringList{QStringLiteral("F:/More")});
+        store.removeScanFolder(QStringLiteral("f:\\more\\"));
+        QVERIFY(s.value(key).toStringList().isEmpty());
+
+        // 5.0.2 kept them apart: at the next start the two lists are joined,
+        // the page's folders first, nothing twice. (The setting first: the
+        // store above follows it and saves library.json.)
+        QVERIFY(s.setValue(key, QStringList{QStringLiteral("d:\\games"), QStringLiteral("H:\\Typed")}).ok());
+        QVERIFY(writeBytes(libraryJson, R"({"folders": ["G:/Old", "D:/Games"], "games": []})"));
+        ui::LibraryStore later(&s);
+        QCOMPARE(later.scanFolders(), (QStringList{QStringLiteral("G:/Old"), QStringLiteral("D:/Games"), QStringLiteral("H:/Typed")}));
+        QCOMPARE(s.value(key).toStringList(),
+                 (QStringList{QStringLiteral("G:\\Old"), QStringLiteral("D:\\Games"), QStringLiteral("H:\\Typed")}));
+        QCOMPARE(store.scanFolders(), later.scanFolders()); // the other store follows the setting too
+
+        // Without settings the store is what it was: library.json only.
+        ui::LibraryStore alone(static_cast<SettingsStore*>(nullptr));
+        alone.addScanFolder(QStringLiteral("J:/Solo"));
+        QCOMPARE(s.value(key).toStringList().size(), 3);
+    }
+
+    // A version 4 import while the page already has folders adds its folders
+    // to them, as the next start does; one it shares is not listed twice.
+    void legacyImportJoinsTheLibraryFolders()
+    {
+        const QString libraryJson = QDir(Paths::dataDir()).filePath(QStringLiteral("library.json"));
+        QFile::remove(libraryJson);
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        SettingsStore& s = ctx.settings();
+        const QString key = gameinfo::keys::kLibraryFolders;
+        s.reset(key);
+        const auto restore = qScopeGuard([&s, key] { s.reset(key); });
+        ui::LibraryStore store(&s);
+        store.addScanFolder(QStringLiteral("G:/Games"));
+        const QString legacy = m_root.filePath(QStringLiteral("v4-join.json"));
+        QVERIFY(writeBytes(legacy, R"({"lib_folders": ["D:\\PS5\\Games", "g:\\games\\"]})"));
+        QVERIFY(s.importLegacy(legacy).ok());
+        QCOMPARE(store.scanFolders(), (QStringList{QStringLiteral("G:/Games"), QStringLiteral("D:/PS5/Games")}));
+        QCOMPARE(s.value(key).toStringList(), (QStringList{QStringLiteral("G:\\Games"), QStringLiteral("D:\\PS5\\Games")}));
+        QVERIFY(readAll(libraryJson).contains("G:/Games"));
+        QVERIFY(s.importLegacy(legacy).ok()); // the same file again changes nothing
+        QCOMPARE(store.scanFolders().size(), 2);
+    }
+
+    // The Library page's folders are the user's own list, not a preference:
+    // Reset section on General and Reset all leave them (and library.json),
+    // while the other settings there go back to their defaults.
+    void libraryFoldersSurviveAReset()
+    {
+        const QString libraryJson = QDir(Paths::dataDir()).filePath(QStringLiteral("library.json"));
+        QFile::remove(libraryJson);
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        SettingsStore& s = ctx.settings();
+        const QString key = gameinfo::keys::kLibraryFolders;
+        const QString preset = gameinfo::keys::kRenamePreset;
+        s.reset(key);
+        const auto restore = qScopeGuard([&s, key] { s.reset(key); });
+        ui::LibraryStore store(&s);
+        store.addScanFolder(QStringLiteral("D:/PS5/Games"));
+        store.addScanFolder(QStringLiteral("E:/Dumps"));
+        const QStringList folders{QStringLiteral("D:/PS5/Games"), QStringLiteral("E:/Dumps")};
+        QSignalSpy changed(&store, &ui::LibraryStore::changed);
+
+        QVERIFY(s.setValue(preset, QStringLiteral("ppsa")).ok());
+        s.resetSection(QStringLiteral("General"));
+        QVERIFY(s.isDefault(preset));
+        QCOMPARE(store.scanFolders(), folders);
+        QVERIFY(!s.isDefault(key));
+        QVERIFY(readAll(libraryJson).contains("E:/Dumps"));
+
+        QVERIFY(s.setValue(preset, QStringLiteral("ppsa")).ok());
+        s.resetAll();
+        QVERIFY(s.isDefault(preset));
+        QCOMPARE(store.scanFolders(), folders);
+        QCOMPARE(s.value(key).toStringList(), (QStringList{QStringLiteral("D:\\PS5\\Games"), QStringLiteral("E:\\Dumps")}));
+        QVERIFY(readAll(libraryJson).contains("E:/Dumps"));
+        QCOMPARE(changed.count(), 0);
+
+        // The setting asked for by name still goes back, and the page follows.
+        s.reset(key);
+        QVERIFY(store.scanFolders().isEmpty());
     }
 };
 

@@ -16,9 +16,8 @@
 //   ampr.unpack {source (folder), output (new folder)}
 //               a packed game folder (zstd or LZ4) as plain files
 // Both write "<output>.part" and rename it when the job is done; the output
-// may be absent or an empty folder, and nothing else is ever removed.
-// Both write "<output>.part" and rename it when the job is done; the output
-// may be absent or an empty folder, and nothing else is ever removed.
+// may be absent or an empty folder, and nothing else is ever removed. A
+// finished folder that cannot take its name is kept as "<output>.new".
 // Image builds with packs and image sources are jobs of the integration module.
 
 #include "core/Settings.h"

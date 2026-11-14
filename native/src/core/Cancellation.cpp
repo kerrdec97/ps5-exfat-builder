@@ -1,5 +1,6 @@
 #include "core/Cancellation.h"
 
+#include <algorithm>
 #include <chrono>
 #include <vector>
 
@@ -73,6 +74,46 @@ QString CancellationToken::reason() const
     return m_state->reason;
 }
 
+bool CancellationToken::isShutdown() const
+{
+    return isShuttingDown() || (isCancelled() && reason() == shutdownReason());
+}
+
+QString CancellationToken::shutdownReason()
+{
+    return QStringLiteral("shutdown");
+}
+
+bool CancellationToken::keepFinishedWork() const
+{
+    // Under the mutex shutdown() sets its flag with: a yes is never given
+    // after the app began to close.
+    std::lock_guard lock(m_state->mutex);
+    // A cancel with the reason "shutdown" is the app closing too.
+    if (!m_state->cancelled.load() || m_state->shuttingDown.load() || m_state->reason == shutdownReason())
+        return false;
+    m_state->workKept.store(true, std::memory_order_release);
+    return true;
+}
+
+CancellationToken CancellationToken::untilShutdown() const
+{
+    auto child = std::make_shared<detail::CancelState>();
+    {
+        std::lock_guard lock(m_state->mutex);
+        if (!m_state->shuttingDown.load()) {
+            auto& list = m_state->untilShutdown;
+            list.erase(std::remove_if(list.begin(), list.end(), [](const auto& w) { return w.expired(); }), list.end());
+            list.push_back(child);
+            return CancellationToken(child);
+        }
+    }
+    child->reason = QStringLiteral("shutdown");
+    child->shuttingDown.store(true);
+    child->cancelled.store(true);
+    return CancellationToken(child);
+}
+
 void CancellationSource::cancel(const QString& reason)
 {
     std::vector<std::function<void()>> toRun;
@@ -96,6 +137,22 @@ void CancellationSource::cancel(const QString& reason)
         if (fn)
             fn();
     m_state->runningThread.store(std::thread::id{});
+}
+
+void CancellationSource::shutdown()
+{
+    std::vector<std::shared_ptr<detail::CancelState>> followers;
+    {
+        std::lock_guard lock(m_state->mutex);
+        m_state->shuttingDown.store(true);
+        for (const auto& w : m_state->untilShutdown)
+            if (auto s = w.lock())
+                followers.push_back(std::move(s));
+        m_state->untilShutdown.clear();
+    }
+    cancel(QStringLiteral("shutdown")); // nothing more when the job was cancelled before
+    for (auto& f : followers)
+        CancellationSource(std::move(f)).shutdown();
 }
 
 void CancellationSource::pause()

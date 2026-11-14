@@ -74,6 +74,16 @@ public:
     virtual QStringList phases() const { return {QStringLiteral("Working")}; }
     // Relative weight of each phase for the overall progress (default equal).
     virtual QList<double> phaseWeights() const { return {}; }
+    // The same for the settings the job runs with, which the queue declares
+    // before run(): a stage that a setting leaves out (verification turned
+    // off) takes no share. Default: phaseWeights(). A job that overrides this
+    // one uses it in run() too, and a job that runs another job passes it the
+    // settings that job gets.
+    virtual QList<double> phaseWeights(const SettingsValues& settings) const
+    {
+        Q_UNUSED(settings);
+        return phaseWeights();
+    }
     virtual QJsonObject parameters() const = 0; // enough to re-create the job
 
     // Files and folders this job reads or changes that no other job may use at

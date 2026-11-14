@@ -96,13 +96,24 @@ class TstLegacyImport : public QObject {
 private slots:
     void initTestCase() { QVERIFY(m_root.isValid()); fwtest::isolateAppData(m_root); }
 
+    // Two files: one written by 4.1.0 (the farewell edition, which the
+    // inventory describes) and one with exactly the keys version 4.0.2 writes.
+    void everyLegacyKeyHasADecision_data()
+    {
+        QTest::addColumn<QString>("file");
+        QTest::addColumn<int>("atLeast");
+        QTest::newRow("4.1.0") << QStringLiteral("exfat_builder_settings.json") << 100;
+        QTest::newRow("4.0.2") << QStringLiteral("settings-4.0.2.json") << 90;
+    }
     void everyLegacyKeyHasADecision()
     {
+        QFETCH(QString, file);
+        QFETCH(int, atLeast);
         fwtest::Registry reg;
-        QFile f(fwtest::dataDir() + QStringLiteral("/legacy/exfat_builder_settings.json"));
+        QFile f(fwtest::dataDir() + QStringLiteral("/legacy/") + file);
         QVERIFY(f.open(QIODevice::ReadOnly));
         const QJsonObject legacy = QJsonDocument::fromJson(f.readAll()).object();
-        QVERIFY(legacy.size() >= 100);
+        QVERIFY(legacy.size() >= atLeast);
         QStringList undecided, both;
         for (const QString& k : legacy.keys()) {
             const bool mapped = reg.schema->legacyKeys().count(k) > 0;
@@ -124,7 +135,9 @@ private slots:
         auto n = store.importLegacy(fwtest::dataDir() + QStringLiteral("/legacy/exfat_builder_settings.json"));
         QVERIFY2(n.ok(), n.ok() ? "" : qPrintable(n.error().toLogString()));
         QVERIFY2(n.value() >= 25, qPrintable(QString::number(n.value())));
-        QCOMPARE(store.value(QStringLiteral("general.afterQueueAction")).toString(), QStringLiteral("sleep"));
+        // The old file chose "sleep" after the queue: an import never arms that
+        // (GitHub #96); the countdown's length is taken over.
+        QCOMPARE(store.value(QStringLiteral("general.afterQueueAction")).toString(), QStringLiteral("none"));
         QCOMPARE(store.value(QStringLiteral("general.afterQueueDelaySeconds")).toInt(), 120);
         QCOMPARE(store.value(QStringLiteral("general.autoRetryCount")).toInt(), 2);
         QCOMPARE(store.value(QStringLiteral("general.checkForUpdatesOnStart")).toBool(), false);
@@ -136,6 +149,42 @@ private slots:
         // proposes the name from these and the name stays editable per job.
         QCOMPARE(store.value(QStringLiteral("build.namePreset")).toString(), QStringLiteral("ppsa_title_ver"));
         QCOMPARE(store.value(QStringLiteral("build.nameTemplate")).toString(), QStringLiteral("%TITLE% (%VERSION%) (%FIRMWARE%) (%PPSA%)"));
+    }
+
+    // A file as version 4.0.2 writes it (its keys and value types: strings
+    // for the Advanced tab's fields, ensure_ascii escapes), with the values the
+    // import must not take over as they are.
+    void importsAVersion402File()
+    {
+        fwtest::Registry reg;
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("v402/settings.json")));
+        QVERIFY(store.load().ok());
+        auto n = store.importLegacy(fwtest::dataDir() + QStringLiteral("/legacy/settings-4.0.2.json"));
+        QVERIFY2(n.ok(), n.ok() ? "" : qPrintable(n.error().toLogString()));
+        QVERIFY2(n.value() >= 20, qPrintable(QString::number(n.value())));
+        // 4.0.2 only logged its sector choice: its images had 512-byte sectors.
+        QCOMPARE(store.value(QStringLiteral("exfat.sectorSize")).toString(), QStringLiteral("512"));
+        QCOMPARE(store.value(QStringLiteral("exfat.clusterSize")).toString(), QStringLiteral("auto"));
+        // Its delete switch was the exFAT build's; nothing else deletes a source.
+        QCOMPARE(store.value(QStringLiteral("exfat.deleteSourceAfterVerify")).toBool(), true);
+        QCOMPARE(store.value(QStringLiteral("storage.deleteSourceAfterVerifiedBuild")).toBool(), false);
+        QCOMPARE(store.value(QStringLiteral("ufs2.deleteSourceAfterBuild")).toBool(), false);
+        // Shut down after a backport only: never armed after the queue (GitHub #96).
+        QCOMPARE(store.value(QStringLiteral("general.afterQueueAction")).toString(), QStringLiteral("none"));
+        QCOMPARE(store.value(QStringLiteral("general.afterQueueDelaySeconds")).toInt(), 30);
+        // (Its "pt" becomes pt-BR where that catalogue exists: tst_i18n, with catalogues.)
+        QCOMPARE(store.value(QStringLiteral("library.folders")).toStringList(),
+                 (QStringList{QStringLiteral("D:\\PS5\\Games"), QString::fromUtf8("E:\\Jeux vid\xc3\xa9o")}));
+        QCOMPARE(store.value(QStringLiteral("exfat.openRetries")).toInt(), 3); // a text field in 4.0.2
+        QCOMPARE(store.value(QStringLiteral("exfat.excludeHidden")).toBool(), true);
+        QCOMPARE(store.value(QStringLiteral("general.autoRetryCount")).toInt(), 1);
+        QCOMPARE(store.value(QStringLiteral("general.checkForUpdatesOnStart")).toBool(), true);
+        QCOMPARE(store.value(QStringLiteral("ps5.consoleIp")).toString(), QStringLiteral("192.168.0.20"));
+        QCOMPARE(store.value(QStringLiteral("ps5.autoUploadAfterBuild")).toBool(), false);
+        QCOMPARE(store.value(QStringLiteral("pfs.compressionLevel")).toInt(), 9);
+        // 4.0.2 never wrote the naming keys of 4.1.0: the defaults stay.
+        QVERIFY(store.isDefault(QStringLiteral("build.namePreset")));
+        QVERIFY(store.isDefault(QStringLiteral("build.nameTemplate")));
     }
 
     void namingPresetsImport()

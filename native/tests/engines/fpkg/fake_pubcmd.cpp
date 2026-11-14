@@ -30,7 +30,15 @@
 //   chunks) | cr (CR line ends) | nobar (no bar) | nocompanion (update without
 //   .remastered.pkg) | nonaps (the reference package is refused as the real
 //   tool refuses one it did not build)
-// FAKE_PUBCMD_VERIFY=fail|softfail ([Error], exit 0),
+// FAKE_PUBCMD_VERIFY=fail|softfail ([Error], exit 0)|dump (a package built
+//   from a dump: "param.json: SDK Version = <FAKE_PUBCMD_VERIFY_SDK, default
+//   0.00.00.00-00.00.00.0.0.>" without a prefix, then the SELF and SDK version
+//   errors, exit 0)|slow (writes FAKE_PUBCMD_VERIFY_STARTED's file, if named,
+//   then idles for 10 s before it passes)|slowfail (the same after an
+//   "[Error] Integrity check failed" line); with FAKE_PUBCMD_VERIFY_ONLY=<text>
+//   slow and slowfail apply only to a package whose path contains <text>, and
+//   with FAKE_PUBCMD_VERIFY_SKIP=<n> the first <n> such runs pass at once
+//   (counted in <FAKE_PUBCMD_VERIFY_STARTED's file>.skipped).
 // FAKE_PUBCMD_EXTRACT=fail (after the first file was written)|slow,
 // FAKE_PUBCMD_EXTRACT_PARAM=<param.json text> (instead of the package's own),
 // FAKE_DDS2PNG_MODE=fail|wrong,
@@ -685,6 +693,34 @@ int imgVerify(const std::vector<std::string>& args)
     if (env("FAKE_PUBCMD_VERIFY") == "softfail") {
         out("[Error] Integrity check failed" + nl());
         return 0;
+    }
+    if (env("FAKE_PUBCMD_VERIFY") == "dump") {
+        const std::string sdk = env("FAKE_PUBCMD_VERIFY_SDK");
+        out("param.json: SDK Version = " + (sdk.empty() ? std::string("0.00.00.00-00.00.00.0.0.") : sdk) + nl());
+        out("[Error] Format of the SELF file is not valid. (eboot.bin)" + nl());
+        out("[Error] SDK version must be 6.00.00.00-00.00.00.0.0." + nl());
+        out("[Error] Required System Software version < Required SDK version." + nl());
+        out("Number of Error(s) : 3" + nl());
+        return 0;
+    }
+    const std::string only = env("FAKE_PUBCMD_VERIFY_ONLY");
+    bool picked = only.empty() || positional[0].find(only) != std::string::npos;
+    if (const std::string skip = env("FAKE_PUBCMD_VERIFY_SKIP"); picked && !skip.empty()) {
+        const std::string counter = env("FAKE_PUBCMD_VERIFY_STARTED") + ".skipped";
+        std::string seen;
+        (void)readFile(counter, seen);
+        if (seen.size() < size_t(std::stoul(skip))) {
+            writeFile(counter, seen + "x");
+            picked = false;
+        }
+    }
+    if (picked && env("FAKE_PUBCMD_VERIFY") == "slowfail")
+        out("[Error] Integrity check failed" + nl());
+    if (picked && (env("FAKE_PUBCMD_VERIFY") == "slow" || env("FAKE_PUBCMD_VERIFY") == "slowfail")) {
+        if (!env("FAKE_PUBCMD_VERIFY_STARTED").empty())
+            writeFile(env("FAKE_PUBCMD_VERIFY_STARTED"), "started");
+        for (int i = 0; i < 100; ++i)
+            sleepMs(100);
     }
     out("[Info] Verification passed" + nl());
     return 0;

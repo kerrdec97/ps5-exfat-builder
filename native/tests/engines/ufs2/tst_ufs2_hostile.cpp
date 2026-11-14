@@ -547,6 +547,28 @@ private slots:
         QVERIFY2(QDir::fromNativeSeparators(tree.error().message).endsWith(QLatin1String("data/back links back into itself, so it cannot be put into an image.")),
                  qPrintable(tree.error().message));
     }
+
+    // A junction whose folder is gone is named as a broken link, not entered
+    // and reported as a folder that cannot be read (Qt calls such a junction
+    // an existing folder).
+    void junctionToAFolderThatIsGoneIsABrokenLink()
+    {
+        const QString src = m_tmp.filePath(QStringLiteral("dangling"));
+        QVERIFY(mktext(src + QStringLiteral("/data/near.txt"), "near"));
+        const QString gone = m_tmp.filePath(QStringLiteral("dangling-target"));
+        QVERIFY(QDir().mkpath(gone));
+        const QString dead = src + QStringLiteral("/data/dead");
+        if (!createDirectoryJunction(dead, gone).ok())
+            QSKIP("Folder links cannot be created here.");
+        const auto unlink = qScopeGuard([&] { (void)removeDirectoryJunction(dead); });
+        QVERIFY(QDir(gone).removeRecursively());
+        CancellationToken token;
+        const auto tree = scanLocalFolder(src, token);
+        QVERIFY(!tree.ok());
+        FWTEST_COMPARE_ERROR(tree, ErrorCode::InvalidArgument);
+        QVERIFY2(tree.error().message.contains(QLatin1String("broken link")), qPrintable(tree.error().toLogString()));
+        QVERIFY2(tree.error().message.contains(QDir::toNativeSeparators(dead)), qPrintable(tree.error().toLogString()));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestUfs2Hostile)

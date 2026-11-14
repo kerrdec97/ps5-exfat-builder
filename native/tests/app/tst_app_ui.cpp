@@ -6,6 +6,7 @@
 
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
+#include "app/models/JobQueueModel.h"
 #include "app/models/LogModel.h"
 #include "app/pages/DlcEmuEditor.h"
 #include "app/pages/ImageToolsPage.h"
@@ -27,12 +28,14 @@
 #include "core/FileUtil.h"
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "core/Tr.h"
 #include "engines/general/Module.h"
 #include "support/TestSupport.h"
 #include "ConsoleTestUtil.h"
 #include "connect/ps5/FakePs5.h"
 #include "connect/update/Module.h"
 #include "engines/ampr/Module.h"
+#include "engines/fpkg/FpkgBuilder.h"
 #include "engines/tools/DlcEmu.h"
 
 #include <QCryptographicHash>
@@ -81,6 +84,8 @@ public:
         const int steps = m_p.value(QStringLiteral("steps")).toInt(5);
         const int stepMs = m_p.value(QStringLiteral("stepMs")).toInt(5);
         ctx.progress->beginPhase(0, steps);
+        if (const QString item = m_p.value(QStringLiteral("item")).toString(); !item.isEmpty())
+            ctx.progress->setCurrentItem(item);
         for (int i = 0; i < steps; ++i) {
             if (!ctx.token.checkpoint())
                 return Error::cancelled();
@@ -670,6 +675,338 @@ private slots:
         QVERIFY2(!m.detailText().contains(QStringLiteral("“”")), qPrintable(m.detailText()));
     }
 
+    // The monitor says all that a running job reports (the job's and the
+    // stage's time left, the speed now and on average, the stage's own share,
+    // the warnings and errors in its log) and nothing it cannot know.
+    void monitorShowsTheWholeTelemetry()
+    {
+        ui::JobMonitor m(*m_ctx, m_ctx->logModel(), ui::JobMonitor::Variant::Wide, m_window.get());
+        QStringList lines;
+        const JobRecord r = ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines);
+        m.setDemoRecord(r, lines);
+        QCOMPARE(m.metricValues().value(1), ui::shortTimeLeft(r.progress.jobEtaMs)); // the job's time left
+        QCOMPARE(m.metricHints().value(1), QStringLiteral("%1 this stage").arg(ui::shortTimeLeft(r.progress.etaMs)));
+        QCOMPARE(m.metricValues().value(2), QStringLiteral("418 MB/s"));
+        QCOMPARE(m.metricHints().value(2), QStringLiteral("avg 402 MB/s"));
+        QVERIFY2(m.stageTexts().at(4).startsWith(QStringLiteral("Packing · %1 · ").arg(ui::thinPercent(r.progress.phaseFraction()))),
+                 qPrintable(m.stageTexts().at(4))); // the stage's own share, beside its time
+        QVERIFY2(m.detailText().contains(formatTimeLeft(r.progress.jobEtaMs)), qPrintable(m.detailText())); // as in the tile
+        QVERIFY2(m.logCountText().contains(QStringLiteral("1 warning")), qPrintable(m.logCountText()));
+
+        // A stage that cannot be measured: no percentage and no time left, invented or old.
+        JobRecord open = r;
+        open.id = QStringLiteral("open");
+        open.progress.total = 0;
+        open.progress.done = 0;
+        open.progress.indeterminate = true;
+        open.progress.etaMs = -1;
+        open.progress.jobEtaMs = -1;
+        open.progress.phaseNames = open.phases;
+        m.setDemoRecord(open, lines);
+        QCOMPARE(m.percentText(), QString());
+        QCOMPARE(m.stateText(), QStringLiteral("Running"));
+        QCOMPARE(m.metricValues().value(1), QStringLiteral("—"));
+        QCOMPARE(m.metricHints().value(1), QStringLiteral("this stage has no size"));
+        QVERIFY2(!m.stageTexts().at(4).contains(u'%'), qPrintable(m.stageTexts().at(4)));
+
+        // Never "100 %" before the job is done, whatever the record says.
+        JobRecord nearly = r;
+        nearly.id = QStringLiteral("nearly");
+        nearly.progress.overallFraction = 1.0;
+        m.setDemoRecord(nearly, lines);
+        QCOMPARE(m.percentText(), ui::thinPercent(0.99));
+        QCOMPARE(m.stateText(), QStringLiteral("Running · %1").arg(ui::thinPercent(0.99)));
+
+        // Done: 100 %, and a stage that ran in under a millisecond is not "skipped".
+        JobRecord done = ui::JobMonitor::demoRecord(QStringLiteral("done"), &lines);
+        done.progress.phaseMs[5] = 0; // "Checking the package": entered and left at once
+        done.progress.phaseEntered = QList<bool>(done.phases.size(), true);
+        m.setDemoRecord(done, lines);
+        QCOMPARE(m.percentText(), ui::thinPercent(1.0));
+        QVERIFY2(m.stageTexts().at(5).contains(QStringLiteral("<1 s")), qPrintable(m.stageTexts().at(5)));
+
+        // Failed after all its work (its verification failed): not "at 100 %".
+        JobRecord failed = ui::JobMonitor::demoRecord(QStringLiteral("failed"), &lines);
+        failed.progress.overallFraction = 1.0;
+        m.setDemoRecord(failed, lines);
+        QVERIFY2(!m.percentText().contains(ui::thinPercent(1.0)), qPrintable(m.percentText()));
+        QVERIFY2(m.logCountText().contains(QStringLiteral("2 errors")), qPrintable(m.logCountText()));
+
+        // A real job: the warnings and errors in its log are counted as they come.
+        auto& q = m_ctx->queue();
+        q.holdQueue(true);
+        auto id = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Counted")}, {QStringLiteral("steps"), 2}});
+        QVERIFY(id.ok());
+        const auto tidy = qScopeGuard([&] {
+            q.remove(id.value());
+            q.holdQueue(false);
+        });
+        m.setJobId(id.value());
+        QVERIFY2(!m.logCountText().contains(QStringLiteral("warning")), qPrintable(m.logCountText()));
+        Log(QStringLiteral("test"), id.value()).warn(QStringLiteral("A warning of this job"));
+        Log(QStringLiteral("test"), id.value()).error(QStringLiteral("An error of this job"));
+        Log(QStringLiteral("test"), QStringLiteral("someone-else")).warn(QStringLiteral("Not this job's"));
+        Logger::instance().flush();
+        QTRY_VERIFY2(m.logCountText().contains(QStringLiteral("1 warning · 1 error")), qPrintable(m.logCountText()));
+    }
+
+    // In a long language the monitor's stage names take a second line instead
+    // of losing their end; the meta line cuts the destination, never the size;
+    // a job that ended has no time left to show; the sparkline starts with
+    // three points (two are a lone spike).
+    void monitorKeepsLongNamesAndTheSize()
+    {
+        ui::JobMonitor m(*m_ctx, m_ctx->logModel(), ui::JobMonitor::Variant::Wide, m_window.get());
+        m.resize(740, 900);
+        m.show();
+        QStringList lines;
+        JobRecord r = ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines);
+        const QString longName = QStringLiteral("Projektdateien werden geschrieben");
+        r.phases[2] = longName;
+        m.setDemoRecord(r, lines);
+        QLabel* name = nullptr;
+        for (auto* l : m.findChildren<QLabel*>())
+            if (l->toolTip().contains(longName))
+                name = l;
+        QVERIFY(name);
+        // Two lines: the first is the name's start, whole; only what does not
+        // fit on the second is cut (how much fits depends on the font).
+        QTRY_VERIFY2(name->text().contains(u'\n'), qPrintable(QStringLiteral("%1 | %2 px").arg(name->text()).arg(name->width())));
+        const QStringList shownLines = name->text().split(u'\n');
+        QCOMPARE(shownLines.size(), 2);
+        QVERIFY2(longName.startsWith(shownLines.first()) && !shownLines.first().contains(u'\u2026'), qPrintable(name->text()));
+        if (!shownLines.last().endsWith(u'\u2026'))
+            QCOMPARE(QString(name->text()).replace(u'\n', u' '), longName);
+        QVERIFY(m.stageTexts().at(2).startsWith(longName + QStringLiteral(" · ")));
+
+        // The meta line: when the line is too long, the destination is cut in its middle.
+        const QString head = QStringLiteral("Build FPKG package · FPKG · 31.6 GB → ");
+        const QString path = QStringLiteral("D:\\PS5\\Packages\\A long folder name\\And another one\\deeper");
+        QCOMPARE(ui::MetaLine::pathStart(head + path), int(head.size()));
+        QCOMPARE(ui::MetaLine::pathStart(QStringLiteral("exFAT · D:\\Images\\a.exfat")), int(QStringLiteral("exFAT · ").size()));
+        QCOMPARE(ui::MetaLine::pathStart(QStringLiteral("test · fake")), 0);
+        ui::MetaLine meta;
+        meta.setFont(theme::font::mono());
+        meta.show();
+        const QFontMetrics fm(meta.font());
+        meta.resize(fm.horizontalAdvance(head) + fm.horizontalAdvance(QStringLiteral("D:\\PS5\\…\\deeper")) + 12, 20);
+        meta.setFullText(head + path);
+        QVERIFY2(meta.text().startsWith(head), qPrintable(meta.text()));
+        QVERIFY2(meta.text().contains(u'\u2026') && meta.text().endsWith(QStringLiteral("deeper")), qPrintable(meta.text()));
+        QVERIFY(meta.toolTip().contains(QStringLiteral("A long folder name")));
+        meta.resize(4000, 20);
+        QCOMPARE(meta.text(), head + path);
+        auto* monitorMeta = m.findChild<ui::MetaLine*>(QStringLiteral("job-monitor-meta"));
+        QVERIFY(monitorMeta && monitorMeta->fullText().contains(QStringLiteral("31.6 GB")));
+
+        // Ended: no time left, not a clock at "00:00".
+        m.setDemoRecord(ui::JobMonitor::demoRecord(QStringLiteral("done"), &lines), lines);
+        QCOMPARE(m.metricValues().value(1), QStringLiteral("—"));
+
+        ui::RateSparkline spark;
+        spark.resize(80, 16);
+        const QImage none = spark.grab().toImage();
+        spark.addSample(100.0);
+        spark.addSample(900.0);
+        QCOMPARE(spark.grab().toImage(), none);
+        spark.addSample(400.0);
+        QVERIFY(spark.grab().toImage() != none);
+    }
+
+    // The made-up FPKG job is the FPKG job as it runs: its stages, an elapsed
+    // time that is the sum of the stages' times (and what its clock says), the
+    // size of its meta line and the item the engine reports.
+    void demoJobIsTheFpkgJobAsItRuns()
+    {
+        ui::JobMonitor m(*m_ctx, m_ctx->logModel(), ui::JobMonitor::Variant::Wide, m_window.get());
+        for (const QString& state : {QStringLiteral("running"), QStringLiteral("done"), QStringLiteral("failed")}) {
+            QStringList lines;
+            const JobRecord r = ui::JobMonitor::demoRecord(state, &lines);
+            QCOMPARE(r.phases, fpkg::buildPhases());
+            QCOMPARE(r.progress.phaseCount, int(r.phases.size()));
+            QCOMPARE(r.progress.phaseMs.size(), r.phases.size());
+            QCOMPARE(r.phases.value(r.progress.phaseIndex), r.progress.phase);
+            qint64 sum = 0;
+            for (const qint64 ms : r.progress.phaseMs)
+                sum += ms;
+            QCOMPARE(r.progress.elapsedMs, sum);
+            const QDateTime end = r.finished.isValid() ? r.finished : QDateTime::currentDateTime();
+            QVERIFY2(qAbs(r.started.msecsTo(end) - sum) < 2000, qPrintable(state));
+            QVERIFY2(r.subtitle.contains(formatBytes(r.progress.total)), qPrintable(r.subtitle));
+            m.setDemoRecord(r, lines);
+            if (state != QLatin1String("running"))
+                QCOMPARE(m.metricValues().value(0), ui::clockText(sum)); // the Elapsed tile
+        }
+        QStringList lines;
+        const JobRecord running = ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines);
+        QCOMPARE(running.progress.currentItem, QStringLiteral("%1 written").arg(formatBytes(running.progress.done)));
+        m.setDemoRecord(running, lines);
+        QCOMPARE(m.metricValues().value(4), QStringLiteral("5 of %1").arg(fpkg::buildPhases().size()));
+    }
+
+    // A composite job's item ("<inner stage> · <item>") shows its stage in the
+    // interface language (the catalogue holds whole texts); stage times and
+    // the time left use the language's units.
+    void itemsAndTimesAreTranslated()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString res = dir.filePath(QStringLiteral("res")), user = dir.filePath(QStringLiteral("user"));
+        QVERIFY(QDir().mkpath(res) && QDir().mkpath(user));
+        const QJsonObject strings{{QStringLiteral("Writing the image"), QStringLiteral("Abbild wird geschrieben")},
+                                  {QStringLiteral("%1 s"), QStringLiteral("%1 Sek.")},
+                                  {QStringLiteral("%1 min"), QStringLiteral("%1 Min.")},
+                                  {QStringLiteral("%1 min %2 s"), QStringLiteral("%1 Min. %2 Sek.")},
+                                  {QStringLiteral("%1 h %2 min"), QStringLiteral("%1 Std. %2 Min.")}};
+        const QJsonObject catalogue{{QStringLiteral("code"), QStringLiteral("de")}, {QStringLiteral("name"), QStringLiteral("Deutsch")},
+                                    {QStringLiteral("englishName"), QStringLiteral("German")}, {QStringLiteral("strings"), strings}};
+        QVERIFY(fwtest::writeTextFile(res + QStringLiteral("/de.json"), QJsonDocument(catalogue).toJson()));
+        const QString oldRes = i18n::resourceDir(), oldUser = i18n::userDir();
+        i18n::configure(res, user);
+        const auto restore = qScopeGuard([&] {
+            i18n::load(QStringLiteral("en"));
+            i18n::configure(oldRes, oldUser);
+        });
+        QVERIFY(i18n::load(QStringLiteral("de")));
+
+        const QString composite = QStringLiteral("Writing the image · D:\\Out\\a.ffpfsc");
+        const QString shown = QStringLiteral("Abbild wird geschrieben · D:\\Out\\a.ffpfsc");
+        QCOMPARE(currentItemText(composite), shown);
+        QCOMPARE(currentItemText(QStringLiteral("Writing the image")), QStringLiteral("Abbild wird geschrieben"));
+        QCOMPARE(currentItemText(QStringLiteral("19.9 GB written · x")), QStringLiteral("19.9 GB written · x"));
+        QCOMPARE(currentItemText(QStringLiteral("D:\\Games\\a · b.bin")), QStringLiteral("D:\\Games\\a · b.bin"));
+        QCOMPARE(ui::shortDuration(301000), QStringLiteral("5 Min. 1 Sek."));
+        QCOMPARE(ui::shortDuration(120000), QStringLiteral("2 Min."));
+        QCOMPARE(ui::shortDuration(400), QStringLiteral("<1 Sek."));
+        QCOMPARE(ui::shortDuration(3900000), QStringLiteral("1 Std. 05 Min."));
+        QCOMPARE(ui::shortTimeLeft(180000), QStringLiteral("~3 Min."));
+        QCOMPARE(ui::shortTimeLeft(20000), QStringLiteral("~20 Sek."));
+
+        // The monitor's item line and stage times.
+        ui::JobMonitor m(*m_ctx, m_ctx->logModel(), ui::JobMonitor::Variant::Wide, m_window.get());
+        QStringList lines;
+        JobRecord r = ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines);
+        r.progress.currentItem = composite;
+        m.setDemoRecord(r, lines);
+        auto* item = m.findChild<ui::ElideLabel*>(QStringLiteral("job-monitor-item"));
+        QVERIFY(item);
+        QCOMPARE(item->fullText(), shown);
+        QVERIFY2(m.stageTexts().at(3).contains(QStringLiteral("22 Sek.")), qPrintable(m.stageTexts().at(3)));
+
+        // The model's item, as a running job reports it.
+        JobQueueModel model(m_ctx->queue());
+        auto& q = m_ctx->queue();
+        q.holdQueue(true);
+        g_fakeJobGateOpen = false;
+        const auto openGate = qScopeGuard([] { g_fakeJobGateOpen = true; });
+        auto id = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Composite")}, {QStringLiteral("steps"), 1},
+                                                                     {QStringLiteral("gated"), true}, {QStringLiteral("item"), composite}});
+        QVERIFY(id.ok());
+        const auto tidy = qScopeGuard([&] {
+            g_fakeJobGateOpen = true;
+            waitForState(q, id.value(), JobState::Succeeded);
+            q.remove(id.value());
+        });
+        q.holdQueue(false);
+        QVERIFY(waitForState(q, id.value(), JobState::Running));
+        QTRY_COMPARE(model.data(model.index(model.rowOf(id.value())), JobQueueModel::CurrentItemRole).toString(), shown);
+    }
+
+    // The live log: a tool's bar frame or rule is left out (it wrapped into a
+    // dashed line and a lone "|"); Verbose and warnings keep every line.
+    void liveLogLeavesToolBarFramesOut()
+    {
+        QVERIFY(ui::LogConsole::isDecoration(QStringLiteral("SDK: |____________________|")));
+        QVERIFY(ui::LogConsole::isDecoration(QStringLiteral("------------------------")));
+        QVERIFY(ui::LogConsole::isDecoration(QStringLiteral("SDK: |")));
+        QVERIFY(!ui::LogConsole::isDecoration(QStringLiteral("SDK: 42 %")));
+        QVERIFY(!ui::LogConsole::isDecoration(QStringLiteral("----- Build started -----")));
+        QVERIFY(!ui::LogConsole::isDecoration(QStringLiteral("Packing with D:\\Tools\\prospero-pub-cmd.exe")));
+        QVERIFY(!ui::LogConsole::isDecoration(QString()));
+        ui::LogConsole c(m_ctx->logModel());
+        c.setLive(false);
+        c.clearLines();
+        const QDateTime t = QDateTime::currentDateTime();
+        c.appendLine(t, LogLevel::Info, QStringLiteral("SDK: Creating an image"));
+        c.appendLine(t, LogLevel::Info, QStringLiteral("SDK: |____________________|"));
+        QCOMPARE(c.lineCount(), 1);
+        c.appendLine(t, LogLevel::Warning, QStringLiteral("-----")); // a warning is always shown
+        QCOMPARE(c.lineCount(), 2);
+        c.setMinimumLevel(LogLevel::Debug); // Verbose
+        c.appendLine(t, LogLevel::Info, QStringLiteral("SDK: |____________________|"));
+        QCOMPARE(c.lineCount(), 3);
+    }
+
+    // The Jobs dock says what the computer does once the queue is done, next
+    // to "Start queue", in the header chip's words.
+    void jobsDockSaysWhatHappensAfterTheQueue()
+    {
+        JobQueueModel model(m_ctx->queue());
+        ui::JobsDock dock(*m_ctx, model);
+        dock.resize(400, 400);
+        dock.show();
+        auto& q = m_ctx->queue();
+        q.holdQueue(true);
+        auto id = q.enqueue(QStringLiteral("test.fake"), QJsonObject{{QStringLiteral("title"), QStringLiteral("Waits")}});
+        QVERIFY(id.ok());
+        const auto tidy = qScopeGuard([&] {
+            (void)m_ctx->settings().setValue(general::keys::kAfterQueueAction, QStringLiteral("none"));
+            q.remove(id.value());
+            q.holdQueue(false);
+        });
+        QTRY_VERIFY(dock.startQueueButton()->isVisibleTo(&dock));
+        QCOMPARE(dock.footerText(), QStringLiteral("1 waiting"));
+        QVERIFY(m_ctx->settings().setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep")).ok());
+        QTRY_COMPARE(dock.footerText(), QStringLiteral("1 waiting · then sleep"));
+        auto* footer = dock.findChild<QLabel*>(QStringLiteral("dock-footer"));
+        QVERIFY(footer && footer->isVisibleTo(&dock));
+        QVERIFY2(footer->toolTip().contains(QStringLiteral("goes to sleep")), qPrintable(footer->toolTip()));
+        QVERIFY(m_ctx->settings().setValue(general::keys::kAfterQueueAction, QStringLiteral("none")).ok());
+        QTRY_COMPARE(dock.footerText(), QStringLiteral("1 waiting"));
+        QCOMPARE(ui::afterQueueText(QStringLiteral("shutdown")), QStringLiteral("then shut down"));
+        QVERIFY(ui::afterQueueText(QStringLiteral("none")).isEmpty());
+    }
+
+    // Settings: the section's title sits between the page's and the cards'; a
+    // section with one or two rare settings shows them without a fold; the
+    // legacy import has one entry point; the console address says what goes in it.
+    void settingsSectionsReadInOrder()
+    {
+        m_window->navigate(QStringLiteral("settings"));
+        auto* page = qobject_cast<pages::SettingsPage*>(m_window->page(QStringLiteral("settings")));
+        QVERIFY(page);
+        page->showSection(QStringLiteral("Performance"));
+        int titleSize = 0;
+        for (auto* l : page->findChildren<QLabel*>())
+            if (l->text() == QLatin1String("Performance") && l->isVisibleTo(page) && l->font().pixelSize() > titleSize)
+                titleSize = l->font().pixelSize();
+        QCOMPARE(titleSize, 18);
+        int rare = 0;
+        for (const SettingDef* d : m_ctx->schema().inSection(QStringLiteral("Performance")))
+            if (d->advanced) {
+                ++rare;
+                // New rows are shown once the event loop has run.
+                QTRY_VERIFY2(page->row(d->key) && page->row(d->key)->isVisibleTo(page), qPrintable(d->key));
+            }
+        if (rare > 0 && rare < 3)
+            QVERIFY(!page->findChild<QWidget*>(QStringLiteral("settings-advanced")));
+        page->showSection(QStringLiteral("Advanced"));
+        QVERIFY(!labelTexts(page).contains(QStringLiteral("Import settings from the old app")));
+        int importEntries = 0;
+        for (auto* b : page->findChildren<QPushButton*>()) // its text may be cut, or only in the tooltip (narrow list)
+            importEntries += b->text().startsWith(QStringLiteral("Import legacy")) || b->toolTip().startsWith(QStringLiteral("Import legacy")) ? 1 : 0;
+        QCOMPARE(importEntries, 1);
+        page->showSection(QStringLiteral("PS5 connection"));
+        ui::SettingRow* ip = page->row(QStringLiteral("ps5.consoleIp"));
+        QVERIFY(ip);
+        auto* edit = qobject_cast<QLineEdit*>(ip->editor()->widget());
+        if (!edit)
+            edit = ip->editor()->widget()->findChild<QLineEdit*>();
+        QVERIFY(edit);
+        QCOMPARE(edit->placeholderText(), QStringLiteral("192.168.1.40"));
+        m_window->navigate(QStringLiteral("home"));
+    }
+
     // The monitor's result: what a successful job made sits on the
     // success-tinted plate; a failure leads with its error in the danger bar.
     // The running stage's dot moves only while the monitor is on screen, a
@@ -805,9 +1142,13 @@ private slots:
         QVERIFY(!started.isEmpty());
         QVERIFY(started != queued);
         QVERIFY(!formWidget->isVisibleTo(&page));
-        QVERIFY(page.newJobButton()->isVisibleTo(&page));
+        QVERIFY(page.monitor()->newJobButton()->isVisibleTo(&page));
         QVERIFY(!page.primaryButton()->isVisibleTo(&page));
         QVERIFY(!page.queueButton()->isVisibleTo(&page));
+        // The way back to the form is the monitor's footer button, once: the
+        // header shows no second one.
+        for (QPushButton* b : page.header()->findChildren<QPushButton*>())
+            QVERIFY2(!b->isVisibleTo(&page) || b->text() != page.monitor()->newJobButton()->text(), qPrintable(b->text()));
         QCOMPARE(page.dock()->watchedJob(), started);
         QVERIFY(waitForState(q, started, JobState::Running));
         QCOMPARE(q.records().front().id, started); // moved ahead of the queued job
@@ -822,7 +1163,7 @@ private slots:
         QVERIFY(formWidget->isVisibleTo(&page));
         QVERIFY(page.primaryButton()->isVisibleTo(&page));
         QVERIFY(page.queueButton()->isVisibleTo(&page));
-        QVERIFY(!page.newJobButton()->isVisibleTo(&page));
+        QVERIFY(!page.monitor()->newJobButton()->isVisibleTo(&page));
         QVERIFY(page.dock()->watchedJob().isEmpty());
         QVERIFY(page.monitor()->jobId().isEmpty());
 
@@ -859,7 +1200,7 @@ private slots:
         for (const QString& state : {QStringLiteral("building"), QStringLiteral("built"), QStringLiteral("build-failed")}) {
             page->applyDemoState(state);
             QVERIFY2(page->isMonitorShown(), qPrintable(state));
-            QCOMPARE(page->monitor()->stageTexts().size(), 9);
+            QCOMPARE(page->monitor()->stageTexts().size(), int(fpkg::buildPhases().size())); // the FPKG job's stages
             QVERIFY(page->monitor()->console()->lineCount() >= 10);
             if (state == QLatin1String("building")) {
                 QVERIFY(page->monitor()->stateText().startsWith(QStringLiteral("Running")));
@@ -872,7 +1213,9 @@ private slots:
             } else {
                 QCOMPARE(page->monitor()->stateText(), QStringLiteral("Failed"));
                 QVERIFY(page->monitor()->percentText().startsWith(QStringLiteral("Failed at")));
-                QVERIFY2(page->monitor()->stageTexts().at(7).endsWith(QStringLiteral("failed")), qPrintable(page->monitor()->stageTexts().at(7)));
+                QVERIFY2(page->monitor()->stageTexts().at(6).startsWith(QStringLiteral("Verifying with img_verify"))
+                             && page->monitor()->stageTexts().at(6).endsWith(QStringLiteral("failed")),
+                         qPrintable(page->monitor()->stageTexts().at(6)));
             }
             page->clearDemoState();
             QVERIFY(!page->isMonitorShown());
@@ -1255,6 +1598,35 @@ private slots:
                     found = true;
             QVERIFY2(found, qPrintable(key));
         }
+    }
+
+    // Logs: the Job column is there only when a shown line belongs to a job;
+    // the header's actions are words, like Export… and Open log folder.
+    // (Last: it clears the shared log view.)
+    void logsShowTheJobColumnOnlyWithJobs()
+    {
+        m_window->navigate(QStringLiteral("logs"));
+        auto* page = qobject_cast<pages::LogsPage*>(m_window->page(QStringLiteral("logs")));
+        QVERIFY(page);
+        QPushButton* clear = nullptr;
+        QStringList words;
+        for (auto* b : page->findChildren<QPushButton*>())
+            if (b->isVisibleTo(page) && !b->text().isEmpty()) {
+                words << b->text();
+                if (b->text() == QLatin1String("Clear"))
+                    clear = b;
+            }
+        QVERIFY2(words.contains(QStringLiteral("Copy")) && clear, qPrintable(words.join(u',')));
+        clear->click();
+        QVERIFY(page->table()->isColumnHidden(LogModel::JobColumn));
+        Log(QStringLiteral("test")).info(QStringLiteral("A line of no job"));
+        Logger::instance().flush();
+        QTRY_VERIFY(page->filterModel()->rowCount() > 0);
+        QVERIFY(page->table()->isColumnHidden(LogModel::JobColumn));
+        Log(QStringLiteral("test"), QStringLiteral("J-logs-1")).info(QStringLiteral("A line of a job"));
+        Logger::instance().flush();
+        QTRY_VERIFY(!page->table()->isColumnHidden(LogModel::JobColumn));
+        m_window->navigate(QStringLiteral("home"));
     }
 };
 

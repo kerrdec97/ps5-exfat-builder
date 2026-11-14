@@ -82,6 +82,10 @@ QStringList backportPhases(const BackportUpdateRequest& request);
 // a generated layout with exactly that chunk count and those languages,
 // whatever the PlayGo settings say.
 FpkgSettings backportUpdateSettings(const FpkgSettings& settings, int baseChunks, const QStringList& baseLanguages);
+// The settings a dual backport's base is built with: the same checks and
+// clean-up switched off, and the PlayGo layout policy its updates get (the
+// generated layout, never the game folder's own table).
+FpkgSettings backportBaseSettings(const FpkgSettings& settings);
 
 // Work folders (<output>\.ppr-backport-*, .ppr-sdkbase-*, and the zstd and
 // FPKG staging folders .fw-zstd-*, .fw-stage-*) are listed in

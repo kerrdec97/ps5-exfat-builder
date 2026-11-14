@@ -14,7 +14,9 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QtEndian>
@@ -456,6 +458,64 @@ private slots:
         QVERIFY(!QFileInfo::exists(temp + QStringLiteral("/zip-source")));
     }
 
+    // An archive that lists tens of thousands of game folders costs what as
+    // many files of one game cost (each folder used to be compared with every
+    // other), and names only a few of them. Timed against that one game, so a
+    // slow machine slows both.
+    void manyGameFoldersCostTheirNumber()
+    {
+        constexpr int kFolders = 60000;
+        const auto zipOf = [&](const QString& name, const auto& entryName) {
+            const QString z = fresh(name);
+            zip::Writer w;
+            if (!w.open(z).ok())
+                return QString();
+            for (int i = 0; i < kFolders; ++i)
+                if (!w.addData(entryName(i), QByteArray(), zip::Method::Store).ok())
+                    return QString();
+            return w.finish().ok() ? z : QString();
+        };
+        const QString one = zipOf(QStringLiteral("one-game.zip"), [](int i) {
+            return i == 0 ? QStringLiteral("game/eboot.bin") : QStringLiteral("game/data/f%1.bin").arg(i);
+        });
+        const QString many = zipOf(QStringLiteral("many-games.zip"), [](int i) { return QStringLiteral("g%1/eboot.bin").arg(i); });
+        QVERIFY(!one.isEmpty() && !many.isEmpty());
+        QElapsedTimer clock;
+        clock.start();
+        QVERIFY(fwa::checkArchiveSource(one).ok());
+        const qint64 oneMs = clock.restart();
+        auto g = fwa::inspectArchive(many);
+        const Status st = fwa::checkArchiveSource(many);
+        const qint64 manyMs = clock.elapsed();
+        qInfo("%lld ms for the folders, %lld ms for one game", manyMs, oneMs);
+        QVERIFY2(manyMs < 5 * 2 * oneMs + 1000, qPrintable(QStringLiteral("%1 ms for the folders, %2 ms for one game").arg(manyMs).arg(oneMs)));
+        QVERIFY2(g.ok(), g.ok() ? "" : qPrintable(g.error().toLogString()));
+        QCOMPARE(g->rootPrefix, QStringLiteral("g0/")); // the shortest, first in order
+        QCOMPARE(g->otherGames.size(), 10);
+        QCOMPARE(g->otherGames.front(), QStringLiteral("g1"));
+        QCOMPARE(g->moreGames, qint64(kFolders - 11));
+        QVERIFY(!st.ok());
+        QCOMPARE(st.error().code, ErrorCode::InvalidArgument);
+        QVERIFY2(st.error().message.size() < 600 && st.error().message.contains(QStringLiteral("(g0 and g1, "))
+                     && st.error().message.contains(QStringLiteral(", … and %1 more)").arg(formatCount(kFolders - 11))),
+                 qPrintable(st.error().message));
+        // Nested folders of one game are still one game, the shortest.
+        const QString nested = fresh(QStringLiteral("nested.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(nested).ok());
+            for (const QString& n : {QStringLiteral("Game/sce_module/x/eboot.bin"), QStringLiteral("Game/eboot.bin"),
+                                     QStringLiteral("Game!/eboot.bin"), QStringLiteral("Game/a/sce_sys/param.json")})
+                QVERIFY(w.addData(n, QByteArray("x")).ok());
+            QVERIFY(w.finish().ok());
+        }
+        g = fwa::inspectArchive(nested);
+        QVERIFY(g.ok());
+        QCOMPARE(g->rootPrefix, QStringLiteral("Game/"));
+        QCOMPARE(g->otherGames, QStringList{QStringLiteral("Game!")});
+        QCOMPARE(g->moreGames, qint64(0));
+    }
+
     void archiveWithoutAGame()
     {
         const QString a = fresh(QStringLiteral("none.7z"));
@@ -626,6 +686,8 @@ private slots:
         QTest::newRow("absolute") << QStringLiteral("/evil.bin") << QStringLiteral("unsafe path");
         QTest::newRow("drive") << QStringLiteral("C:/evil.bin") << QStringLiteral("unsafe path");
         QTest::newRow("device") << QStringLiteral("data/CON") << QStringLiteral("cannot store");
+        QTest::newRow("device, superscript digit") << QStringLiteral("data/COM¹.bin") << QStringLiteral("cannot store");
+        QTest::newRow("console") << QStringLiteral("data/CONOUT$") << QStringLiteral("cannot store");
         QTest::newRow("stream") << QStringLiteral("data/a:b") << QStringLiteral("cannot store");
         QTest::newRow("trailing dot") << QStringLiteral("data/name.") << QStringLiteral("cannot store");
         QTest::newRow("trailing space") << QStringLiteral("data/name ") << QStringLiteral("cannot store");
@@ -685,6 +747,301 @@ private slots:
         const QString c = fresh(QStringLiteral("twice.7z"));
         QVERIFY(write7z(c, {file(QStringLiteral("eboot.bin"), "e"), file(QStringLiteral("x.bin"), "1"), file(QStringLiteral("x.bin"), "2")}, "store"));
         QVERIFY(!fwa::checkArchiveSource(c).ok());
+    }
+
+    // A ZIP is held to the same name rules as a 7z: two names Windows takes
+    // for one are refused when the archive is checked, before anything is
+    // written, never merged into one folder or written over each other.
+    void zipSourcesFollowTheSameNameRules_data()
+    {
+        QTest::addColumn<QStringList>("names");
+        QTest::addColumn<QString>("says");
+        QTest::newRow("files") << QStringList{QStringLiteral("x.bin"), QStringLiteral("X.BIN")} << QStringLiteral("upper and lower case");
+        QTest::newRow("twice") << QStringList{QStringLiteral("x.bin"), QStringLiteral("x.bin")} << QStringLiteral("twice");
+        QTest::newRow("folders") << QStringList{QStringLiteral("Data/a.bin"), QStringLiteral("data/b.bin")} << QStringLiteral("upper and lower case");
+        QTest::newRow("file and folder") << QStringList{QStringLiteral("x"), QStringLiteral("x/a.bin")} << QStringLiteral("twice");
+        QTest::newRow("unsafe") << QStringList{QStringLiteral("../x.bin")} << QStringLiteral("unsafe path");
+    }
+    void zipSourcesFollowTheSameNameRules()
+    {
+        QFETCH(QStringList, names);
+        QFETCH(QString, says);
+        const QString z = fresh(QStringLiteral("names.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            QVERIFY(w.addData(QStringLiteral("Game/eboot.bin"), "e").ok());
+            int i = 0;
+            for (const QString& n : names)
+                QVERIFY(w.addData(QStringLiteral("Game/") + n, QByteArray::number(++i)).ok());
+            QVERIFY(w.finish().ok());
+        }
+        const Status st = fwa::checkArchiveSource(z);
+        QVERIFY(!st.ok());
+        QVERIFY2(st.error().message.contains(QStringLiteral("names.zip")) && st.error().message.contains(says),
+                 qPrintable(st.error().message));
+        const QString temp = fresh(QStringLiteral("temp"));
+        QVERIFY(!fwa::unpackArchiveSource(z, temp, CancellationToken(), nullptr, 0).ok());
+        QVERIFY(!QFileInfo::exists(temp + QStringLiteral("/zip-source")));
+    }
+
+    // Every file is written as "<name>.fw.part" first. A file of that name in
+    // the same folder would be taken for a leftover of an interrupted unpack
+    // and removed: the unpack would end "complete" with one file missing.
+    // Refused instead, in either order, before anything is written. A file
+    // called "<name>.part" is just a file.
+    void aFileAndItsPartNameAreRefused_data()
+    {
+        QTest::addColumn<bool>("partFirst");
+        QTest::newRow(".fw.part first") << true;
+        QTest::newRow(".fw.part second") << false;
+    }
+    void aFileAndItsPartNameAreRefused()
+    {
+        QFETCH(bool, partFirst);
+        {
+            const QList<Item> both{file(QStringLiteral("eboot.bin"), "e"), file(QStringLiteral("data/X.bin.part"), "a file of the game"),
+                                   file(QStringLiteral("data/x.bin"), "the file")};
+            const QString a = fresh(QStringLiteral("dot-part.7z"));
+            QVERIFY(write7z(a, partFirst ? both : QList<Item>{both.at(0), both.at(2), both.at(1)}, "store"));
+            auto root = fwa::unpackArchiveSource(a, fresh(QStringLiteral("temp")), CancellationToken(), nullptr, 0);
+            QVERIFY2(root.ok(), root.ok() ? "" : qPrintable(root.error().toLogString()));
+            QCOMPARE(readFile(root.value() + QStringLiteral("/data/X.bin.part")), QByteArray("a file of the game"));
+            QCOMPARE(readFile(root.value() + QStringLiteral("/data/x.bin")), QByteArray("the file"));
+        }
+        QList<Item> items{file(QStringLiteral("eboot.bin"), "e")};
+        const Item plain = file(QStringLiteral("data/x.bin"), "the file"), part = file(QStringLiteral("data/X.bin.fw.part"), "a file of the game");
+        items << (partFirst ? part : plain) << (partFirst ? plain : part);
+        const QString s = fresh(QStringLiteral("part.7z"));
+        QVERIFY(write7z(s, items, "store"));
+        const QString z = fresh(QStringLiteral("part.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            for (const Item& i : items)
+                QVERIFY(w.addData(i.name, i.data).ok());
+            QVERIFY(w.finish().ok());
+        }
+        for (const QString& a : {s, z}) {
+            const Status st = fwa::checkArchiveSource(a);
+            QVERIFY(!st.ok());
+            QVERIFY2(st.error().message.contains(QStringLiteral("data/x.bin")) && st.error().message.contains(QStringLiteral("data/X.bin.fw.part")),
+                     qPrintable(st.error().message));
+            const QString temp = fresh(QStringLiteral("temp"));
+            QVERIFY(!fwa::unpackArchiveSource(a, temp, CancellationToken(), nullptr, 0).ok());
+            QVERIFY(!QFileInfo::exists(temp + QStringLiteral("/zip-source")));
+        }
+        // The readers themselves, whoever calls them.
+        auto listing = fwa::listArchive(s);
+        QVERIFY(listing.ok());
+        const QString out = fresh(QStringLiteral("out"));
+        QVERIFY(!fwa::extractArchive(listing.value(), out, {}, CancellationToken()).ok());
+        QVERIFY(filesUnder(out).isEmpty());
+        zip::Reader r;
+        QVERIFY(r.open(z).ok());
+        const QString zout = fresh(QStringLiteral("out"));
+        const Status st = r.extractAll(zout, CancellationToken(), nullptr, true);
+        QVERIFY(!st.ok());
+        QVERIFY2(st.error().message.contains(QStringLiteral("data/X.bin.fw.part")), qPrintable(st.error().message));
+        QVERIFY(filesUnder(zout).isEmpty());
+    }
+
+    // The game's own folder may come in two spellings in one archive (its name
+    // is not part of the image): one folder on Windows, in a ZIP as in a 7z.
+    // Inside it the rule holds.
+    void theGameFoldersOwnSpellingMayVary()
+    {
+        const QList<Item> game{file(QStringLiteral("Game-app0/eboot.bin"), "e"), file(QStringLiteral("GAME-APP0/sce_sys/param.json"), "{}"),
+                               file(QStringLiteral("game-app0/data/a.bin"), "a")};
+        const QString s = fresh(QStringLiteral("spellings.7z"));
+        QVERIFY(write7z(s, game, "store"));
+        const QString z = fresh(QStringLiteral("spellings.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            for (const Item& i : game)
+                QVERIFY(w.addData(i.name, i.data).ok());
+            QVERIFY(w.finish().ok());
+        }
+        for (const QString& a : {s, z}) {
+            QVERIFY2(fwa::checkArchiveSource(a).ok(), qPrintable(a));
+            auto root = fwa::unpackArchiveSource(a, fresh(QStringLiteral("temp")), CancellationToken(), nullptr, 0);
+            QVERIFY2(root.ok(), root.ok() ? "" : qPrintable(root.error().toLogString()));
+            QCOMPARE(filesUnder(root.value()),
+                     (QStringList{QStringLiteral("data/a.bin"), QStringLiteral("eboot.bin"), QStringLiteral("sce_sys/param.json")}));
+        }
+        const QString twins = fresh(QStringLiteral("twins.7z"));
+        QVERIFY(write7z(twins, game + QList<Item>{file(QStringLiteral("GAME-app0/DATA/b.bin"), "b")}, "store"));
+        const Status st = fwa::checkArchiveSource(twins);
+        QVERIFY(!st.ok());
+        QVERIFY2(st.error().message.contains(QStringLiteral("upper and lower case")) && st.error().message.contains(QStringLiteral("/data and "))
+                     && st.error().message.contains(QStringLiteral("/DATA)")),
+                 qPrintable(st.error().message));
+    }
+
+    // Names are checked at the cost of their length, however deep they go. A
+    // list of deep paths that end in different folders used to cost the
+    // square of the depth for each of them.
+    void deepNamesCostTheirLength()
+    {
+        QString deep;
+        for (int i = 0; i < 3000; ++i)
+            deep += QStringLiteral("d/");
+        QList<Item> items{file(QStringLiteral("eboot.bin"), "e")};
+        for (int i = 0; i < 300; ++i)
+            items << file(deep + QStringLiteral("k%1/x.bin").arg(i), "x");
+        const QString a = fresh(QStringLiteral("deep.7z"));
+        QVERIFY(write7z(a, items, "store"));
+        auto listing = fwa::listArchive(a);
+        QVERIFY2(listing.ok(), listing.ok() ? "" : qPrintable(listing.error().toLogString()));
+        QCOMPARE(listing->entries.size(), size_t(items.size()));
+        QElapsedTimer clock;
+        clock.start();
+        const Status st = fwa::checkExtractable(listing.value());
+        QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+        QVERIFY2(clock.elapsed() < 3000, qPrintable(QStringLiteral("%1 ms").arg(clock.elapsed())));
+        // Deep down the rules are the same: two spellings of one folder.
+        items << file(deep.toUpper() + QStringLiteral("k1/y.bin"), "y");
+        QVERIFY(write7z(a, items, "store"));
+        listing = fwa::listArchive(a);
+        QVERIFY(listing.ok());
+        const Status twins = fwa::checkExtractable(listing.value());
+        QVERIFY(!twins.ok());
+        QVERIFY2(twins.error().message.contains(QStringLiteral("upper and lower case"))
+                     && twins.error().message.contains(QStringLiteral("(d and D)")),
+                 qPrintable(twins.error().message.left(300)));
+        // A file and a folder of one name, deep down.
+        items.removeLast();
+        items << file(deep + QStringLiteral("k2"), "file where a folder is");
+        QVERIFY(write7z(a, items, "store"));
+        listing = fwa::listArchive(a);
+        QVERIFY(listing.ok());
+        const Status both = fwa::checkExtractable(listing.value());
+        QVERIFY(!both.ok());
+        QVERIFY2(both.error().message.contains(QStringLiteral("twice")) && both.error().message.contains(deep + QStringLiteral("k2 twice")),
+                 qPrintable(both.error().message.left(300)));
+    }
+
+    // As deep as a name may go (16,000 folders, 32,000 characters), many
+    // names that share their folders cost what the same folders and
+    // characters cost in shallower names: the walk never copies the path
+    // above each folder it passes. Timed against 16 times as many names a
+    // sixteenth as deep, so a slow machine slows both.
+    void namesNearTheLengthLimitCostTheirLength()
+    {
+        const auto listingOf = [](int depth, int names) {
+            QString prefix;
+            prefix.reserve(2 * depth);
+            for (int i = 0; i < depth; ++i)
+                prefix += QStringLiteral("d/");
+            fwa::ArchiveListing l;
+            l.path = QStringLiteral("deep.7z");
+            l.kind = fwa::ArchiveKind::SevenZip;
+            l.entries.push_back({QStringLiteral("eboot.bin"), fwa::ArchiveEntry::Type::File, 1, false});
+            for (int i = 0; i < names; ++i)
+                l.entries.push_back({prefix + QStringLiteral("k%1.bin").arg(i), fwa::ArchiveEntry::Type::File, 1, false});
+            return l;
+        };
+        const auto timed = [](const fwa::ArchiveListing& l) {
+            QElapsedTimer clock;
+            clock.start();
+            const Status st = fwa::checkExtractable(l);
+            return std::pair<Status, qint64>(st, clock.elapsed());
+        };
+        const auto [shallowSt, shallowMs] = timed(listingOf(1000, 4800));
+        QVERIFY2(shallowSt.ok(), shallowSt.ok() ? "" : qPrintable(shallowSt.error().toLogString()));
+        const auto [deepSt, deepMs] = timed(listingOf(16000, 300));
+        QVERIFY2(deepSt.ok(), deepSt.ok() ? "" : qPrintable(deepSt.error().toLogString()));
+        qInfo("%lld ms deep, %lld ms shallow", deepMs, shallowMs);
+        QVERIFY2(deepMs < 2 * shallowMs + 500, qPrintable(QStringLiteral("%1 ms deep, %2 ms shallow").arg(deepMs).arg(shallowMs)));
+    }
+
+    // A path longer than Windows allows cannot be unpacked: refused when the
+    // archive is listed, before any check has to walk it.
+    void pathsLongerThanWindowsAllowsAreRefused()
+    {
+        QString longest;
+        while (longest.size() < 32767 - 10)
+            longest += QStringLiteral("abcdefghi/");
+        longest = longest.left(32767 - 9) + QStringLiteral("eboot.bin");
+        QCOMPARE(longest.size(), 32767);
+        const QString fits = fresh(QStringLiteral("fits.7z"));
+        QVERIFY(write7z(fits, {file(longest, "e")}, "store"));
+        auto listing = fwa::listArchive(fits);
+        QVERIFY2(listing.ok(), listing.ok() ? "" : qPrintable(listing.error().toLogString()));
+        QCOMPARE(listing->entries.front().name, longest);
+
+        const QString over = fresh(QStringLiteral("over.7z"));
+        QVERIFY(write7z(over, {file(QStringLiteral("eboot.bin"), "e"), file(QStringLiteral("x/") + longest, "x")}, "store"));
+        listing = fwa::listArchive(over);
+        QVERIFY(!listing.ok());
+        QCOMPARE(listing.error().code, ErrorCode::Unsupported);
+        QVERIFY2(listing.error().message.contains(QStringLiteral("over.7z holds a path of more than 32,767 characters")),
+                 qPrintable(listing.error().message));
+        QVERIFY(!fwa::checkArchiveSource(over).ok());
+    }
+
+    // What one list may cost has a ceiling in every format: the characters of
+    // all its names together, and the folders and files they make (lowered
+    // here; the app's are 64 Mi characters and 4,000,000 names). A RAR's or a
+    // ZIP's list is not bounded by anything else.
+    void aListHasACeiling()
+    {
+        const auto restore = qScopeGuard([] { fwa::setListLimitsForTesting(-1, -1); });
+        QList<Item> items{file(QStringLiteral("eboot.bin"), "e")};
+        for (int i = 0; i < 20; ++i)
+            items << file(QStringLiteral("data/file %1.bin").arg(i, 2, 10, QLatin1Char('0')), "x");
+        const QString s = fresh(QStringLiteral("ceiling.7z"));
+        QVERIFY(write7z(s, items, "store"));
+        const QString z = fresh(QStringLiteral("ceiling.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            for (const Item& i : items)
+                QVERIFY(w.addData(i.name, i.data).ok());
+            QVERIFY(w.finish().ok());
+        }
+        fwa::setListLimitsForTesting(1000, 100);
+        for (const QString& a : {s, z})
+            QVERIFY2(fwa::checkArchiveSource(a).ok(), qPrintable(a));
+        // 9 + 20 x 16 characters of names; 22 folders and files.
+        for (const auto& [chars, names] : {std::pair<qint64, qsizetype>(200, -1), std::pair<qint64, qsizetype>(-1, 15)}) {
+            fwa::setListLimitsForTesting(chars, names);
+            for (const QString& a : {s, z}) {
+                const Status st = fwa::checkArchiveSource(a);
+                QVERIFY2(!st.ok(), qPrintable(a));
+                QCOMPARE(st.error().code, ErrorCode::Unsupported);
+                QVERIFY2(st.error().message.contains(QStringLiteral("has a list of files too large for this app to read")),
+                         qPrintable(st.error().message));
+                const QString temp = fresh(QStringLiteral("temp"));
+                QVERIFY(!fwa::unpackArchiveSource(a, temp, CancellationToken(), nullptr, 0).ok());
+                QVERIFY(!QFileInfo::exists(temp + QStringLiteral("/zip-source")));
+            }
+        }
+        // The listing itself stops at the ceiling of characters.
+        fwa::setListLimitsForTesting(200, -1);
+        auto listing = fwa::listArchive(s);
+        QVERIFY(!listing.ok());
+        QVERIFY2(listing.error().message.contains(QStringLiteral("list of files too large")), qPrintable(listing.error().message));
+    }
+
+    // A name made of thousands of "./" in front is read at the cost of its
+    // length.
+    void longDotSlashPrefixesCostTheirLength()
+    {
+        QString name;
+        for (int i = 0; i < 250000; ++i)
+            name += QStringLiteral("./");
+        const QString a = fresh(QStringLiteral("dots.7z"));
+        QVERIFY(write7z(a, {file(name + QStringLiteral("eboot.bin"), "e")}, "store"));
+        QElapsedTimer clock;
+        clock.start();
+        auto listing = fwa::listArchive(a);
+        QVERIFY2(listing.ok(), listing.ok() ? "" : qPrintable(listing.error().toLogString()));
+        QVERIFY2(clock.elapsed() < 3000, qPrintable(QStringLiteral("%1 ms").arg(clock.elapsed())));
+        if (listing->entries.front().name != QStringLiteral("eboot.bin"))
+            QSKIP("libarchive's 7z writer changed this name while writing it");
+        QVERIFY(fwa::checkArchiveSource(a).ok());
     }
 
     // Links are never created; the game is unpacked without them and the
@@ -857,6 +1214,107 @@ private slots:
         r = fwa::extractArchive(listing.value(), out2, {}, CancellationToken());
         QVERIFY(r.ok()); // the pass stops once everything listed is out
         QCOMPARE(filesUnder(out2), QStringList{QStringLiteral("eboot.bin")});
+    }
+
+    // Paths longer than the old 260-character limit, and names up to the 255
+    // characters NTFS and exFAT allow, unpack as any other.
+    void longPathsAndLongNames()
+    {
+        QString deep;
+        for (int i = 0; i < 8; ++i)
+            deep += QStringLiteral("folder %1 ").arg(i) + QString(40, QChar(u'a' + i)) + u'/';
+        const QString longName = QString(251, u'n') + QStringLiteral(".bin"); // 255
+        const QList<Item> game{file(QStringLiteral("eboot.bin"), "e"), file(deep + QStringLiteral("deep.bin"), noise(70000, 9)),
+                               file(QStringLiteral("data/") + longName, "longest name")};
+        const QString z = fresh(QStringLiteral("long.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            for (const Item& i : game)
+                QVERIFY(w.addData(i.name, i.data, zip::Method::Deflate, QDateTime::fromSecsSinceEpoch(i.mtime)).ok());
+            QVERIFY(w.finish().ok());
+        }
+        for (const char* method : {"store", "lzma2", "zip"}) {
+            QString a = z;
+            if (QByteArray(method) != "zip") {
+                a = fresh(QStringLiteral("long.7z"));
+                QVERIFY(write7z(a, game, method));
+            }
+            const QString temp = fresh(QStringLiteral("temp"));
+            auto root = fwa::unpackArchiveSource(a, temp, CancellationToken(), nullptr, 0);
+            QVERIFY2(root.ok(), root.ok() ? method : qPrintable(root.error().toLogString()));
+            QVERIFY(QDir::toNativeSeparators(root.value() + u'/' + deep).size() > 300);
+            QCOMPARE(treeDiffers(root.value(), game), QString());
+            QVERIFY(noPartFiles(temp));
+        }
+        // A name NTFS cannot hold: one sentence, nothing half-written.
+        const QString tooLong = fresh(QStringLiteral("too-long.7z"));
+        QVERIFY(write7z(tooLong, {file(QStringLiteral("eboot.bin"), "e"), file(QStringLiteral("data/") + QString(300, u'n'), "x")}, "store"));
+        const QString temp = fresh(QStringLiteral("temp"));
+        auto root = fwa::unpackArchiveSource(tooLong, temp, CancellationToken(), nullptr, 0);
+        QVERIFY(!root.ok());
+        QVERIFY2(!root.error().message.isEmpty() && !root.error().message.contains(u'\n'), qPrintable(root.error().message));
+        QVERIFY(noPartFiles(temp));
+    }
+
+    // Every file is written as "<name>.fw.part": a name of 248 to 250
+    // characters has no room for that and is unpacked through a short name
+    // instead. A file called "<name>.part" in the destination is left alone.
+    void aLongNameBesideAFileCalledLikeItsPart()
+    {
+        const QString name = QString(246, u'p') + QStringLiteral(".bin"); // 250
+        const QList<Item> items{file(QStringLiteral("eboot.bin"), "e"), file(QStringLiteral("data/") + name, "from the archive")};
+        const QString z = fresh(QStringLiteral("beside.zip"));
+        {
+            zip::Writer w;
+            QVERIFY(w.open(z).ok());
+            for (const Item& i : items)
+                QVERIFY(w.addData(i.name, i.data, zip::Method::Store, QDateTime::fromSecsSinceEpoch(i.mtime)).ok());
+            QVERIFY(w.finish().ok());
+        }
+        const QString a = fresh(QStringLiteral("beside.7z"));
+        QVERIFY(write7z(a, items, "store"));
+        const auto check = [&](const QString& out) {
+            QCOMPARE(readFile(out + QStringLiteral("/data/") + name), QByteArray("from the archive"));
+            QCOMPARE(readFile(out + QStringLiteral("/data/") + name + QStringLiteral(".part")), QByteArray("the user's file"));
+            QCOMPARE(QDir(out + QStringLiteral("/data")).entryList(QDir::Files | QDir::Hidden | QDir::System).size(), 2);
+        };
+        {
+            const QString out = fresh(QStringLiteral("zip-out"));
+            QVERIFY(writeFile(out + QStringLiteral("/data/") + name + QStringLiteral(".part"), "the user's file"));
+            zip::Reader r;
+            QVERIFY(r.open(z).ok());
+            const Status st = r.extractAll(out, CancellationToken());
+            QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+            check(out);
+        }
+        {
+            auto listing = fwa::listArchive(a);
+            QVERIFY(listing.ok());
+            const QString out = fresh(QStringLiteral("7z-out"));
+            QVERIFY(writeFile(out + QStringLiteral("/data/") + name + QStringLiteral(".part"), "the user's file"));
+            auto r = fwa::extractArchive(listing.value(), out, {}, CancellationToken());
+            QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+            check(out);
+        }
+    }
+
+    // A file that is in the destination already is not the unpack's to
+    // replace (its short 8.3 name can make one name of the archive land on
+    // another's file, too): the unpack stops and leaves it as it was.
+    void neverOverAFileThatIsThere()
+    {
+        const QString a = fresh(QStringLiteral("over.7z"));
+        QVERIFY(write7z(a, {file(QStringLiteral("eboot.bin"), "from the archive"), file(QStringLiteral("data/a.bin"), "a")}, "store"));
+        auto listing = fwa::listArchive(a);
+        QVERIFY(listing.ok());
+        const QString out = fresh(QStringLiteral("out"));
+        QVERIFY(writeFile(out + QStringLiteral("/data/a.bin"), "mine"));
+        auto r = fwa::extractArchive(listing.value(), out, {}, CancellationToken());
+        QVERIFY(!r.ok());
+        QCOMPARE(r.error().code, ErrorCode::AlreadyExists);
+        QCOMPARE(readFile(out + QStringLiteral("/data/a.bin")), QByteArray("mine"));
+        QVERIFY(noPartFiles(out));
     }
 
     // A header that announces more than the file can hold, or more than the
@@ -1058,6 +1516,26 @@ private slots:
             QVERIFY(!st.ok());
             QVERIFY2(st.error().message.contains(QString::fromLatin1(set.third)), qPrintable(st.error().message));
         }
+    }
+
+    // Downloaded names often hold "%2B" or "%20": the message names the files
+    // as they are called (the number of the part used to land in the name).
+    void partNamesWithPercentSignsAreNamedAsTheyAre()
+    {
+        const QString dir = fresh(QStringLiteral("percent"));
+        const QString first = dir + QStringLiteral("/Game%2Bfix%1.part01.rar");
+        const QString third = dir + QStringLiteral("/Game%2Bfix%1.part03.rar");
+        QVERIFY(writeFile(first, readFile(sample(QStringLiteral("test_read_format_rar5_multiarchive.part01.rar")))));
+        QVERIFY(writeFile(third, readFile(sample(QStringLiteral("test_read_format_rar5_multiarchive.part03.rar")))));
+        auto later = fwa::listArchive(third);
+        QVERIFY(!later.ok());
+        QCOMPARE(later.error().message,
+                 QStringLiteral("Game%2Bfix%1.part03.rar is part 3 of a multi-part archive. Choose the first part, Game%2Bfix%1.part01.rar."));
+        QVERIFY(QFile::remove(first));
+        later = fwa::listArchive(third);
+        QVERIFY(!later.ok());
+        QCOMPARE(later.error().message,
+                 QStringLiteral("Game%2Bfix%1.part03.rar is part 3 of a multi-part archive and the first part, Game%2Bfix%1.part01.rar, is not in its folder."));
     }
 
     // More sets: several files across the parts, one file across all of

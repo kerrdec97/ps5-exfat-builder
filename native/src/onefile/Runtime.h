@@ -8,10 +8,13 @@
 //
 // <root> is <exe dir>\exFAT Image Builder.data\runtime in portable mode,
 // else %LOCALAPPDATA%\kerrdec97\exFAT Image Builder\runtime, else the same
-// under %TEMP%. A folder is complete when its marker file (written last, before
-// the folder gets its final name) matches the payload and every file has its
-// size. While the program runs the launcher keeps the marker open, which stops
-// another launcher from renaming (removing) the folder.
+// under %TEMP%. The unpacked files are flushed to the disk before the marker is
+// written. A folder is complete when its marker file (written last, before the
+// folder gets its final name) matches the payload and every file has its size
+// and was last written no later than the marker (a file changed in place after
+// unpacking makes the folder incomplete, and it is unpacked again). While the
+// program runs the launcher keeps the marker open, which stops another launcher
+// from renaming (removing) the folder.
 
 #include "OnefileFormat.h"
 
@@ -50,8 +53,21 @@ using TraceFn = void (*)(const std::wstring&);
 // file carries no payload at all (anything else means a damaged one).
 bool openPayload(Payload& p, std::wstring& err);
 
-// Runtime roots, most preferred first.
-std::vector<std::wstring> runtimeRoots(const Payload& p, bool portable);
+// Runtime roots, most preferred first. Without long path support (Windows'
+// LongPathsEnabled is 0 by default) the program cannot be started from, nor
+// load its plug-ins from, a path of MAX_PATH characters or more: a root too
+// deep for the longest file of the payload is left out (and traced) while a
+// shorter one remains.
+std::vector<std::wstring> runtimeRoots(const Payload& p, bool portable, TraceFn trace = nullptr);
+
+// True when this process may use paths of MAX_PATH characters or more
+// (RtlAreLongPathsEnabled: the system setting and the longPathAware
+// manifest). FW_ONEFILE_SHORT_PATHS=1 (tests) answers false.
+bool longPathsEnabled();
+
+// The longest path of a file of the payload under <root>\<folderName>, in
+// UTF-16 units, for `root` of length 0.
+size_t longestRuntimePath(const Payload& p);
 
 // The marker of `dir` (open, deny-write/delete) when `dir` holds a complete
 // copy of this payload; INVALID_HANDLE_VALUE otherwise.

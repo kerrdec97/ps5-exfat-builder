@@ -27,6 +27,9 @@ void isolateAppData(QTemporaryDir& dir)
     fw::Paths::overrideRoot(dir.path());
     if (!qEnvironmentVariableIsSet("FW_OFFLINE"))
         qputenv("FW_OFFLINE", "1");
+    // Sleep, shut down and restart are refused (power::perform), beside the
+    // refusal in every tst_* program.
+    qputenv("FW_NO_POWER_ACTIONS", "1");
     const auto own = [&dir](const char* variable, const char* folder) {
         qputenv(variable, QDir::toNativeSeparators(dir.filePath(QLatin1String(folder))).toUtf8());
     };

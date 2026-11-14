@@ -10,7 +10,11 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QRadialGradient>
+#include <QResizeEvent>
+#include <QSpacerItem>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace fw::ui {
 
@@ -165,8 +169,8 @@ void NavItem::paintEvent(QPaintEvent*)
             p.setFont(sel ? font::bodyStrong() : font::body());
         }
         const QRect tr(14 + size::icon + 12, 0, right - (14 + size::icon + 12), height());
-        p.drawText(mirrored(this, tr), naturalText(this, Qt::AlignVCenter | Qt::AlignLeft, text()),
-                   QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, tr.width()));
+        const QString shown = QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, tr.width());
+        p.drawText(mirrored(this, tr), naturalText(this, Qt::AlignVCenter | Qt::AlignLeft, text()), isRightToLeft() ? bidiSafe(shown) : shown);
     } else if (m_count > 0) {
         p.setPen(Qt::NoPen);
         p.setBrush(color::accent_hi);
@@ -384,6 +388,10 @@ AppHeader::AppHeader(QWidget* parent) : QWidget(parent)
     m_queueChipWrap->setCursor(Qt::PointingHandCursor);
     m_queueChipWrap->installEventFilter(this);
     m_queueChipWrap->setToolTip(FW_TR("Open queue"));
+    // Status lines, not labels: "1 running · 0 queued · then shut down" or
+    // its translation is whole where a badge's text is cut after 32 characters.
+    m_consoleChip->setMaxLength(64);
+    m_queueChip->setMaxLength(64);
     // Both chips are buttons: Tab reaches them, Space and Enter press them.
     for (QWidget* chip : {m_consoleChipWrap, m_queueChipWrap}) {
         chip->setFocusPolicy(Qt::TabFocus);
@@ -478,7 +486,9 @@ StatusBar::StatusBar(QWidget* parent) : QWidget(parent)
     ll->addWidget(m_mark);
     ll->addWidget(m_text);
     h->addWidget(left);
-    m_free = label({}, TextStyle::MonoSmall, color::fg_3, this);
+    // One font across the bar (the caption style has tabular figures, so the
+    // free space does not jitter as it changes).
+    m_free = label({}, TextStyle::Caption, color::fg_3, this);
     h->addWidget(m_free);
     h->addStretch(1);
     m_context = new ElideLabel({}, Qt::ElideMiddle, this);
@@ -525,9 +535,12 @@ PageHeader::PageHeader(const QString& title, const QString& captionText, QWidget
     auto* col = new QVBoxLayout;
     col->setSpacing(3);
     m_title = heading(title, TextStyle::Title, this);
-    m_caption = label(captionText, TextStyle::Body, color::fg_3, this);
-    m_caption->setWordWrap(true);
-    m_caption->setMaximumWidth(760);
+    // One line: the caption is one sentence; where the window is too narrow
+    // for it, it ends in "…" and the tooltip has it all.
+    m_caption = new ElideLabel(captionText, Qt::ElideRight, this);
+    m_caption->setFont(font::body());
+    setTextColor(m_caption, color::fg_3);
+    m_caption->setMaximumWidth(size::formMax);
     col->addWidget(m_title);
     col->addWidget(m_caption);
     h->addLayout(col, 1);
@@ -536,12 +549,39 @@ PageHeader::PageHeader(const QString& title, const QString& captionText, QWidget
     auto* actions = new QWidget(this);
     m_actions = hbox(actions, space::sm);
     h->addWidget(actions, 0, Qt::AlignTop | Qt::AlignRight);
+    // Past the content's width (setContentWidth): the buttons end where the content does.
+    m_tail = new QSpacerItem(0, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+    h->addItem(m_tail);
+    m_row = h;
 }
 
 void PageHeader::setCaption(const QString& text)
 {
-    m_caption->setText(text);
+    m_caption->setFullText(text);
     m_caption->setVisible(!text.isEmpty());
+}
+
+QString PageHeader::caption() const { return m_caption->fullText(); }
+
+void PageHeader::setContentWidth(int px)
+{
+    m_contentWidth = std::max(0, px);
+    fitTail();
+}
+
+void PageHeader::fitTail()
+{
+    const int extra = m_contentWidth > 0 ? std::max(0, width() - m_contentWidth) : 0;
+    if (m_tail->sizeHint().width() == extra)
+        return;
+    m_tail->changeSize(extra, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+    m_row->invalidate();
+}
+
+void PageHeader::resizeEvent(QResizeEvent* e)
+{
+    QWidget::resizeEvent(e);
+    fitTail();
 }
 
 void PageHeader::setTitle(const QString& title) { m_title->setText(title); }

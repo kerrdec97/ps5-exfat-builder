@@ -3,6 +3,12 @@
 // Watches the queue and, when it runs dry after doing work, tells the UI to
 // start the "When the queue finishes" countdown (general.afterQueueAction).
 // The UI shows the countdown with Cancel and calls fw::power::perform().
+//
+// A run is made of the user's jobs that the queue ran in this session. Jobs
+// that run beside the queue (JobRecord::runsWhileHeld: update checks, problem
+// reports) are not part of it, and a job restored from an earlier session
+// counts only once the queue has run it (a restored queue, an interrupted job
+// or a waiting job that is removed or cancelled never arms the action).
 
 #include "core/Power.h"
 #include "core/Settings.h"

@@ -14,9 +14,12 @@
 #include "app/pages/Ps5ConnectPage.h"
 #include "app/pages/QueuePage.h"
 #include "app/pages/SettingsPage.h"
+#include "app/pages/ps5/ConsoleHero.h"
+#include "app/pages/ps5/ConsoleToolTab.h"
 #include "app/services/JobSubmit.h"
 #include "app/services/LauncherIdentity.h"
 #include "app/ui/Icons.h"
+#include "app/ui/JobRows.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
 #include "connect/notify/DiscordWebhook.h"
@@ -41,14 +44,19 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMimeData>
+#include <QResizeEvent>
 #include <QScreen>
+#include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QStorageInfo>
 #include <QUrl>
+#include <QWindow>
 
 #include <algorithm>
 #include <limits>
@@ -89,6 +97,9 @@ PowerTexts powerTexts(power::Action action)
     return {};
 }
 
+// The shortest countdown general.afterQueueDelaySeconds allows.
+constexpr int kShortestCountdown = 10;
+
 // "3 jobs done, 1 failed" as a whole phrase (the tray message).
 QString jobsDoneText(int succeeded, int failed)
 {
@@ -112,7 +123,7 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
 
     m_queueModel = new JobQueueModel(ctx.queue(), this);
     m_logModel = &ctx.logModel();
-    m_library = new LibraryStore(this);
+    m_library = new LibraryStore(&ctx.settings(), this); // the folders follow this window's settings
     m_payloads = new PayloadStore(this);
     m_watcher = new QueueCompletionWatcher(ctx.queue(), ctx.settings(), this);
     // general.discordWebhookUrl: a summary of each finished run (update checks
@@ -153,6 +164,7 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     setCentralWidget(central);
     m_focusRing = new FocusRingOverlay(this);
     m_toasts = new ToastHost(this);
+    m_toasts->setInsets(size::statusBar, size::scrollBar); // above the status bar, clear of the page's scroll bar
 
     buildPages();
     m_sidebar->setVersionText(FW_TR("Version %1").arg(QLatin1String(build::kVersion)));
@@ -195,6 +207,8 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     connect(&ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
         if (key == general::keys::kDefaultOutputDir)
             refreshFreeSpace();
+        if (key == general::keys::kAfterQueueAction)
+            updateChips();
     });
     m_freeSpaceTimer.setInterval(15000);
     connect(&m_freeSpaceTimer, &QTimer::timeout, this, &MainWindow::refreshFreeSpace);
@@ -237,6 +251,13 @@ void MainWindow::addPage(pages::Page* page, const QString& iconName, const QStri
     m_pages.insert(page->key(), page);
     m_order << page->key();
     page->header()->setIcon(iconName);
+    // Every page keeps the scroll bar's room: header buttons and cards end on
+    // the same line on every page and in every state (scrolled or not).
+    reserveScrollBarSpace(page->scrollArea());
+    // Form + dock pages: their content is at most 760 + 16 + 400 px wide, and
+    // in a wider window the header's buttons end where the dock does.
+    if (qobject_cast<pages::JobFormPage*>(page))
+        page->header()->setContentWidth(size::formMax + space::lg + size::dock);
     m_stack->addWidget(page);
     if (footer)
         m_sidebar->addFooterItem(page->key(), iconName, text);
@@ -437,12 +458,18 @@ void MainWindow::updateChips()
     int running = 0, queued = 0;
     countUserJobs(*m_queueModel, running, queued);
     m_sidebar->setCount(QStringLiteral("queue"), running + queued);
+    // While an end-of-queue action is chosen the chip says so on every page
+    // ("1 running · 0 queued · then sleep", the Jobs dock's words); a click
+    // leads to the Queue page, where it is changed.
+    const QString afterName = m_ctx.settings().value(general::keys::kAfterQueueAction).toString();
+    const power::Action after = power::actionFromName(afterName);
+    const QString then = after == power::Action::None ? QString() : QStringLiteral(" · ") + afterQueueText(afterName);
     if (running == 0 && queued == 0)
-        m_header->setQueueChip(FW_TR("Queue idle"), Tone::Neutral, true);
+        m_header->setQueueChip(FW_TR("Queue idle") + then, after == power::Action::None ? Tone::Neutral : Tone::Warn, true);
     else if (running == 0 && m_ctx.queue().isHeld()) // a list that waits for "Start queue"
-        m_header->setQueueChip(FW_TR("Queue waiting · %1").arg(queued), Tone::Info, true);
+        m_header->setQueueChip(FW_TR("Queue waiting · %1").arg(queued) + then, after == power::Action::None ? Tone::Info : Tone::Warn, true);
     else
-        m_header->setQueueChip(FW_TR("%1 running · %2 queued").arg(running).arg(queued), Tone::Info, true);
+        m_header->setQueueChip(FW_TR("%1 running · %2 queued").arg(running).arg(queued) + then, after == power::Action::None ? Tone::Info : Tone::Warn, true);
 }
 
 void MainWindow::updateStatus()
@@ -584,6 +611,26 @@ void MainWindow::onQueueFinished(int succeeded, int failed, int cancelled)
     }
 }
 
+// Work of the app that is not a job of the queue, and that sleep or a shut
+// down would cut off half-way: a Backport run or restore rewrites a game
+// folder, a PS5 connect tool writes files on the console or beside the app.
+// What the toast says about it (English, for the log), or "" when none runs.
+QString MainWindow::workOutsideTheQueue() const
+{
+    if (auto* backport = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport"))); backport && backport->isBusy())
+        return FW_TR_NOOP("A backport run or restore is in progress.");
+    const auto tools = findChildren<pages::ConsoleToolTab*>();
+    if (std::any_of(tools.begin(), tools.end(), [](const pages::ConsoleToolTab* t) { return t->isBusy(); }))
+        return FW_TR_NOOP("PS5 connect is still at work.");
+    return {};
+}
+
+// The countdown does not block: it is shown and answered through
+// Sheet::finished(), so the queue's signal that led here returns at once and
+// nothing waits in a nested event loop. One countdown at a time: a newer run
+// replaces it (the old one ends as cancelled, its timer with it). It stays
+// above every other sheet and toast, Esc cancels it wherever the keyboard
+// focus is, and Cancel (not the action) is its default button.
 void MainWindow::onActionDue(power::Action action, int delaySeconds, int succeeded, int failed)
 {
     if (action == power::Action::None)
@@ -591,19 +638,46 @@ void MainWindow::onActionDue(power::Action action, int delaySeconds, int succeed
     if (m_countdown)
         m_countdown->close(0);
     const PowerTexts texts = powerTexts(action);
+    // Not under work outside the queue: no countdown for an action that
+    // could not run when it ends.
+    if (const QString busy = workOutsideTheQueue(); !busy.isEmpty()) {
+        Log(QStringLiteral("power")).info(QStringLiteral("After-queue action not run (%1): %2").arg(power::actionLabel(action), busy));
+        toast(Tone::Info, texts.failed, i18n::translate(busy));
+        return;
+    }
     auto* s = new Sheet(this, texts.countdown.arg(delaySeconds), Sheet::Icon::Warning);
+    s->setObjectName(QStringLiteral("power-countdown"));
+    s->setKeepOnTop(true);
     const QString finished = failed > 0 ? (succeeded == 1 ? FW_TR("The queue finished: %1 job done, %2 failed.") : FW_TR("The queue finished: %1 jobs done, %2 failed."))
                                               .arg(succeeded)
                                               .arg(failed)
                                         : (succeeded == 1 ? FW_TR("The queue finished: %1 job done.") : FW_TR("The queue finished: %1 jobs done.")).arg(succeeded);
-    auto* body = s->addText(finished + u' ' + texts.warning);
-    Q_UNUSED(body);
+    s->addText(finished + u' ' + texts.warning);
+    s->addText(FW_TR("You can choose what happens after each run on the Queue page, under When the queue finishes."));
     s->addButton(FW_TR("Cancel"), Sheet::Role::Safe);
-    s->addButton(texts.now, Sheet::Role::Primary);
-    m_countdown = s;
+    s->addButton(texts.now, Sheet::Role::Destructive); // the default (Enter) stays Cancel
+    auto* esc = new QShortcut(QKeySequence(Qt::Key_Escape), s);
+    esc->setContext(Qt::WindowShortcut); // also with the focus on a field under the sheet
+    connect(esc, &QShortcut::activated, s, [s] { s->close(0); });
     auto* timer = new QTimer(s);
     auto remaining = std::make_shared<int>(delaySeconds);
-    connect(timer, &QTimer::timeout, s, [s, timer, remaining, texts] {
+    auto held = std::make_shared<bool>(false);
+    connect(timer, &QTimer::timeout, s, [s, timer, remaining, held, delaySeconds, texts] {
+        // A window that takes the input from this one (a Browse… dialog, a
+        // message box) leaves Cancel and Esc out of reach, while timers still
+        // run: the countdown waits for it, and once it can be answered again
+        // it gives at least the time of the shortest countdown there is.
+        // (A native dialog is in Qt's list of modal windows too.)
+        if (QWindow* modal = QGuiApplication::modalWindow(); modal && modal != s->window()->windowHandle()) {
+            *held = true;
+            return;
+        }
+        if (*held) {
+            *held = false;
+            *remaining = std::max(*remaining, std::min(delaySeconds, kShortestCountdown));
+            s->setTitle(texts.countdown.arg(*remaining));
+            return;
+        }
         if (--*remaining <= 0) {
             timer->stop();
             s->close(1);
@@ -611,14 +685,52 @@ void MainWindow::onActionDue(power::Action action, int delaySeconds, int succeed
         }
         s->setTitle(texts.countdown.arg(*remaining));
     });
+    connect(s, &Sheet::finished, this, [this, s, timer, esc, action, texts](int r) {
+        timer->stop();
+        esc->setEnabled(false); // a sheet that fades away keeps no Esc of its own
+        if (m_countdown == s)
+            m_countdown = nullptr;
+        if (r != 1) {
+            Log(QStringLiteral("power")).info(QStringLiteral("After-queue action cancelled: %1").arg(power::actionLabel(action)));
+            return;
+        }
+        // After the sheet has gone: Windows may suspend the computer inside perform().
+        QTimer::singleShot(0, this, [this, action, texts] {
+            // Changed meanwhile, or the queue is at work again: not now.
+            if (power::actionFromName(m_ctx.settings().value(general::keys::kAfterQueueAction).toString()) != action) {
+                Log(QStringLiteral("power")).info(QStringLiteral("After-queue action not run: the setting changed during the countdown"));
+                return;
+            }
+            const auto records = m_ctx.queue().records();
+            if (std::any_of(records.begin(), records.end(), [](const JobRecord& r) { return r.isActive() && !r.runsWhileHeld; })) {
+                toast(Tone::Info, texts.failed, FW_TR("A job is running again."));
+                return;
+            }
+            // Started during the countdown.
+            if (const QString busy = workOutsideTheQueue(); !busy.isEmpty()) {
+                Log(QStringLiteral("power")).info(QStringLiteral("After-queue action not run (%1): %2").arg(power::actionLabel(action), busy));
+                toast(Tone::Info, texts.failed, i18n::translate(busy));
+                return;
+            }
+            auto st = power::perform(action);
+            if (!st.ok())
+                toast(Tone::Err, texts.failed, st.error().message);
+        });
+    });
+    m_countdown = s;
+    // In front, so it is seen and can be answered with one click: an open
+    // menu closes, a minimised window comes back.
+    for (int guard = 0; guard < 16 && QApplication::activePopupWidget(); ++guard)
+        QApplication::activePopupWidget()->close();
+    if (isMinimized())
+        setWindowState((windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
+    if (!isActiveWindow()) {
+        raise();
+        activateWindow();
+        QApplication::alert(this); // Windows may keep another program in front: the taskbar button flashes
+    }
+    s->open();
     timer->start(1000);
-    const int r = s->exec();
-    m_countdown = nullptr;
-    if (r != 1)
-        return;
-    auto st = power::perform(action);
-    if (!st.ok())
-        toast(Tone::Err, texts.failed, st.error().message);
 }
 
 // ---- updates --------------------------------------------------------------------------
@@ -895,7 +1007,7 @@ void MainWindow::showShortcuts()
     }
     grid->setColumnStretch(1, 1);
     s->body()->addLayout(grid);
-    s->addButton(FW_TR("Close"), Sheet::Role::Primary);
+    s->addButton(FW_TR("Close"), Sheet::Role::Close); // an information sheet: no primary action
     s->exec();
 }
 
@@ -944,8 +1056,25 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
     QMainWindow::keyPressEvent(event);
 }
 
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    // In a narrow window the 244 px sidebar takes what the page needs (the
+    // caption wraps, the dock folds under the form): it shows its rail until
+    // the window is wide again, then what the user chose.
+    const bool narrow = width() < size::sidebarFoldBelow;
+    if (narrow == m_narrow)
+        return;
+    m_narrow = narrow;
+    setSidebarCompact(narrow || m_userCompact);
+}
+
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Closing the window during the end-of-queue countdown is an answer too:
+    // the action is cancelled and the window closes as it would otherwise.
+    if (m_countdown && !m_closeInProgress)
+        m_countdown->close(0);
     // A question is still open (answer it first), or this function is already
     // waiting for the backport engine below: a second close request starts nothing.
     if (m_closeInProgress || Sheet::openCount() > 0) {
@@ -1089,6 +1218,94 @@ void MainWindow::dropEvent(QDropEvent* event)
 
 // ---- screenshots ---------------------------------------------------------------------------
 
+namespace {
+
+// Screenshot mode: a path under this account's home folder is shown under a
+// specimen account, so no real user name ends up in pictures meant for the
+// README, release notes or CI ("C:\Users\you\…", as on Settings › Storage).
+QString specimenText(QString text)
+{
+    const QString home = QDir::cleanPath(QDir::homePath()); // "C:/Users/<name>"
+    const qsizetype cut = home.lastIndexOf(u'/');
+    if (cut <= 0 || cut + 1 >= home.size())
+        return text;
+    const QString specimen = home.left(cut + 1) + QStringLiteral("you");
+    text.replace(home, specimen, Qt::CaseInsensitive);
+    text.replace(QDir::toNativeSeparators(home), QDir::toNativeSeparators(specimen), Qt::CaseInsensitive);
+    return text;
+}
+
+// Every text in the window that names a path under the home folder, as specimenText() says.
+// No signal goes out: nothing reacts to these texts as to an edit.
+void showSpecimenPaths(QWidget* root)
+{
+    const QString home = QDir::cleanPath(QDir::homePath());
+    auto mentions = [&home](const QString& t) {
+        return t.contains(home, Qt::CaseInsensitive) || t.contains(QDir::toNativeSeparators(home), Qt::CaseInsensitive);
+    };
+    for (QLabel* l : root->findChildren<QLabel*>()) {
+        const QSignalBlocker block(l);
+        if (auto* e = qobject_cast<ui::ElideLabel*>(l)) {
+            if (mentions(e->fullText()))
+                e->setFullText(specimenText(e->fullText()));
+        } else if (mentions(l->text())) {
+            l->setText(specimenText(l->text()));
+        }
+    }
+    for (QLineEdit* e : root->findChildren<QLineEdit*>()) {
+        const QSignalBlocker block(e);
+        if (mentions(e->text())) {
+            e->setText(specimenText(e->text()));
+            e->setCursorPosition(0);
+        }
+        if (mentions(e->placeholderText()))
+            e->setPlaceholderText(specimenText(e->placeholderText()));
+    }
+}
+
+// A demo state with a problem below the fold (the space error under "Save
+// to"): scrolled into view, as the page does when the user meets it.
+void revealProblem(pages::Page* page)
+{
+    QWidget* content = page->scrollArea()->widget();
+    if (!content)
+        return;
+    for (auto* field : content->findChildren<ui::PathField*>())
+        if (field->isVisibleTo(content) && !field->error().isEmpty()) {
+            page->scrollArea()->ensureWidgetVisible(field, 0, 220); // with the message under it
+            return;
+        }
+}
+
+} // namespace
+
+// The shell as it is while a page's made-up job runs (screenshots): the
+// header chip, the sidebar count and the status bar say what the page shows.
+void MainWindow::showDemoShell(const QString& key, const QString& state)
+{
+    const bool running = (key == QLatin1String("build") && state == QLatin1String("building"))
+                      || (key == QLatin1String("queue") && (state == QLatin1String("job-running") || state == QLatin1String("cancel-dialog")));
+    if (running) {
+        QStringList lines;
+        const JobRecord rec = ui::JobMonitor::demoRecord(QStringLiteral("running"), &lines);
+        m_sidebar->setCount(QStringLiteral("queue"), 1);
+        m_header->setQueueChip(FW_TR("%1 running · %2 queued").arg(1).arg(0), Tone::Info, true);
+        m_status->setStatus(FW_TR("Running: %1%2").arg(rec.title, QStringLiteral(" · %1").arg(thinPercent(rec.progress.overallFraction))), Tone::Info);
+    }
+    // The Queue page's own count (its status context) of the job it shows.
+    if (key == QLatin1String("queue") && (running || state == QLatin1String("job-done")))
+        m_status->setContext(FW_TR("Queue: %1 running · %2 queued · %3 done · %4 failed").arg(running ? 1 : 0).arg(0).arg(running ? 0 : 1).arg(0));
+    // PS5 connect's example console: connected everywhere it is shown so.
+    if (key == QLatin1String("ps5")) {
+        auto* hero = m_pages.value(key)->findChild<pages::ConsoleHero*>();
+        if (hero && hero->state() == pages::ConsoleHero::State::Connected) {
+            const QString host = QStringLiteral("192.168.1.40");
+            m_header->setConsoleChip(FW_TR("PS5 connected · %1").arg(host), Tone::Ok, true);
+            m_status->setContext(FW_TR("Connected to %1 · FTP %2").arg(host).arg(2121));
+        }
+    }
+}
+
 int MainWindow::screenshotAllPages(const QString& dir)
 {
     qApp->setProperty("fwScreenshotMode", true); // pages: demo data only, no user files touched
@@ -1100,6 +1317,7 @@ int MainWindow::screenshotAllPages(const QString& dir)
     };
     auto snap = [&](const QString& name) {
         settle();
+        showSpecimenPaths(this);
         const QString file = QDir(dir).filePath(QStringLiteral("%1-%2.png").arg(index++, 2, 10, QLatin1Char('0')).arg(name));
         if (grab().save(file))
             ++written;
@@ -1115,18 +1333,34 @@ int MainWindow::screenshotAllPages(const QString& dir)
         snap(key);
         pages::Page* p = m_pages.value(key);
         for (const QString& state : p->demoStates()) {
+            const QString consoleChip = m_header->consoleChip()->text();
+            const Tone consoleTone = m_header->consoleChip()->tone();
             p->applyDemoState(state);
+            settle();
+            if (state.contains(QLatin1String("error")))
+                revealProblem(p);
+            showDemoShell(key, state);
             snap(key + u'-' + state);
             p->clearDemoState();
+            p->scrollArea()->verticalScrollBar()->setValue(0);
             m_focusRing->reset();
             settle();
+            // The shell as the real queue and console have it again.
+            m_header->setConsoleChip(consoleChip, consoleTone, true);
+            updateChips();
+            updateStatus();
         }
     }
     navigate(QStringLiteral("build"));
-    m_toasts->show(Tone::Ok, QStringLiteral("Image built and verified"), QStringLiteral("Demon's Souls · 31.6 GB · 12 min 40 s"),
+    // The toasts a finished and a failed job leave, in the words the live ones use.
+    const QString built = i18n::translate(m_ctx.jobFactory().displayName(QStringLiteral("image.exfat.build")));
+    const QString packaged = i18n::translate(m_ctx.jobFactory().displayName(QStringLiteral("fpkg.build")));
+    m_toasts->show(Tone::Ok, FW_TR("%1 done and verified").arg(built),
+                   QStringLiteral("%1 · %2").arg(QStringLiteral("Demon's Souls (PPSA01342)"), formatBytes(33930000000LL)),
                    {{FW_TR("Show in folder"), {}}, {FW_TR("Open queue"), {}}}, 0);
-    m_toasts->show(Tone::Err, QStringLiteral("Backport failed"), QStringLiteral("Returnal · eboot.bin not found in sce_module. Originals were not changed."),
-                   {{FW_TR("Retry"), {}}, {FW_TR("Open log")}}, 0);
+    m_toasts->show(Tone::Err, FW_TR("%1 failed").arg(packaged),
+                   QStringLiteral("%1 · %2").arg(QStringLiteral("Returnal (PPSA01476)"), FW_TR("Not enough space on %1.").arg(QStringLiteral("D:"))),
+                   {{FW_TR("Retry"), {}}, {FW_TR("Open log"), {}}}, 0);
     snap(QStringLiteral("toasts"));
     m_toasts->clear();
     setSidebarCompact(true);

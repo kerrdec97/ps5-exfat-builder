@@ -25,10 +25,41 @@ QString pickFamily(const QStringList& candidates, const QString& fallback)
     return fallback;
 }
 
+// Interface languages written in Chinese, Japanese or Korean characters: the
+// Windows UI font made for them right after the Latin one. Without it Qt
+// picks a fallback font glyph by glyph (mixed shapes, uneven spacing between
+// kana and Latin letters); Latin letters, digits and signs stay in Segoe UI.
+QStringList cjkFallbacks()
+{
+    static const QStringList families = [] {
+        const QString code = i18n::currentCode();
+        const QString language = code.section(u'-', 0, 0);
+        QStringList wanted;
+        if (language == u"ja")
+            wanted = {QStringLiteral("Yu Gothic UI"), QStringLiteral("Meiryo UI"), QStringLiteral("Meiryo")};
+        else if (language == u"zh" && (code.contains(QStringLiteral("TW")) || code.contains(QStringLiteral("HK")) || code.contains(QStringLiteral("Hant"))))
+            wanted = {QStringLiteral("Microsoft JhengHei UI"), QStringLiteral("Microsoft JhengHei")};
+        else if (language == u"zh")
+            wanted = {QStringLiteral("Microsoft YaHei UI"), QStringLiteral("Microsoft YaHei")};
+        else if (language == u"ko")
+            wanted = {QStringLiteral("Malgun Gothic")};
+        QStringList found;
+        const QStringList available = QFontDatabase::families();
+        for (const QString& f : wanted)
+            if (available.contains(f, Qt::CaseInsensitive))
+                found << f;
+        return found;
+    }();
+    return families;
+}
+
 QFont make(const QString& family, int px, QFont::Weight weight)
 {
     QFont f;
-    f.setFamily(family);
+    if (const QStringList cjk = cjkFallbacks(); !cjk.isEmpty())
+        f.setFamilies(QStringList{family} + cjk);
+    else
+        f.setFamily(family);
     f.setPixelSize(px);
     f.setWeight(weight);
     f.setStyleStrategy(QFont::PreferAntialias);
@@ -243,6 +274,18 @@ QToolButton:checked { background: {accent_lo}; }
 QToolButton[size="sm"] { min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; border-radius: 7px; }
 QToolButton[size="xs"] { min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; border-radius: 6px; }
 QToolButton::menu-indicator { image: none; width: 0; }
+/* An icon button among labelled buttons (pages::outlineIconButton): the
+   secondary button's plate, outline and states; its size stays its own. */
+QToolButton[outline="true"] { background: {bg_4}; border: 1px solid {border_3}; }
+QToolButton[outline="true"]:hover { background: {bg_5}; border-color: {border_4}; }
+QToolButton[outline="true"]:pressed { background: {bg_3}; }
+QToolButton[outline="true"]:disabled { background: {bg_2}; border-color: {border_2}; }
+/* The icon of a text field (search, clear) is a tool button QLineEdit places
+   itself, centred in the field: the 32 px box above would push it down. */
+QLineEdit QToolButton {
+    min-width: 0; min-height: 0; padding: 0; border: none; border-radius: 0; background: transparent;
+}
+QLineEdit QToolButton:hover, QLineEdit QToolButton:pressed { background: transparent; }
 
 /* ---- inputs: wells (field_bg, darker than the card) -------------------------- */
 QLineEdit, QAbstractSpinBox, QPlainTextEdit, QTextEdit {
@@ -265,6 +308,9 @@ QComboBox {
     min-height: 32px; max-height: 32px; padding: 0 30px 0 12px; border-radius: 8px;
     background: {field_bg}; border: 1px solid {border_3}; color: {field_fg};
 }
+/* Right to left the chevron's room is at the start: the padding is mirrored
+   (FwStyle marks such a dropdown fwRtl; the style sheet itself has no direction). */
+QComboBox[fwRtl="true"] { padding: 0 12px 0 30px; }
 QComboBox:hover { border-color: {border_control}; }
 QComboBox:focus { border-color: {accent}; }
 QComboBox:disabled { background: {bg_2}; border-color: {border_2}; color: {fg_5}; }
@@ -305,6 +351,9 @@ QScrollBar::handle:vertical:hover, QScrollBar::handle:vertical:pressed { backgro
 QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
 QScrollBar::handle:horizontal { background: {bg_5}; border-radius: 4px; margin: 0 2px 2px 2px; min-width: 32px; }
 QScrollBar::handle:horizontal:hover, QScrollBar::handle:horizontal:pressed { background: {border_control}; }
+/* A bar that keeps its room with nothing to scroll (ui::reserveScrollBarSpace): no handle. */
+QScrollBar[fwIdle="true"]::handle:vertical, QScrollBar[fwIdle="true"]::handle:vertical:hover,
+QScrollBar[fwIdle="true"]::handle:vertical:pressed { background: transparent; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 
@@ -324,10 +373,15 @@ QTableView, QTreeView, QListView {
 QTableView::item, QTreeView::item, QListView::item { border: none; border-bottom: 1px solid {border_1}; padding: 0 10px; }
 QTableView::item:hover, QTreeView::item:hover, QListView::item:hover { background: {bg_3}; }
 QListView::item:selected { background: {accent_lo}; color: {fg_0}; }
-/* The row of a table or tree is filled by FwStyle (accent_lo and the accent
-   bar at its left edge); the cells stay clear over it. */
-QTableView::item:selected, QTreeView::item:selected { background: transparent; color: {fg_0}; }
-QTreeView::branch { background: transparent; }
+/* The row of a table is filled by FwStyle (accent_lo and the accent bar at its
+   left edge); the cells stay clear over it. A tree asks FwStyle for its
+   branch area only, so its selected cells take the same fill themselves: the
+   whole row is filled, as in a table. */
+QTableView::item:selected { background: transparent; color: {fg_0}; }
+QTreeView::item:selected { background: {accent_lo}; color: {fg_0}; }
+/* No QTreeView::branch rule: any rule there makes the style sheet draw the
+   branch area itself, and FwStyle's folder chevron (PE_IndicatorBranch) would
+   never be painted. The row's hover and selection reach it through the row. */
 
 /* ---- tabs (QTabBar is used only for in-page navigation): pill tabs ------------ */
 QTabBar { background: transparent; }

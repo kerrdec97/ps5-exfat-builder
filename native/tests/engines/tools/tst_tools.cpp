@@ -16,6 +16,8 @@
 #include <QTest>
 #include <QUrl>
 
+#include <limits>
+
 using namespace fw;
 using namespace fw::tools;
 
@@ -128,6 +130,38 @@ private slots:
         QCOMPARE(readFile(g + QStringLiteral("/Content/Paks/Game_lang_ja.pak")), jaPak);
         QCOMPARE(readFile(g + QStringLiteral("/audio/ja/vo.bin")), QByteArray(700, 'J'));
         QVERIFY(!QFileInfo::exists(g + QStringLiteral("/farewell-language-strip.json")));
+    }
+
+    // A restore writes each file under a temporary name: a file of the game
+    // that has that name ("<file>.part") stays as it is. A drive without room
+    // for what is missing is refused before anything is written.
+    void restoreNeverTakesAGameFileForItsTemporaryFile()
+    {
+        const QString g = makeGame(QStringLiteral("GamePart"));
+        StripPlan plan;
+        plan.gameRoot = g;
+        plan.remove = {QStringLiteral("Content/Paks/Game_lang_ja.pak")};
+        plan.backupFolder = m_root.filePath(QStringLiteral("backups-part"));
+        QDir().mkpath(plan.backupFolder);
+        auto r = stripLanguages(plan, CancellationToken(), nullptr);
+        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
+        const QString pak = g + QStringLiteral("/Content/Paks/Game_lang_ja.pak");
+        QVERIFY(!QFileInfo::exists(pak));
+        QVERIFY(fwtest::writeTextFile(pak + QStringLiteral(".part"), "a file of the game"));
+
+        auto full = restoreLanguageBackup(r->backupZip, g, CancellationToken(), nullptr, std::numeric_limits<qint64>::max() / 2);
+        QVERIFY(!full.ok());
+        QCOMPARE(errorOf(full).code, ErrorCode::InsufficientSpace);
+        QVERIFY(!QFileInfo::exists(pak));
+
+        auto back = restoreLanguageBackup(r->backupZip, g, CancellationToken(), nullptr);
+        QVERIFY2(back.ok(), back.ok() ? "" : qPrintable(back.error().toLogString()));
+        QCOMPARE(back->restored, 1);
+        QCOMPARE(readFile(pak), QByteArray(4000, 'p'));
+        QCOMPARE(readFile(pak + QStringLiteral(".part")), QByteArray("a file of the game"));
+        QCOMPARE(QDir(g + QStringLiteral("/Content/Paks")).entryList(QDir::Files, QDir::Name),
+                 (QStringList{QStringLiteral("Game.pak"), QStringLiteral("Game_lang_ja.pak"), QStringLiteral("Game_lang_ja.pak.part"),
+                              QStringLiteral("Game_lang_ja.sig")}));
     }
 
     void stripRefusesUnsafePlans()
@@ -347,6 +381,61 @@ private slots:
         QVERIFY(!own->otherGame);
         QCOMPARE(own->restored, 2);
         QVERIFY(own->skippedExisting.isEmpty());
+    }
+
+    // A size in the ZIP's headers that no file can have (a ZIP64 size above
+    // what a signed 64-bit number holds) does not turn the free-space check
+    // off: the restore is refused before the first file.
+    void restoreRefusesASizeNoFileCanHave()
+    {
+        const QString g = makeGame(QStringLiteral("GameZ64"));
+        const QString path = m_root.filePath(QStringLiteral("crafted/huge.zip"));
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        {
+            zip::Writer w;
+            QVERIFY(w.open(path).ok());
+            QVERIFY(w.addData(QStringLiteral("audio/xx/a.bin"), "payload", zip::Method::Store).ok());
+            QVERIFY(w.addData(QStringLiteral("farewell-language-strip.json"), "{\"game\":\"GameZ64\",\"removed\":[\"audio/xx\"]}").ok());
+            QVERIFY(w.finish().ok());
+        }
+        // The central directory entry of a.bin gets the ZIP64 size 2^64 - 1.
+        QByteArray zip = readFile(path);
+        const auto le16 = [&](qsizetype at) { return quint16(quint8(zip[at]) | quint8(zip[at + 1]) << 8); };
+        const auto le32 = [&](qsizetype at) { return quint32(le16(at)) | quint32(le16(at + 2)) << 16; };
+        const auto put16 = [&](qsizetype at, quint16 v) { zip[at] = char(v & 0xFF); zip[at + 1] = char(v >> 8); };
+        const auto put32 = [&](qsizetype at, quint32 v) { put16(at, quint16(v & 0xFFFF)); put16(at + 2, quint16(v >> 16)); };
+        const qsizetype eocd = zip.lastIndexOf(QByteArray("PK\x05\x06", 4));
+        QVERIFY(eocd > 0);
+        qsizetype at = qsizetype(le32(eocd + 16));
+        bool patched = false;
+        while (at < eocd && zip.mid(at, 4) == QByteArray("PK\x01\x02", 4)) {
+            const quint16 nameLen = le16(at + 28), extraLen = le16(at + 30), commentLen = le16(at + 32);
+            if (zip.mid(at + 46, nameLen) == "audio/xx/a.bin") {
+                put32(at + 24, 0xFFFFFFFFu);
+                put16(at + 30, quint16(extraLen + 12));
+                zip.insert(at + 46 + nameLen + extraLen, QByteArray("\x01\x00\x08\x00", 4) + QByteArray(8, '\xFF'));
+                patched = true;
+                break;
+            }
+            at += 46 + nameLen + extraLen + commentLen;
+        }
+        QVERIFY(patched);
+        const qsizetype newEocd = eocd + 12;
+        put32(newEocd + 12, le32(newEocd + 12) + 12);
+        {
+            QFile f(path);
+            QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(f.write(zip), qint64(zip.size()));
+        }
+        zip::Reader check;
+        QVERIFY(check.open(path).ok());
+        const zip::Entry* huge = check.find(QStringLiteral("audio/xx/a.bin"));
+        QVERIFY(huge);
+        QCOMPARE(huge->uncompressedSize, std::numeric_limits<quint64>::max());
+
+        auto r = restoreLanguageBackup(path, g, CancellationToken(), nullptr, 0);
+        QCOMPARE(errorOf(r).code, ErrorCode::InsufficientSpace);
+        QVERIFY(!QFileInfo::exists(g + QStringLiteral("/audio/xx")));
     }
 
     // Folder names that only look like language codes are not offered for removal.

@@ -18,8 +18,10 @@
 #include <archive_entry.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <deque>
 #include <limits>
 #include <memory>
 
@@ -29,6 +31,17 @@ namespace {
 
 constexpr qint64 kReadBlock = 256 * 1024;
 constexpr qsizetype kMaxEntries = 2'000'000;
+// The longest path Windows has, in UTF-16 units: no longer name can be
+// unpacked, and every check of a name costs at least its length.
+constexpr qsizetype kMaxNameLength = 32767;
+// All names of a list together (UTF-16 units), and the folders and files they
+// make: several times what the largest game has, and what a list costs in
+// memory stays in the hundreds of MiB. A 7z's list is bounded by its header
+// already; RAR and ZIP lists are not. Tests lower both.
+constexpr qint64 kMaxListedChars = 64ll * 1024 * 1024;
+constexpr qsizetype kMaxNames = 2 * kMaxEntries;
+std::atomic<qint64> g_maxListedChars{kMaxListedChars};
+std::atomic<qsizetype> g_maxNames{kMaxNames};
 // The list of files of a 7z archive, packed and unpacked. Sixty-four MiB
 // hold several hundred thousand long names; libarchive needs about twenty
 // times the header's size in memory while it reads it.
@@ -83,6 +96,13 @@ Error unreadableName(const QString& archive, const QString& detail)
                  QStringLiteral("%1 holds a file name this computer cannot read. %2")
                      .arg(nameOf(archive), QLatin1String(kAdvice)),
                  detail);
+}
+
+Error nameTooLong(const QString& archive, const QString& name)
+{
+    return Error(ErrorCode::Unsupported,
+                 QStringLiteral("%1 holds a path of more than 32,767 characters, longer than Windows allows.").arg(nameOf(archive)),
+                 name.left(200));
 }
 
 // "./a\b/" -> "a/b". Archives written on Windows may use '\'; the ZIP reader
@@ -166,17 +186,15 @@ Status mustBeFirstPart(const QString& path)
     if (!p.valid() || p.number() <= 1)
         return success();
     const QString first = p.with(1);
+    // One arg() call: a downloaded name such as "Game%2B.part3.rar" holds
+    // what a second call would take for a placeholder.
     if (QFileInfo::exists(fi.dir().filePath(first)))
         return Error(ErrorCode::InvalidArgument,
                      QStringLiteral("%1 is part %2 of a multi-part archive. Choose the first part, %3.")
-                         .arg(fi.fileName())
-                         .arg(p.number())
-                         .arg(first));
+                         .arg(fi.fileName(), QString::number(p.number()), first));
     return Error(ErrorCode::InvalidArgument,
                  QStringLiteral("%1 is part %2 of a multi-part archive and the first part, %3, is not in its folder.")
-                     .arg(fi.fileName())
-                     .arg(p.number())
-                     .arg(first));
+                     .arg(fi.fileName(), QString::number(p.number()), first));
 }
 
 Error missingPart(const QString& path)
@@ -432,6 +450,7 @@ Result<ArchiveListing> listRar5(const QString& path, const CancellationToken& to
     out.path = path;
     out.kind = ArchiveKind::Rar5;
     QString volume = path;
+    qint64 listedChars = 0;
     for (int index = 0;; ++index) {
         QFile f(toLongPath(volume));
         if (!f.open(QIODevice::ReadOnly)) {
@@ -521,6 +540,8 @@ Result<ArchiveListing> listRar5(const QString& path, const CancellationToken& to
                 if (!decodeUtf8(reinterpret_cast<const char*>(c.p), qsizetype(nameLen), raw))
                     return unreadableName(path, QStringLiteral("a RAR 5 name that is not UTF-8"));
                 e.name = normalisedName(raw);
+                if (e.name.size() > kMaxNameLength)
+                    return nameTooLong(path, e.name);
                 const bool isDir = (fileFlags & 0x0001) != 0;
                 e.type = isDir ? ArchiveEntry::Type::Directory : ArchiveEntry::Type::File;
                 // The extra area is the tail of the header: records of [size][type][data].
@@ -556,6 +577,9 @@ Result<ArchiveListing> listRar5(const QString& path, const CancellationToken& to
                 if (!(flags & 0x0008)) {
                     if (qsizetype(out.entries.size()) >= kMaxEntries)
                         return tooManyEntries(path);
+                    listedChars += e.name.size();
+                    if (listedChars > g_maxListedChars.load())
+                        return listTooLarge(path, QStringLiteral("names of more than %1 characters").arg(listedChars));
                     out.entries.push_back(std::move(e));
                 }
             }
@@ -814,6 +838,7 @@ Status listWithLibarchive(ArchiveListing& out, const CancellationToken& token)
     LaReader r;
     FW_TRY(r.open(out, token));
     bool first = true;
+    qint64 listedChars = 0;
     for (;;) {
         struct archive_entry* e = nullptr;
         const int rc = archive_read_next_header(r.handle(), &e);
@@ -838,12 +863,17 @@ Status listWithLibarchive(ArchiveListing& out, const CancellationToken& token)
         ArchiveEntry entry;
         if (!r.entryName(e, entry.name) || (warning && QByteArray(warning).contains("cannot be converted")))
             return unreadableName(out.path, warning ? QString::fromUtf8(warning) : QString());
+        if (entry.name.size() > kMaxNameLength)
+            return nameTooLong(out.path, entry.name);
         entry.type = LaReader::entryType(e);
         entry.encrypted = archive_entry_is_data_encrypted(e) > 0 || archive_entry_is_metadata_encrypted(e) > 0;
         if (entry.type == ArchiveEntry::Type::File)
             entry.size = std::max<qint64>(0, archive_entry_size(e));
         if (qsizetype(out.entries.size()) >= kMaxEntries)
             return tooManyEntries(out.path);
+        listedChars += entry.name.size();
+        if (listedChars > g_maxListedChars.load())
+            return listTooLarge(out.path, QStringLiteral("names of more than %1 characters").arg(listedChars));
         out.entries.push_back(std::move(entry));
     }
     return success();
@@ -1004,30 +1034,76 @@ Status checkExtractable(const ArchiveListing& listing, const QString& onlyUnder)
                      QStringLiteral("%1 was made with a %2 dictionary; this app reads RAR archives with dictionaries of up "
                                     "to 64 MiB. %3")
                          .arg(archive, formatBytes(listing.largestDictionary), QLatin1String(kAdvice)));
-    struct Seen {
-        QString spelling;
-        bool directory = false;
+    // What the destination will hold, as a tree: one node per folder and
+    // file, found under its parent by the key the destination compares
+    // names with. Each name is walked once, so a path costs its own length
+    // however deep it goes (a crafted list of deep paths must not cost the
+    // square of their depth).
+    struct Node {
+        int parent = 0;
+        QStringView spelling; // into `spelled`
+        bool directory = true;
     };
-    QHash<QString, Seen> seen;
+    std::deque<QString> spelled, folded; // the names the nodes and keys point into; never moved
+    std::vector<Node> nodes(1);          // 0: the destination
+    QHash<QPair<int, QStringView>, int> children;
+    // The game's folder in front of the names in messages.
+    const QString rootRel = onlyUnder.isEmpty() ? QString() : zip::Reader::extractedPath(onlyUnder);
+    const QString shownRoot = rootRel.isEmpty() ? QString() : rootRel + u'/';
+    const auto pathOf = [&](int node) {
+        QStringList parts;
+        for (; node > 0; node = nodes[size_t(node)].parent)
+            parts << nodes[size_t(node)].spelling.toString();
+        std::reverse(parts.begin(), parts.end());
+        return shownRoot + parts.join(u'/');
+    };
+    // A ZIP's list has not been held to a total yet: bounded here, with the
+    // tree, for every format.
+    qint64 claimedChars = 0;
+    const qint64 maxChars = g_maxListedChars.load();
+    const qsizetype maxNames = g_maxNames.load();
     // Two names that the destination's file system takes for one: reported,
     // never merged or overwritten.
-    const auto claim = [&](const QString& path, bool directory) -> Status {
-        const QString key = hostNameKey(path).toLower();
-        const auto it = seen.constFind(key);
-        if (it == seen.constEnd()) {
-            seen.insert(key, Seen{path, directory});
-            return success();
+    const auto claim = [&](const QString& rel, bool directory) -> Status {
+        claimedChars += rel.size();
+        if (claimedChars > maxChars)
+            return listTooLarge(listing.path, QStringLiteral("names of more than %1 characters").arg(claimedChars));
+        const QString& name = spelled.emplace_back(rel);
+        const QString& key = folded.emplace_back(hostNameKey(rel).toLower());
+        const QList<QStringView> parts = QStringView(name).split(u'/');
+        const QList<QStringView> keys = QStringView(key).split(u'/');
+        if (parts.size() != keys.size()) // no letter's other case is a '/'
+            return unreadableName(listing.path, rel);
+        int at = 0;
+        for (qsizetype i = 0; i < parts.size(); ++i) {
+            const bool dir = i + 1 < parts.size() || directory;
+            const QPair<int, QStringView> where(at, keys.at(i));
+            const auto found = children.constFind(where);
+            if (found == children.constEnd()) {
+                if (qsizetype(nodes.size()) > maxNames)
+                    return listTooLarge(listing.path, QStringLiteral("more than %1 files and folders").arg(maxNames));
+                nodes.push_back(Node{at, parts.at(i), dir});
+                at = int(nodes.size()) - 1;
+                children.insert(where, at);
+                continue;
+            }
+            const Node& seen = nodes[size_t(*found)];
+            // The path so far, for a message only: made for every folder
+            // already seen, it would cost the square of the depth again.
+            const auto here = [&] {
+                return shownRoot + QStringView(name).first(parts.at(i).constData() - name.constData() + parts.at(i).size());
+            };
+            if (seen.spelling != parts.at(i))
+                return Error(ErrorCode::Unsupported,
+                             QStringLiteral("%1 holds two names that differ only in upper and lower case (%2 and %3). "
+                                            "Windows cannot store both.")
+                                 .arg(archive, pathOf(*found), here()));
+            if (!seen.directory || !dir)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 holds %2 twice.").arg(archive, here()));
+            at = *found;
         }
-        if (it->spelling != path)
-            return Error(ErrorCode::Unsupported,
-                         QStringLiteral("%1 holds two names that differ only in upper and lower case (%2 and %3). "
-                                        "Windows cannot store both.")
-                             .arg(archive, it->spelling, path));
-        if (it->directory != directory || !directory)
-            return Error(ErrorCode::CorruptData, QStringLiteral("%1 holds %2 twice.").arg(archive, path));
         return success();
     };
-    QString lastParent;
     for (const ArchiveEntry& e : listing.entries) {
         if (!isUnder(e.name, onlyUnder))
             continue;
@@ -1046,20 +1122,35 @@ Status checkExtractable(const ArchiveListing& listing, const QString& onlyUnder)
         }
         if (e.type == ArchiveEntry::Type::Link)
             continue; // never created, so it cannot collide
-        const qsizetype slash = rel.lastIndexOf(u'/');
-        const QString parent = slash < 0 ? QString() : rel.left(slash);
-        if (parent != lastParent) {
-            // "a/b/c": a, a/b, a/b/c
-            for (qsizetype i = parent.indexOf(u'/'); !parent.isEmpty(); i = parent.indexOf(u'/', i + 1)) {
-                FW_TRY(claim(i < 0 ? parent : parent.left(i), true));
-                if (i < 0)
-                    break;
-            }
-            lastParent = parent;
-        }
-        FW_TRY(claim(rel, e.type == ArchiveEntry::Type::Directory));
+        // Inside the game's folder. That folder's own name may come in more
+        // than one spelling ("Game/", "GAME/"): Windows makes one folder of
+        // them and the name is not part of what is built.
+        const QString inside = onlyUnder.isEmpty() ? rel : zip::Reader::extractedPath(e.name.mid(onlyUnder.size()));
+        if (inside.isEmpty())
+            continue; // the game's folder itself
+        FW_TRY(claim(inside, e.type == ArchiveEntry::Type::Directory));
+    }
+    // A file is written as "<name>.fw.part" until it is whole. A name of the
+    // archive that is just that would be taken for a leftover and removed,
+    // and the unpack would end complete with one file missing.
+    for (size_t i = 1; i < nodes.size(); ++i) {
+        if (nodes[i].directory)
+            continue;
+        const QString partKey = hostNameKey(PartFile::partPathFor(nodes[i].spelling.toString())).toLower();
+        const auto other = children.constFind(QPair<int, QStringView>(nodes[i].parent, partKey));
+        if (other != children.constEnd())
+            return Error(ErrorCode::Unsupported,
+                         QStringLiteral("%1 holds both %2 and %3, which this app cannot unpack together: it writes each file "
+                                        "as <name>.fw.part until the file is complete. %4")
+                             .arg(archive, pathOf(int(i)), pathOf(*other), QLatin1String(kAdvice)));
     }
     return success();
+}
+
+void setListLimitsForTesting(qint64 nameCharacters, qsizetype names)
+{
+    g_maxListedChars = nameCharacters < 0 ? kMaxListedChars : nameCharacters;
+    g_maxNames = names < 0 ? kMaxNames : names;
 }
 
 Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QString& destination,
@@ -1129,9 +1220,10 @@ Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QStrin
             return mismatch(name);
         listed->seen = true;
         QDir().mkpath(QFileInfo(target).absolutePath());
-        PartFile part(target);
+        const QString staged = zip::stagingPath(target); // a long name may have no room for the part file's suffix
+        PartFile part(staged);
         QFile out(toLongPath(part.partPath()));
-        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        if (!out.open(QIODevice::WriteOnly | QIODevice::NewOnly))
             return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(rel), out.errorString());
         qint64 produced = 0;
         for (;;) {
@@ -1169,7 +1261,11 @@ Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QStrin
         if (archive_entry_mtime_is_set(e))
             modified = QDateTime::fromSecsSinceEpoch(qint64(archive_entry_mtime(e)));
         FW_TRY(finishWrittenFile(out, rel, modified));
-        FW_TRY(part.commit(true));
+        // Never over a file: every name is unique by now, so one that is there
+        // already is not this pass's (or is the same file under its short
+        // 8.3 name, "GAMEFO~1").
+        FW_TRY(part.commit(false));
+        FW_TRY(zip::moveIntoPlace(staged, target, false));
         ++result.files;
         result.bytes += produced;
         if (progress)

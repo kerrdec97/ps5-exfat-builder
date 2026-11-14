@@ -4,12 +4,14 @@
 // (exclusions never cause false verification failures).
 
 #include "engines/general/Module.h"
+#include "engines/pfs/AmprJobs.h"
 #include "engines/pfs/Module.h"
 #include "engines/pfs/PfsJobs.h"
 
 #include "core/FileUtil.h"
 #include "engines/pfs/PfsTestUtil.h"
 #include "jobs/JobQueue.h"
+#include "support/ProgressAudit.h"
 #include "support/SparseFile.h"
 #include "support/TestSupport.h"
 
@@ -19,6 +21,9 @@
 #include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QTest>
+
+#include <atomic>
+#include <cmath>
 
 using namespace fw;
 using namespace fw::pfs;
@@ -42,20 +47,26 @@ struct RunResult {
     QStringList phasesSeen;
 };
 
-// Runs a job synchronously on this thread, like the queue's worker would.
+// Runs a job synchronously on this thread, like the queue's worker would
+// (the phases and their shares declared for the job's settings); `audit`
+// watches the progress.
 RunResult runJob(Job& job, const SettingsValues& settings, const CancellationToken& token = {},
-                 std::function<void(const ProgressSnapshot&)> onProgress = {})
+                 std::function<void(const ProgressSnapshot&)> onProgress = {}, fwtest::ProgressAudit* audit = nullptr)
 {
     RunResult rr;
     ProgressReporter reporter(
         [&](const ProgressSnapshot& s) {
             if (rr.phasesSeen.isEmpty() || rr.phasesSeen.back() != s.phase)
                 rr.phasesSeen << s.phase;
+            if (audit)
+                audit->report(s);
             if (onProgress)
                 onProgress(s);
         },
         0);
-    reporter.setPhases(job.phases());
+    if (audit)
+        audit->watch(&reporter);
+    reporter.setPhases(job.phases(), job.phaseWeights(settings));
     QTemporaryDir temp;
     if (!temp.isValid()) {
         rr.outcome = Error(ErrorCode::Internal, QStringLiteral("the test could not make a temporary folder for the job"));
@@ -69,20 +80,25 @@ RunResult runJob(Job& job, const SettingsValues& settings, const CancellationTok
     ctx.settings = settings;
     ctx.tempDir = temp.path();
     rr.outcome = job.run(ctx);
+    if (audit) {
+        reporter.finish();
+        audit->finish(reporter.snapshot(), rr.outcome.ok() && rr.outcome->verification != Verification::Failed);
+        audit->watch(nullptr);
+    }
     return rr;
 }
 
 // The same for a job fresh from the factory. A job the factory refused is
 // not run: the refusal is the outcome, for the caller to assert on.
 RunResult runJob(const Result<std::unique_ptr<Job>>& job, const SettingsValues& settings, const CancellationToken& token = {},
-                 std::function<void(const ProgressSnapshot&)> onProgress = {})
+                 std::function<void(const ProgressSnapshot&)> onProgress = {}, fwtest::ProgressAudit* audit = nullptr)
 {
     if (!job.ok()) {
         RunResult rr;
         rr.outcome = Error(ErrorCode::Internal, QStringLiteral("the factory refused the job: ") + job.error().toLogString());
         return rr;
     }
-    return runJob(**job, settings, token, std::move(onProgress));
+    return runJob(**job, settings, token, std::move(onProgress), audit);
 }
 
 QJsonObject params(std::initializer_list<std::pair<QString, QJsonValue>> kv)
@@ -257,7 +273,7 @@ private slots:
         QVERIFY2(o.verificationDetail.contains(QStringLiteral("byte for byte")), qPrintable(o.verificationDetail));
         QCOMPARE(o.outputs, QStringList{QDir::cleanPath(out)});
         QVERIFY(QFileInfo(out).isFile());
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         QCOMPARE(rr.phasesSeen, (QStringList{QStringLiteral("Scanning"), QStringLiteral("Compressing and writing"),
                                              QStringLiteral("Verifying")}));
         QVERIFY(QFileInfo::exists(src)); // never deleted by default
@@ -339,25 +355,29 @@ private slots:
         auto rr = runJob(job, store.snapshot());
         QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(rr.outcome.error().toLogString()));
         QVERIFY(QFileInfo(out).size() > 1000);
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
     }
 
     void cancellationLeavesNoOutput_data()
     {
         QTest::addColumn<int>("phase");
         QTest::addColumn<bool>("replacing");
-        QTest::newRow("while writing") << 1 << false;
-        QTest::newRow("while verifying") << 2 << false;
-        QTest::newRow("while writing, replacing an image") << 1 << true;
-        QTest::newRow("while verifying, replacing an image") << 2 << true;
+        QTest::addColumn<bool>("closing");
+        QTest::newRow("while writing") << 1 << false << false;
+        QTest::newRow("while writing, replacing an image") << 1 << true << false;
+        // Closing the app is no Cancel the user chose: nothing is kept unverified.
+        QTest::newRow("app closed while verifying") << 2 << false << true;
+        QTest::newRow("app closed while verifying, replacing an image") << 2 << true << true;
     }
 
-    // A cancelled build leaves nothing of its own, and an image it was to
-    // replace is still there, byte for byte.
+    // A build cancelled before its image is finished leaves nothing of its
+    // own, and an image it was to replace is still there, byte for byte. (A
+    // cancel during verification: cancelDuringVerificationSavesTheImage.)
     void cancellationLeavesNoOutput()
     {
         QFETCH(int, phase);
         QFETCH(bool, replacing);
+        QFETCH(bool, closing);
         Env env;
         SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("c/settings.json")));
         QTemporaryDir tmp;
@@ -371,12 +391,17 @@ private slots:
                                                           {QStringLiteral("replaceExisting"), replacing}}));
         CancellationSource cs;
         auto rr = runJob(job, store.snapshot(), cs.token(), [&](const ProgressSnapshot& s) {
-            if (s.phaseIndex == phase && s.done > 1024 * 1024)
-                cs.cancel();
+            if (s.phaseIndex == phase && s.done > 1024 * 1024) {
+                if (closing)
+                    cs.shutdown();
+                else
+                    cs.cancel();
+            }
         });
+        QVERIFY(cs.isCancelled());
         QVERIFY(!rr.outcome.ok());
         QVERIFY2(rr.outcome.error().isCancelled(), qPrintable(rr.outcome.error().toLogString()));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         if (replacing) {
             QCOMPARE(pfstest::readAll(out), previous);
             QCOMPARE(QDir(tmp.path()).entryList(QDir::Files), QStringList{QStringLiteral("game.ffpfsc")});
@@ -384,6 +409,223 @@ private slots:
             QVERIFY(!QFileInfo::exists(out));
             QCOMPARE(QDir(tmp.path()).entryList(QDir::Files), QStringList());
         }
+    }
+
+    void cancelDuringVerificationSavesTheImage_data()
+    {
+        QTest::addColumn<bool>("replacing");
+        QTest::newRow("new image") << false;
+        QTest::newRow("replacing an image") << true;
+    }
+
+    // GitHub #97: Cancel while the finished image is verified saves it as with
+    // verification turned off. It replaces an older image only now, the job
+    // does not fail, it says the image is not verified, and a source image is
+    // never deleted for it.
+    void cancelDuringVerificationSavesTheImage()
+    {
+        QFETCH(bool, replacing);
+        Env env;
+        SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("vc/settings.json")));
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = makeGame(tmp, 16 * 1024 * 1024);
+        const QString out = tmp.filePath(QStringLiteral("game.ffpfsc"));
+        if (replacing)
+            QVERIFY(pfstest::writeFile(out, QByteArray("the image that was here before"), -1));
+        auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out},
+                                                          {QStringLiteral("replaceExisting"), replacing}}));
+        CancellationSource cs;
+        std::atomic<bool> cancelled{false};
+        auto rr = runJob(job, store.snapshot(), cs.token(), [&](const ProgressSnapshot& s) {
+            if (s.phaseIndex == 2 && s.done > 1024 * 1024 && !cancelled.exchange(true))
+                cs.cancel();
+        });
+        QVERIFY(cancelled);
+        QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(rr.outcome.error().toLogString()));
+        QCOMPARE(rr.outcome->verification, Verification::Skipped);
+        QVERIFY2(rr.outcome->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(rr.outcome->verificationDetail));
+        QCOMPARE(rr.outcome->outputs, QStringList{out});
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+        QCOMPARE(QDir(tmp.path()).entryList(QDir::Files), QStringList{QStringLiteral("game.ffpfsc")});
+        auto check = runJob(env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), out}, {QStringLiteral("source"), src}})),
+                            store.snapshot());
+        QVERIFY2(check.outcome.ok() && check.outcome->verification == Verification::Passed,
+                 check.outcome.ok() ? qPrintable(check.outcome->verificationDetail) : qPrintable(check.outcome.error().toLogString()));
+
+        // An image converted from another one: the source image is kept.
+        const QString img = makeImage(tmp);
+        const QString out2 = tmp.filePath(QStringLiteral("converted.ffpfsc"));
+        auto norm = store.normalizeOverrides({{keys::kDeleteSourceAfterConvert, true}});
+        QVERIFY(norm.ok());
+        CancellationSource cs2;
+        auto rr2 = runJob(env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), img}, {QStringLiteral("output"), out2}})),
+                          store.snapshot(*norm), cs2.token(), [&](const ProgressSnapshot& s) {
+                              if (s.phaseIndex == 2)
+                                  cs2.cancel();
+                          });
+        QVERIFY2(rr2.outcome.ok(), rr2.outcome.ok() ? "" : qPrintable(rr2.outcome.error().toLogString()));
+        QCOMPARE(rr2.outcome->verification, Verification::Skipped);
+        QVERIFY(QFileInfo::exists(out2));
+        QVERIFY(QFileInfo::exists(img));
+        QVERIFY(!rr2.outcome->details.contains(QStringLiteral("sourceDeleted")));
+    }
+
+    // A difference found before the cancel still fails the build: the new
+    // image is not saved (not even unverified) and the previous one stays.
+    void aMismatchFoundBeforeTheCancelFailsTheBuild()
+    {
+        Env env;
+        SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("vbad/settings.json")));
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = makeGame(tmp, 16 * 1024 * 1024);
+        const QString out = tmp.filePath(QStringLiteral("game.ffpfsc"));
+        const QByteArray previous("the image that was here before");
+        QVERIFY(pfstest::writeFile(out, previous, -1));
+        auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out},
+                                                          {QStringLiteral("replaceExisting"), true}}));
+        CancellationSource cs;
+        std::atomic<bool> changed{false}, cancelled{false};
+        auto rr = runJob(job, store.snapshot(), cs.token(), [&](const ProgressSnapshot& s) {
+            if (s.phaseIndex != 2)
+                return;
+            // Files are compared in name order: Audio/BGM.at9 changes before it
+            // is compared, the cancel comes while data/big.bin is.
+            if (!changed.exchange(true)) {
+                QFile f(src + QStringLiteral("/Audio/BGM.at9"));
+                char c = 0;
+                if (f.open(QIODevice::ReadWrite) && f.seek(1000) && f.getChar(&c) && f.seek(1000))
+                    f.putChar(char(c ^ 0x55));
+            } else if (s.done > 1024 * 1024 && !cancelled.exchange(true)) {
+                cs.cancel();
+            }
+        });
+        QVERIFY(cancelled);
+        QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(rr.outcome.error().toLogString()));
+        QCOMPARE(rr.outcome->verification, Verification::Failed);
+        QVERIFY2(rr.outcome->verificationDetail.contains(QStringLiteral("Audio/BGM.at9")), qPrintable(rr.outcome->verificationDetail));
+        QVERIFY2(rr.outcome->verificationDetail.contains(QStringLiteral("cancelled")), qPrintable(rr.outcome->verificationDetail));
+        QVERIFY(!rr.outcome->details.contains(QStringLiteral("verificationCancelled")));
+        QVERIFY(rr.outcome->outputs.isEmpty());
+        QCOMPARE(pfstest::readAll(out), previous);
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+    }
+
+    // The image it replaces is open in another program: the finished image is
+    // kept next to it instead of being deleted with its .part.
+    void finishedImageIsKeptWhenTheOldOneCannotBeReplaced()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("An open file can be replaced on this platform.");
+#endif
+        Env env;
+        SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("locked/settings.json")));
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = makeGame(tmp, 2 * 1024 * 1024);
+        const QString out = tmp.filePath(QStringLiteral("locked.ffpfsc"));
+        const QByteArray previous("the image that was here before");
+        QVERIFY(pfstest::writeFile(out, previous, -1));
+        QFile holder(out);
+        QVERIFY(holder.open(QIODevice::ReadOnly)); // opened without delete sharing
+        auto rr = runJob(env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src}, {QStringLiteral("output"), out},
+                                                                {QStringLiteral("replaceExisting"), true}})),
+                         store.snapshot());
+        holder.close();
+        QVERIFY(!rr.outcome.ok());
+        const QString kept = tmp.filePath(QStringLiteral("locked (new).ffpfsc"));
+        QVERIFY2(rr.outcome.error().message.contains(QStringLiteral("built and verified")), qPrintable(rr.outcome.error().toLogString()));
+        QVERIFY2(rr.outcome.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(rr.outcome.error().toLogString()));
+        QCOMPARE(pfstest::readAll(out), previous);
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
+        auto check = runJob(env.jobs.create(kinds::kVerify, params({{QStringLiteral("image"), kept}, {QStringLiteral("source"), src}})),
+                            store.snapshot());
+        QVERIFY2(check.outcome.ok() && check.outcome->verification == Verification::Passed,
+                 check.outcome.ok() ? qPrintable(check.outcome->verificationDetail) : qPrintable(check.outcome.error().toLogString()));
+
+        // The same after a Cancel during the verification: the image is kept
+        // unverified next to the old one, and the error saying where is the
+        // job's own (the token says so), not a plain "Cancelled" (the queue
+        // keeps it: JobQueue tests, aKeptJobsLaterErrorIsReported).
+        const QString src2 = makeGame(tmp, 16 * 1024 * 1024);
+        QVERIFY(QFile::remove(kept));
+        QVERIFY(holder.open(QIODevice::ReadOnly));
+        CancellationSource cs;
+        std::atomic<bool> cancelled{false};
+        auto rr2 = runJob(env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), src2}, {QStringLiteral("output"), out},
+                                                                 {QStringLiteral("replaceExisting"), true}})),
+                          store.snapshot(), cs.token(), [&](const ProgressSnapshot& s) {
+                              if (s.phaseIndex == 2 && s.done > 1024 * 1024 && !cancelled.exchange(true))
+                                  cs.cancel();
+                          });
+        holder.close();
+        QVERIFY(cancelled);
+        QVERIFY(!rr2.outcome.ok());
+        QVERIFY2(!rr2.outcome.error().isCancelled(), qPrintable(rr2.outcome.error().toLogString()));
+        QVERIFY(cs.token().finishedWorkKept());
+        QVERIFY2(rr2.outcome.error().message.contains(QDir::toNativeSeparators(kept)), qPrintable(rr2.outcome.error().toLogString()));
+        QVERIFY2(!rr2.outcome.error().message.contains(QStringLiteral("verified")), qPrintable(rr2.outcome.error().toLogString()));
+        QCOMPARE(pfstest::readAll(out), previous);
+        QVERIFY(QFileInfo(kept).size() > 1024 * 1024);
+        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+    }
+
+    // ampr.index.local: the folder is checked again when the job runs (asset
+    // packs may have appeared since it was queued), and a new index replaces
+    // the folder's own only once it has read back as written.
+    void amprIndexToolChecksTheFolderAgainAndReadsBackFirst()
+    {
+        Env env;
+        SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("ampr/settings.json")));
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString app0 = tmp.filePath(QStringLiteral("app0"));
+        QVERIFY(pfstest::writeFile(app0 + QStringLiteral("/eboot.bin"), QByteArray(5000, 'e'), -1));
+        QVERIFY(pfstest::writeFile(app0 + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray(300, 'a'), -1));
+        QVERIFY(pfstest::writeFile(app0 + QStringLiteral("/data/a.bin"), QByteArray(7000, 'd'), -1));
+        const QString index = app0 + QStringLiteral("/ampr_emu.index");
+        QVERIFY(pfstest::writeFile(index, QByteArray("the folder's own index"), -1));
+
+        auto job = env.jobs.create(kAmprLocalJob, params({{QStringLiteral("folder"), app0}}));
+        QVERIFY(job.ok());
+        QVERIFY((*job)->validate(store.snapshot()).ok());
+        QVERIFY(pfstest::writeFile(app0 + QStringLiteral("/ampr_assets.index"), QByteArray("packs"), -1));
+        auto refused = runJob(**job, store.snapshot());
+        QVERIFY(!refused.outcome.ok());
+        QCOMPARE(refused.outcome.error().code, ErrorCode::InvalidArgument);
+        QCOMPARE(pfstest::readAll(index), QByteArray("the folder's own index"));
+        QVERIFY(QFile::remove(app0 + QStringLiteral("/ampr_assets.index")));
+
+        auto rr = runJob(env.jobs.create(kAmprLocalJob, params({{QStringLiteral("folder"), app0}})), store.snapshot());
+        QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(rr.outcome.error().toLogString()));
+        QCOMPARE(rr.outcome->verification, Verification::Passed);
+        QCOMPARE(rr.outcome->outputs, QStringList{QDir(app0).filePath(QStringLiteral("ampr_emu.index"))});
+        QVERIFY(pfstest::readAll(index) != QByteArray("the folder's own index"));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(index)));
+
+        // With the shares the queue declares, the scan (the long part) has the
+        // bar and writing the one small index file only its end.
+        auto again = env.jobs.create(kAmprLocalJob, params({{QStringLiteral("folder"), app0}}));
+        QVERIFY(again.ok());
+        double atWrite = -1.0;
+        ProgressReporter reporter(
+            [&](const ProgressSnapshot& s) {
+                if (s.phaseIndex == 1 && atWrite < 0)
+                    atWrite = s.overallFraction;
+            },
+            0);
+        reporter.setPhases((*again)->phases(), (*again)->phaseWeights());
+        QTemporaryDir jobTemp;
+        JobContext ctx;
+        ctx.jobId = QStringLiteral("test");
+        ctx.progress = &reporter;
+        ctx.log = Log((*again)->kind(), ctx.jobId);
+        ctx.settings = store.snapshot();
+        ctx.tempDir = jobTemp.path();
+        QVERIFY((*again)->run(ctx).ok());
+        QVERIFY2(std::abs(atWrite - 0.95) < 0.001, qPrintable(QString::number(atWrite)));
+        QVERIFY(reporter.snapshot().overallFraction > 0.99);
     }
 
     void verificationFailureRemovesImage_data()
@@ -433,7 +675,7 @@ private slots:
             QCOMPARE(pfstest::readAll(out), previous);
         else
             QVERIFY(!QFileInfo::exists(out));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         QVERIFY(QFileInfo::exists(img)); // never deleted after a failed check
     }
 
@@ -454,12 +696,15 @@ private slots:
             QSKIP("this file system does not create sparse files");
         }
         const QString out = tmp.filePath(QStringLiteral("out/game.ffpfsc"));
+        // What an interrupted build of this image left goes before the check,
+        // which must count its space as free (no file is left after it).
+        QVERIFY(pfstest::writeFile(PartFile::partPathFor(out), "left by a crash", -1));
         auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), img}, {QStringLiteral("output"), out}}));
         auto rr = runJob(job, store.snapshot());
         FWTEST_COMPARE_ERROR(rr.outcome, ErrorCode::InsufficientSpace);
         QVERIFY2(rr.outcome.error().message.startsWith(QStringLiteral("Not enough space on")), qPrintable(rr.outcome.error().message));
         QVERIFY(!QFileInfo::exists(out));
-        QVERIFY(!QFileInfo::exists(out + QStringLiteral(".part")));
+        QVERIFY(!QFileInfo::exists(PartFile::partPathFor(out)));
         QVERIFY(QFileInfo::exists(img)); // the source is untouched
     }
 
@@ -506,6 +751,35 @@ private slots:
         auto rr4 = runJob(job4, store.snapshot(*offv));
         QVERIFY(rr4.outcome.ok());
         QCOMPARE(rr4.outcome->verification, Verification::Skipped);
+    }
+
+    // The bar of a build runs to the end with checking on and off: with
+    // "Checking PFS images" off, Verifying (which does not run) takes no share
+    // (the queue declares the shares for the job's settings). From a folder
+    // and from an image.
+    void buildRunsItsBarToTheEnd()
+    {
+        Env env;
+        SettingsStore store(env.schema, m_appData.filePath(QStringLiteral("bar/settings.json")));
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString folder = makeGame(tmp);
+        const QString image = makeImage(tmp);
+        auto off = store.normalizeOverrides({{general::keys::kVerifyAfterBuild, false}});
+        QVERIFY(off.ok());
+        int n = 0;
+        for (const auto& [name, values] : {std::pair{"checking on", store.snapshot()}, std::pair{"checking off", store.snapshot(*off)}}) {
+            for (const QString& source : {folder, image}) {
+                const QString what = QStringLiteral("%1, %2").arg(QLatin1String(name), QFileInfo(source).fileName());
+                fwtest::ProgressAudit audit;
+                auto job = env.jobs.create(kinds::kBuild, params({{QStringLiteral("source"), source},
+                                                                  {QStringLiteral("output"), tmp.filePath(QStringLiteral("bar-%1.ffpfsc").arg(++n))}}));
+                auto rr = runJob(job, values, {}, {}, &audit);
+                QVERIFY2(rr.outcome.ok(), rr.outcome.ok() ? "" : qPrintable(what + u' ' + rr.outcome.error().toLogString()));
+                QVERIFY2(rr.outcome->verification != Verification::Failed, qPrintable(what));
+                QVERIFY2(audit.problems().isEmpty(), qPrintable(what + QStringLiteral(": ") + audit.problems().join(u'\n')));
+            }
+        }
     }
 
     // Audit H2 through the jobs: leftover images in the dump are left out and

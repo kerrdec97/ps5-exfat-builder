@@ -40,7 +40,6 @@
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QStorageInfo>
-#include <QTextLayout>
 #include <QThread>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
@@ -178,125 +177,31 @@ QString sourceKindLabel(const QString& kind)
 }
 
 // ---- format tiles ------------------------------------------------------------------
-// Five large choices: one row when it fits, otherwise three and two (the three
-// images on the first row, the package and the packed folder below), two by
-// two when narrow. ChoiceTiles lays them out three-plus-one at form width, so
-// the page draws its own grid in the same visual language (selected: gradient
-// border, tint and check bubble).
-constexpr int kTileGap = 12;
-constexpr int kTileH = 132;
-constexpr int kTileMinRow = 150; // narrowest tile in one full row
-constexpr int kTileMin3 = 170;   // three per row
-constexpr int kTileMin2 = 190;
+// Five large choices (pages::OptionTiles): one row when it fits, otherwise
+// three and two (the three images on the first row, the package and the
+// packed folder below, sharing that row), two by two when narrow.
+OptionTiles* tilesOf(QWidget* w) { return static_cast<OptionTiles*>(w); }
 
-QStringList wrapText(const QString& text, const QFont& font, int width, int maxLines)
-{
-    QStringList out;
-    if (text.isEmpty() || width <= 10)
-        return out;
-    QTextLayout layout(text, font);
-    layout.beginLayout();
-    while (out.size() < maxLines) {
-        QTextLine line = layout.createLine();
-        if (!line.isValid())
-            break;
-        line.setLineWidth(width);
-        const int start = line.textStart();
-        const int len = line.textLength();
-        if (out.size() == maxLines - 1 && start + len < text.size()) {
-            out << QFontMetrics(font).elidedText(text.mid(start), Qt::ElideRight, width);
-            break;
-        }
-        out << text.mid(start, len).trimmed();
-    }
-    layout.endLayout();
-    return out;
-}
-
-// Whether `text` takes at most `maxLines` lines of `width` (wrapText() cuts the rest with "…").
-bool fitsLines(const QString& text, const QFont& font, int width, int maxLines)
-{
-    if (text.isEmpty())
-        return true;
-    if (width <= 10)
-        return false;
-    QTextLayout layout(text, font);
-    layout.beginLayout();
-    int lines = 0;
-    for (QTextLine line = layout.createLine(); line.isValid(); line = layout.createLine()) {
-        line.setLineWidth(width);
-        ++lines;
-    }
-    layout.endLayout();
-    return lines <= maxLines;
-}
-
-class FormatTiles : public QWidget {
+// One of several games found below the chosen folder: a 44 px row on the
+// card (a plate that lifts on hover, like the strip above it), the game's
+// folder, and "Use this game ›" at its end, so it reads as the choice it is.
+// The folder is kept out of QAbstractButton::text(): a text there makes an
+// '&' in a folder name ("Tom&Jerry") an Alt shortcut of the whole window that
+// silently picks this game. The page names the row with setAccessibleName().
+class GameRootRow : public QAbstractButton {
 public:
-    explicit FormatTiles(QWidget* parent) : QWidget(parent)
+    GameRootRow(const QString& folder, QWidget* parent) : QAbstractButton(parent), m_folder(folder)
     {
         setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
-        setMouseTracking(true);
-        QSizePolicy sp(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        sp.setHeightForWidth(true);
-        setSizePolicy(sp);
-        setProperty("fwRadius", radius::md);
-        m_hover = new motion::HoverFade(this, [this](int i) {
-            if (i >= 0 && i < count())
-                update(tileRect(i));
-        });
-        m_glow = new SelectionGlow(this);
+        setFixedHeight(44);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setProperty("fwRadius", radius::control);
+        m_hover = new motion::Value(this, 0.0, motion::fast);
     }
-    void addTile(const QString& title, const QString& description, const QString& icon, const QString& value,
-                 const QString& tag = {})
-    {
-        m_items.push_back({title, description, icon, tag, value});
-        if (m_current < 0) {
-            m_current = 0;
-            setAccessibleDescription(FW_TR("Selected: %1").arg(title));
-        }
-        m_hover->reset();
-        updateGeometry();
-        update();
-        syncGlow();
-    }
-    int count() const { return int(m_items.size()); }
-    int currentIndex() const { return m_current; }
-    QString currentValue() const { return m_current >= 0 ? m_items[size_t(m_current)].value : QString(); }
-    QString titleAt(int i) const { return m_items[size_t(i)].title; }
-    void setCurrentValue(const QString& v)
-    {
-        for (int i = 0; i < count(); ++i)
-            if (m_items[size_t(i)].value == v)
-                setCurrentIndex(i);
-    }
-    void setCurrentIndex(int i)
-    {
-        if (i < 0 || i >= count() || i == m_current)
-            return;
-        m_current = i;
-        setAccessibleDescription(FW_TR("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
-        update();
-        syncGlow();
-        if (onChanged)
-            onChanged(i);
-    }
-    std::function<void(int)> onChanged;
-
-    bool hasHeightForWidth() const override { return true; }
-    int heightForWidth(int w) const override
-    {
-        const int cols = columns(w);
-        const int rows = (count() + cols - 1) / cols;
-        return rows * kTileH + std::max(0, rows - 1) * kTileGap;
-    }
-    QSize sizeHint() const override
-    {
-        const int w = std::min(count(), 3) * (kTileMin3 + 40);
-        return {w, heightForWidth(w)};
-    }
-    QSize minimumSizeHint() const override { return {kTileMin2, kTileH}; }
+    QSize sizeHint() const override { return {360, 44}; }
+    QSize minimumSizeHint() const override { return {200, 44}; }
 
 protected:
     void paintEvent(QPaintEvent*) override
@@ -304,159 +209,58 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         const qreal dpr = devicePixelRatioF();
-        for (int i = 0; i < count(); ++i) {
-            const Item& it = m_items[size_t(i)];
-            const QRectF tileR = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
-            // The inside is worked out left to right and mirrored as it is drawn.
-            const QRectF r = mirrored(this, tileR);
-            const auto vis = [this](const QRectF& x) { return mirrored(this, x); };
-            const bool sel = i == m_current;
-            const qreal hov = sel ? 0.0 : m_hover->amount(i); // the hover tint fades
-            if (sel) {
-                p.setPen(Qt::NoPen);
-                p.setBrush(color::bg_2);
-                p.drawRoundedRect(tileR, radius::md, radius::md);
-                p.setBrush(accentGradient(tileR, 34));
-                p.drawRoundedRect(tileR, radius::md, radius::md);
-                p.setPen(QPen(QBrush(accentGradient(tileR, 230)), 1.5));
-                p.setBrush(Qt::NoBrush);
-                p.drawRoundedRect(tileR.adjusted(0.5, 0.5, -0.5, -0.5), radius::md, radius::md);
-            } else {
-                // As the library's choice tiles: a well in the card that lifts on hover.
-                p.setPen(QPen(blend(color::border_3, color::border_4, hov), 1));
-                p.setBrush(blend(color::field_bg, color::bg_3, hov));
-                p.drawRoundedRect(tileR, radius::md, radius::md);
-            }
-            // Icon square, top left (white only on the fill gradient).
-            const QRectF ir(r.left() + 14, r.top() + 14, 32, 32);
-            p.setPen(Qt::NoPen);
-            p.setBrush(sel ? QBrush(accentFillGradient(vis(ir))) : QBrush(color::bg_4));
-            p.drawRoundedRect(vis(ir), 9, 9);
-            p.drawPixmap(vis(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18)).toRect(),
-                         iconPixmap(it.icon, 18, sel ? color::on_accent : color::fg_2, dpr));
-            // Check bubble and tag, top right.
-            qreal right = r.right() - 14;
-            if (sel) {
-                paintCheckBubble(p, vis(QRectF(right - 20, r.top() + 20, 20, 20)), dpr);
-                right -= 28;
-            }
-            if (!it.tag.isEmpty()) {
-                const qreal tw = badgeWidth(it.tag);
-                if (right - tw > ir.right() + 8)
-                    paintBadge(p, vis(QRectF(right - tw, ir.center().y() - size::badge / 2.0, tw, size::badge)), it.tag, Tone::Info);
-            }
-            // Title and up to three lines of description.
-            const qreal tx = r.left() + 14;
-            const qreal tw = r.width() - 28;
-            p.setFont(font::bodyStrong());
-            p.setPen(color::fg_0);
-            const QRectF titleR(tx, ir.bottom() + 10, tw, 20);
-            p.drawText(vis(titleR), Qt::AlignLeft | Qt::AlignVCenter,
-                       QFontMetrics(font::bodyStrong()).elidedText(it.title, Qt::ElideRight, int(tw)));
-            p.setFont(font::caption());
-            p.setPen(color::fg_3);
-            qreal y = titleR.bottom() + 2;
-            for (const QString& l : wrapText(it.description, font::caption(), int(tw), 3)) {
-                p.drawText(vis(QRectF(tx, y, tw, 16)), Qt::AlignLeft | Qt::AlignVCenter, l);
-                y += 16;
-            }
-            if (hasFocus() && sel) {
-                p.setPen(QPen(color::focus, 2));
-                p.setBrush(Qt::NoBrush);
-                p.drawRoundedRect(tileR.adjusted(-3, -3, 3, 3), radius::md + 3, radius::md + 3);
-            }
-        }
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const qreal active = isDown() ? 1.0 : m_hover->value();
+        paintPlate(p, r, radius::control, active);
+        // Worked out left to right and mirrored as it is drawn.
+        const QRectF ir(r.left() + 8, r.center().y() - 14, 28, 28);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color::bg_4);
+        p.drawRoundedRect(mirrored(this, ir), 7, 7);
+        p.drawPixmap(mirrored(this, QRectF(ir.center().x() - 8, ir.center().y() - 8, 16, 16)).toRect(),
+                     iconPixmap(QStringLiteral("game"), 16, color::fg_2, dpr));
+        // "Use this game ›" at the end, in the link colour.
+        const QString use = FW_TR("Use this game");
+        p.setFont(font::body());
+        const int useW = QFontMetrics(font::body()).horizontalAdvance(use);
+        const QRectF chevron(r.right() - 12 - 14, r.center().y() - 7, 14, 14);
+        const QRectF useR(chevron.left() - 4 - useW, r.top(), useW, r.height());
+        const QColor link = active > 0.0 ? color::fg_0 : color::accent_hi;
+        p.setPen(link);
+        p.drawText(mirrored(this, useR), Qt::AlignLeft | Qt::AlignVCenter, use);
+        p.drawPixmap(mirrored(this, chevron).toRect(),
+                     iconPixmap(isRightToLeft() ? QStringLiteral("chevron_left") : QStringLiteral("chevron_right"), 14, link, dpr));
+        // The folder, cut in the middle when it is long (the whole path is the tooltip).
+        const qreal tx = ir.right() + 12;
+        const QRectF textR(tx, r.top(), std::max(0.0, useR.left() - 16 - tx), r.height());
+        p.setFont(font::bodyStrong());
+        p.setPen(color::fg_0);
+        p.drawText(mirrored(this, textR), leftToRightText(this, Qt::AlignLeft | Qt::AlignVCenter),
+                   QFontMetrics(font::bodyStrong()).elidedText(m_folder, Qt::ElideMiddle, int(textR.width())));
     }
-    void mousePressEvent(QMouseEvent* e) override
+    void enterEvent(QEnterEvent* e) override
     {
-        if (e->button() != Qt::LeftButton)
-            return;
-        const int i = at(e->pos());
-        if (i >= 0)
-            setCurrentIndex(i);
+        m_hover->animateTo(1.0);
+        QAbstractButton::enterEvent(e);
     }
-    void mouseMoveEvent(QMouseEvent* e) override
+    void leaveEvent(QEvent* e) override
     {
-        const int i = at(e->pos());
-        if (i != m_hover->hovered()) {
-            m_hover->setHovered(i);
-            setCursor(i >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
-            // A description cut with "…" in a narrow tile can be read in full on hover.
-            const bool cut = i >= 0 && !fitsLines(m_items[size_t(i)].description, font::caption(), tileRect(i).width() - 29, 3);
-            setToolTip(cut ? m_items[size_t(i)].description : QString());
-        }
-    }
-    void leaveEvent(QEvent*) override { m_hover->setHovered(-1); }
-    void resizeEvent(QResizeEvent* e) override
-    {
-        QWidget::resizeEvent(e);
-        syncGlow();
+        m_hover->animateTo(0.0);
+        QAbstractButton::leaveEvent(e);
     }
     void keyPressEvent(QKeyEvent* e) override
     {
-        const int cols = columns(width());
-        int next = m_current;
-        switch (e->key()) {
-        case Qt::Key_Left: next = isRightToLeft() ? m_current + 1 : m_current - 1; break; // as on screen
-        case Qt::Key_Right: next = isRightToLeft() ? m_current - 1 : m_current + 1; break;
-        case Qt::Key_Up: next = m_current - cols; break;
-        case Qt::Key_Down: next = m_current + cols; break;
-        default: QWidget::keyPressEvent(e); return;
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+            click();
+            return;
         }
-        if (next >= 0 && next < count())
-            setCurrentIndex(next);
-    }
-    void focusInEvent(QFocusEvent* e) override
-    {
-        QWidget::focusInEvent(e);
-        update();
-    }
-    void focusOutEvent(QFocusEvent* e) override
-    {
-        QWidget::focusOutEvent(e);
-        update();
+        QAbstractButton::keyPressEvent(e);
     }
 
 private:
-    struct Item {
-        QString title, description, icon, tag, value;
-    };
-    int columns(int w) const
-    {
-        if (count() <= 1)
-            return 1;
-        if (w >= count() * kTileMinRow + (count() - 1) * kTileGap)
-            return count();
-        if (count() >= 5 && w >= 3 * kTileMin3 + 2 * kTileGap)
-            return 3;
-        return w >= 2 * kTileMin2 + kTileGap ? 2 : 1;
-    }
-    QRect tileRect(int i) const
-    {
-        const int cols = columns(width());
-        const int w = (width() - (cols - 1) * kTileGap) / cols;
-        const int row = i / cols, col = i % cols;
-        return mirrored(this, QRect(col * (w + kTileGap), row * (kTileH + kTileGap), w, kTileH)); // RTL: first at the right
-    }
-    int at(const QPoint& pt) const
-    {
-        for (int i = 0; i < count(); ++i)
-            if (tileRect(i).contains(pt))
-                return i;
-        return -1;
-    }
-    // The selected tile's soft glow lies outside the tile: its own widget draws it.
-    void syncGlow()
-    {
-        m_glow->setItemRect(m_current >= 0 ? QRectF(tileRect(m_current)).adjusted(0.5, 0.5, -0.5, -0.5) : QRectF(), radius::md);
-    }
-    std::vector<Item> m_items;
-    int m_current = -1;
-    motion::HoverFade* m_hover; // which tile the pointer is over; the tint fades
-    SelectionGlow* m_glow;
+    QString m_folder;       // a path below the chosen folder: shown literally, left to right
+    motion::Value* m_hover; // the hover lift fades
 };
-
-FormatTiles* tilesOf(QWidget* w) { return static_cast<FormatTiles*>(w); }
 
 // A label + caption on the left, a control on the right, a divider under it:
 // the look of a SettingRow for controls that are not settings.
@@ -472,13 +276,30 @@ protected:
     }
 };
 
-QWidget* plainRow(const QString& title, const QString& help, QWidget* control, QWidget* parent, QLabel** helpOut = nullptr)
+// `more`: the longer explanation, behind an ⓘ next to the title (as a
+// setting row shows its full description).
+QWidget* plainRow(const QString& title, const QString& help, QWidget* control, QWidget* parent, QLabel** helpOut = nullptr,
+                  const QString& more = {})
 {
     auto* row = new DividerRow(parent);
     auto* h = hbox(row, space::lg, QMargins(0, 6, 0, 6));
     auto* left = new QWidget(row);
     auto* col = vbox(left, 2);
-    col->addWidget(label(title, TextStyle::Body, color::fg_1, left));
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(space::sm);
+    auto* name = label(title, TextStyle::Body, color::fg_1, left);
+    titleRow->addWidget(name);
+    if (!more.isEmpty()) {
+        auto* info = new QLabel(left);
+        info->setPixmap(iconPixmap(QStringLiteral("info"), 14, color::fg_5, left->devicePixelRatioF()));
+        info->setFixedSize(16, 16);
+        info->setCursor(Qt::WhatsThisCursor);
+        info->setToolTip(plainTip(more));
+        name->setToolTip(plainTip(more));
+        titleRow->addWidget(info, 0, Qt::AlignVCenter);
+    }
+    titleRow->addStretch(1);
+    col->addLayout(titleRow);
     auto* cap = caption(help, left);
     cap->setWordWrap(true);
     cap->setVisible(!help.isEmpty());
@@ -579,10 +400,13 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
             keepZstdPackOn();
         if (key == kSpeed)
             updateSpeedNotes();
+        if (key == fpkg::keys::kKeepDlcEmulator)
+            updateDlcEmuNote();
     });
     connect(&ctx.settings(), &SettingsStore::resetDone, this, [this] {
         keepZstdPackOn();
         updateSpeedNotes();
+        updateDlcEmuNote();
         checkSpace();
     });
     connect(&ctx, &AppContext::dependenciesChecked, this, &BuildImagePage::updateToolsStatus);
@@ -641,6 +465,7 @@ void BuildImagePage::buildSourceCard()
     scol->addWidget(m_stripPath);
     sh->addLayout(scol, 1);
     auto* rescan = new IconButton(QStringLiteral("refresh"), FW_TR("Read the source again"), IconButton::Size::Regular, strip);
+    outlineIconButton(rescan); // beside "Change…": the same plate
     connect(rescan, &QToolButton::clicked, this, &BuildImagePage::refresh);
     sh->addWidget(rescan);
     auto* change = button(FW_TR("Change\u2026"), ButtonVariant::Secondary, QStringLiteral("folder"), strip);
@@ -652,11 +477,11 @@ void BuildImagePage::buildSourceCard()
 
     m_sourceMsg = new MessageRow(source);
     source->body()->addWidget(m_sourceMsg);
-    // Several games below the chosen folder: one link per game.
+    // Several games below the chosen folder: one row per game to choose from.
     m_rootsBox = new QWidget(source);
     auto* rl = vbox(m_rootsBox, space::xs);
     m_rootsList = new QVBoxLayout;
-    m_rootsList->setSpacing(space::xs);
+    m_rootsList->setSpacing(space::sm);
     rl->addLayout(m_rootsList);
     m_rootsBox->hide();
     source->body()->addWidget(m_rootsBox);
@@ -666,8 +491,11 @@ void BuildImagePage::buildSourceCard()
 void BuildImagePage::buildFormatCard()
 {
     auto* card = new Card(this);
-    card->setTitle(FW_TR("Format"));
-    auto* tiles = new FormatTiles(card);
+    // Every card of the form says where it is in the order, as the first does.
+    auto* step = new Badge(FW_TR("Step 2"), Tone::Neutral, card);
+    step->setIconName(QString());
+    card->setTitle(FW_TR("Format"), step);
+    auto* tiles = new OptionTiles(card);
     m_formatTiles = tiles;
     tiles->addTile(QStringLiteral("exFAT"), FW_TR("Fastest to build. Mounts with ShadowMount+ and on a PC."),
                    QStringLiteral("drive"), jobs::kFormatExfat, FW_TR("Popular"));
@@ -717,7 +545,8 @@ void BuildImagePage::buildFormatCard()
                                                              {QStringLiteral("key"), fpkg::keys::kPubToolsPath},
                                                              {QStringLiteral("howToFix"), info.howToFix}}});
     });
-    m_toolsRow = plainRow(FW_TR("Sony Publishing Tools"), {}, toolsRight, card, &m_toolsDetail);
+    m_toolsRow = plainRow(FW_TR("Sony Publishing Tools"), {}, toolsRight, card, &m_toolsDetail,
+                          FW_TR("FPKG builds run your own copy of prospero-pub-cmd.exe. Nothing from Sony is included or downloaded."));
     m_toolsRow->setAccessibleName(FW_TR("Sony Publishing Tools"));
     m_toolsDetail->setToolTip(FW_TR("FPKG builds run your own copy of prospero-pub-cmd.exe. Nothing from Sony is included or downloaded."));
 
@@ -769,7 +598,9 @@ void BuildImagePage::buildFormatCard()
     // (layout items 0 and 1 are the hairline and the space under it)
     if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[2].essentials->layout())) {
         m_pfsKindRow = plainRow(FW_TR("Image type"), FW_TR("Compressed (.ffpfsc) saves space; uncompressed (.ffpfs) is fastest to read."),
-                                m_pfsKind, m_formats[2].essentials);
+                                m_pfsKind, m_formats[2].essentials, nullptr,
+                                FW_TR("Compressed (.ffpfsc) saves space with zlib; how much depends on the game. Uncompressed "
+                                      "(.ffpfs) is about the size of the dump and the fastest to read."));
         l->insertWidget(2, m_pfsKindRow);
     }
     if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[3].essentials->layout()))
@@ -840,6 +671,8 @@ void BuildImagePage::buildFormatOptions(FormatOptions& fo, const QStringList& se
     fo.advanced->setVisible(false);
     connect(fo.panel, &JobOptionsPanel::overridesChanged, this, [this, tile = fo.tile] {
         updateSpeedNotes();
+        if (tile == kFormatFpkg)
+            updateDlcEmuNote(); // "Keep the DLC emulator" for this job
         if (tile != this->tile())
             return;
         updateAdvancedSummary();
@@ -864,7 +697,9 @@ void BuildImagePage::buildPackageCard()
 {
     auto* details = new Card(this);
     m_packageCard = details;
-    details->setTitle(FW_TR("Package"));
+    auto* step = new Badge(FW_TR("Step 3"), Tone::Neutral, details); // FPKG only: Save to is step 4 then
+    step->setIconName(QString());
+    details->setTitle(FW_TR("Package"), step);
     m_packageType = new Segmented(details);
     m_packageType->addSegment(FW_TR("App"), {}, QStringLiteral("app"));
     m_packageType->addSegment(FW_TR("Add-on"), {}, QStringLiteral("addon"));
@@ -889,8 +724,29 @@ void BuildImagePage::buildPackageCard()
     details->body()->addWidget(grid);
     m_title = textInput({}, false, details);
     m_title->setAccessibleName(FW_TR("Title"));
-    m_titleRow = field(FW_TR("Title"), m_title, {}, details);
+    // The name is written for param.json's default language only (as the
+    // reference toolkit does); a console in another language shows that
+    // language's own name (GitHub #94).
+    m_titleRow = field(FW_TR("Title"), m_title,
+                       FW_TR("Written for the default language of param.json. A console set to another language shows that language's own name."),
+                       details);
     details->body()->addWidget(m_titleRow);
+    // App builds of a game with a DLC emulator: its DLC data goes into the
+    // package, and the list is edited in Library › DLC emulator.
+    m_dlcEmuRow = new QWidget(details);
+    {
+        auto* dh = hbox(m_dlcEmuRow, space::sm);
+        auto* note = caption(FW_TR("This game has a DLC emulator (dlc_emu.ini): DLC data in its mount folders is packed with the game."), m_dlcEmuRow);
+        note->setWordWrap(true);
+        dh->addWidget(note, 1);
+        auto* edit = new Link(FW_TR("Edit the DLC list"), m_dlcEmuRow);
+        connect(edit, &Link::activated, this, [this] {
+            emit navigateRequested({QStringLiteral("library"), {{QStringLiteral("tab"), QStringLiteral("dlc")}, {QStringLiteral("dlcFolder"), m_sourcePath}}});
+        });
+        dh->addWidget(edit, 0, Qt::AlignTop);
+    }
+    m_dlcEmuRow->hide();
+    details->body()->addWidget(m_dlcEmuRow);
     connect(m_version, &QLineEdit::textEdited, this, [this] { m_autoVersion.clear(); });
     connect(m_contentId, &QLineEdit::textEdited, this, [this] { m_addonIdFor.clear(); });
     connect(m_contentId, &QLineEdit::textChanged, this, [this] { renderFileName(); });
@@ -979,7 +835,9 @@ void BuildImagePage::buildPackageCard()
 void BuildImagePage::buildSaveCard()
 {
     auto* dest = new Card(this);
-    dest->setTitle(FW_TR("Save to"));
+    m_saveStep = new Badge(FW_TR("Step 3"), Tone::Neutral, dest);
+    m_saveStep->setIconName(QString());
+    dest->setTitle(FW_TR("Save to"), m_saveStep);
     auto* grid = new QWidget(dest);
     auto* gh = vbox(grid, space::md); // folder, then the file name: both get the full width
     m_output = new PathField(PathField::Mode::Directory, grid);
@@ -1020,6 +878,7 @@ void BuildImagePage::buildSaveCard()
     m_fileExt = monoLabel(QStringLiteral(".exfat"), nameField, color::fg_3);
     nameRow->addWidget(m_fileExt);
     m_nameMenuButton = new IconButton(QStringLiteral("tag"), FW_TR("Naming"), IconButton::Size::Regular, nameField);
+    outlineIconButton(m_nameMenuButton); // a menu button beside a field, like Browse… beside the folder
     nameRow->addWidget(m_nameMenuButton);
     nl->addLayout(nameRow);
     gh->addWidget(nameField, 1);
@@ -1227,6 +1086,7 @@ void BuildImagePage::onFormatChanged()
     }
     m_packageCard->setVisible(pkg);
     m_summaryCard->setVisible(pkg);
+    m_saveStep->setText(pkg ? FW_TR("Step 4") : FW_TR("Step 3"));
     if (t == jobs::kFormatExfat)
         header()->setCaption(FW_TR("Turn a game dump into an exFAT image that ShadowMount+ and PCs can mount."));
     else if (t == jobs::kFormatFfpkg)
@@ -1533,6 +1393,7 @@ void BuildImagePage::setSource(const QString& path)
         m_sourceBadge->set(FW_TR("Step 1"), Tone::Neutral);
         m_sourceBadge->setIconName(QString());
         m_summary = {};
+        updateDlcEmuNote();
         m_nameEdited = false;
         // The Package card described the source that is gone.
         m_detailsFor.clear();
@@ -1555,6 +1416,7 @@ void BuildImagePage::setSource(const QString& path)
         m_sourceBadge->set(FW_TR("Scanning\u2026"), Tone::Info);
         m_sourceBadge->setIconName(QStringLiteral("loader"));
         m_summary = {}; // nothing stale while the new folder is read
+        updateDlcEmuNote();
         // …nor in the strip (when it shows the source before) and the status bar.
         m_stripTitle->setFullText(fi.fileName());
         m_stripMeta->setFullText({});
@@ -1618,6 +1480,7 @@ void BuildImagePage::onSummary(const GameSummary& s)
     }
     if (m_estSize)
         m_estSize->setText(s.bytes > 0 ? formatBytes(s.bytes) : QStringLiteral("—"));
+    updateDlcEmuNote();
     renderFileName();
     updateOutput();
     emit statusContextChanged();
@@ -1727,13 +1590,11 @@ void BuildImagePage::showGameRoots(const GameSummary& s)
     const int shown = std::min<int>(int(s.gameRoots.size()), 8);
     for (int i = 0; i < shown; ++i) {
         const QString root = s.gameRoots[i];
-        auto* pick = button(QDir::toNativeSeparators(QDir(s.folder).relativeFilePath(root)), ButtonVariant::Subtle,
-                            QStringLiteral("game"), m_rootsBox);
-        setButtonSmall(pick, true);
+        auto* pick = new GameRootRow(QDir::toNativeSeparators(QDir(s.folder).relativeFilePath(root)), m_rootsBox);
         pick->setAccessibleName(FW_TR("Use %1").arg(QFileInfo(root).fileName()));
         pick->setToolTip(plainTip(nativePath(root)));
-        connect(pick, &QPushButton::clicked, this, [this, root] { setSource(root); });
-        m_rootsList->addWidget(pick, 0, Qt::AlignLeft);
+        connect(pick, &QAbstractButton::clicked, this, [this, root] { setSource(root); });
+        m_rootsList->addWidget(pick);
     }
     QStringList rest;
     if (s.gameRoots.size() > shown)
@@ -1815,10 +1676,25 @@ void BuildImagePage::onPackageTypeChanged()
             m_autoVersion.clear();
         }
     }
+    updateDlcEmuNote();
     updateStartHint();
     renderFileName();
     updateOutput();
     checkSpace();
+}
+
+void BuildImagePage::updateDlcEmuNote()
+{
+    if (!m_dlcEmuRow)
+        return;
+    const bool app = m_packageType && packageTypeKind() == PackageType::App;
+    const bool folder = m_summary.exists && m_summary.isGame && sourceKind() == QLatin1String("folder");
+    // "Keep the DLC emulator" off, for this job or in Settings: the package
+    // leaves dlc_emu.ini out and declares none of its mount folders, so the
+    // note and the way to the list would describe another package.
+    const JobOptionsPanel* fpkgOptions = optionsPanel(kFormatFpkg);
+    const bool kept = !fpkgOptions || fpkgOptions->effectiveValue(fpkg::keys::kKeepDlcEmulator).toBool();
+    m_dlcEmuRow->setVisible(app && folder && kept && QFileInfo(QDir(m_sourcePath).filePath(QStringLiteral("dlc_emu.ini"))).isFile());
 }
 
 // What the form knows to be missing without reading anything, in the words
@@ -2468,7 +2344,8 @@ QStringList BuildImagePage::demoStates() const
 namespace {
 
 // The job monitor with a made-up FPKG build (screenshots): running at 63 %,
-// finished and verified, or failed in the publisher.
+// finished and verified, or failed in the publisher. The Jobs dock counts it
+// as the real one would be counted.
 void applyMonitorDemo(JobFormPage& page, const QString& name)
 {
     QStringList lines;
@@ -2477,6 +2354,7 @@ void applyMonitorDemo(JobFormPage& page, const QString& name)
                                                  &lines);
     page.showMonitor(rec.id);
     page.monitor()->setDemoRecord(rec, lines);
+    page.dock()->setDemoRunning(rec);
 }
 
 } // namespace
@@ -2488,6 +2366,9 @@ void BuildImagePage::applyDemoState(const QString& name)
         return;
     }
     if (name == QLatin1String("building") || name == QLatin1String("built") || name == QLatin1String("build-failed")) {
+        // The demo job is an FPKG build: the header says what the page builds.
+        m_demo = true;
+        setFormat(kFormatFpkg);
         applyMonitorDemo(*this, name);
         return;
     }

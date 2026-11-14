@@ -32,6 +32,15 @@ public:
         if (!ok)
             m_failed.fetch_add(1);
     }
+    // The same for a file still open for writing, through its handle: one
+    // call instead of opening the file again for its times and once more for
+    // its attributes. False when that could not be done; the caller then
+    // closes the file and calls finish().
+    bool finishOpen(const ImageEntry& e, QFile& file)
+    {
+        return finishOpenFile(file, m_o.preserveTimes, e.created, e.modified, e.accessed, m_o.preserveAttributes,
+                              e.attributes);
+    }
     qint64 failed() const { return m_failed.load(); }
 
 private:
@@ -187,10 +196,12 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
                     progress->advance(c->length);
             }
             if (c->endOfItem) {
+                const bool finished = finisher.finishOpen(e, out);
                 out.close();
                 if (out.error() != QFileDevice::NoError)
                     return fileError(QStringLiteral("Could not write %1.").arg(shown), out);
-                finisher.finish(e, path);
+                if (!finished)
+                    finisher.finish(e, path);
                 ++stats.files;
                 if (progress)
                     progress->advanceFiles(1);
@@ -244,10 +255,12 @@ Result<ExtractStats> extractTree(const ExfatReader& reader, const ImageTree& tre
                     if (progress)
                         progress->advance(r.value());
                 }
+                const bool finished = finisher.finishOpen(e, out);
                 out.close();
                 if (out.error() != QFileDevice::NoError)
                     return fail(fileError(QStringLiteral("Could not write %1.").arg(shown), out));
-                finisher.finish(e, path);
+                if (!finished)
+                    finisher.finish(e, path);
                 done.fetch_add(1);
                 if (progress)
                     progress->advanceFiles(1);

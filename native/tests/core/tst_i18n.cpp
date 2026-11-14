@@ -308,6 +308,31 @@ private slots:
             QVERIFY2(i18n::isValidCode(code), qPrintable(code));
     }
 
+    // A language's names are shown in the picker as they are: one that holds
+    // a direction override (it could read as another language's name) or a
+    // control character is not used, as a translation with one is not.
+    void namesThatCouldMisleadAreNotShown()
+    {
+        const auto [res, user] = folders();
+        const Strings one{{QStringLiteral("Open"), QStringLiteral("X")}};
+        QVERIFY(writeCatalogue(user + QStringLiteral("/xa.json"), QStringLiteral("xa"), QChar(0x202E) + QStringLiteral("hsilgnE"),
+                               QStringLiteral("Test A"), one));
+        QVERIFY(writeCatalogue(user + QStringLiteral("/xb.json"), QStringLiteral("xb"), QStringLiteral("Test B"),
+                               QStringLiteral("Eng") + QChar(0x2066) + QStringLiteral("lish"), one));
+        QVERIFY(writeCatalogue(user + QStringLiteral("/xc.json"), QStringLiteral("xc"), QStringLiteral("Te") + QChar(0x07) + QStringLiteral("st"),
+                               QStringLiteral("Test C"), one));
+        // A right-to-left name with its marks is a name like any other.
+        const QString arabic = QStringLiteral("العربية") + QChar(0x200F);
+        QVERIFY(writeCatalogue(user + QStringLiteral("/xd.json"), QStringLiteral("xd"), arabic, QStringLiteral("Test D"), one));
+        i18n::configure(res, user);
+        const QList<i18n::Language> all = i18n::available();
+        QCOMPARE(all.size(), 4);
+        QCOMPARE(languageOf(all, QStringLiteral("xa"))->nativeName, QStringLiteral("Test A"));
+        QCOMPARE(languageOf(all, QStringLiteral("xb"))->englishName, QStringLiteral("Test B"));
+        QCOMPARE(languageOf(all, QStringLiteral("xc"))->nativeName, QStringLiteral("Test C"));
+        QCOMPARE(languageOf(all, QStringLiteral("xd"))->nativeName, arabic);
+    }
+
     void failedLoadLeavesEnglish()
     {
         const auto [res, user] = folders();

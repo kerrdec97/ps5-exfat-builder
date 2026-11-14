@@ -8,11 +8,26 @@
 //
 // Safety:
 //  * every remote folder is created first, on one connection;
+//  * an upload to a name the console already has goes to <name>.uploading and
+//    replaces the old file only once it is complete and size-checked (old one
+//    set aside as <name>.replacing.bak until then, as uploadReplace() does),
+//    so replacing a file needs room for both on the console (an "out of
+//    space" then says so); a server that renames nothing gets the file, and
+//    every later one of the job it already has, written over directly, with
+//    one warning;
 //  * a cancelled or finally failed upload deletes its half-written remote file
-//    over a fresh connection, like the legacy transfer queue ("Removed the
-//    partial remote file ..."); a file that could not be removed is reported;
-//  * downloads write <name>.part and rename it only when complete; existing
-//    local files are skipped unless overwrite is set;
+//    (never a file that was there before) over a fresh connection, like the
+//    legacy transfer queue ("Removed the partial remote file ..."); a file that
+//    could not be removed is reported;
+//  * downloads write <name>.fw.part (a name only this app uses: a
+//    <name>.part may be another program's, and is never opened, also not the
+//    one an older version left) and rename it only when complete, without
+//    ever copying it; existing local files are skipped unless overwrite is set;
+//  * with `resume` on, an interrupted file (cancel, lost connection, refused
+//    transfer) keeps what arrived, remote partial or local .fw.part, so the next
+//    resume run continues it (`keptPartials`); a remote file the cancel left
+//    without a byte of the transfer is removed; a file that arrived whole with
+//    the wrong size is removed either way (its bytes are no resume point);
 //  * a dropped connection is retried `retries` times, resuming with REST (or
 //    APPE) from what already arrived — but only when this run's STOR for that
 //    file was accepted; otherwise the file is rewritten from the start, so an
@@ -75,6 +90,7 @@ struct TransferReport {
     QStringList warnings;
     QStringList removedPartials;
     QStringList leftoverPartials; // partial remote files that could not be removed
+    QStringList keptPartials;     // resume on: partial files left for the next resume run
 };
 
 FtpOptions ftpOptionsFor(const ConsoleEndpoint& endpoint);
@@ -98,9 +114,11 @@ Result<TransferReport> runDownload(const TransferPlan& plan, const TransferOptio
                                    const CancellationToken& token, ProgressReporter* progress = nullptr,
                                    const Log& log = Log(QStringLiteral("ps5.ftp")));
 
-// Renames a finished `<name>.part` over `finalPath`. An existing final file is
-// set aside first and put back if the rename fails; on any failure the .part
-// is kept and the error says where.
-Status commitDownloadedFile(const QString& part, const QString& finalPath);
+// Gives a finished partial download `part` the name `finalPath` without ever
+// copying it (fw::commitFinishedFile()). An existing final file is replaced in
+// one step when `replaceExisting` is set (it is either still there or
+// replaced, never gone), else the commit fails; on any failure the partial
+// file is kept and the error says where.
+Status commitDownloadedFile(const QString& part, const QString& finalPath, bool replaceExisting = true);
 
 } // namespace fw::ps5

@@ -29,7 +29,7 @@ struct GridItem {
     QString icon = QStringLiteral("game"); // on generated tiles, next to the initials
     QStringList chips;    // "Folder", "exFAT", ... (the first chip is neutral when `firstChipNeutral`)
     bool firstChipNeutral = false;
-    QString badge;        // list only, e.g. "Not backported"
+    QString badge;        // list only, e.g. "Backported" or "Name only" ("" = none)
     Tone badgeTone = Tone::Neutral;
     QString tooltip;
     QString coverId;      // what picks the generated cover's colour: the title ID ("" = the title)

@@ -18,6 +18,7 @@
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QScopeGuard>
+#include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -128,6 +129,7 @@ class TstOnefile : public QObject {
         env.insert(QStringLiteral("FW_ONEFILE_NO_UI"), QStringLiteral("1"));
         env.insert(QStringLiteral("FW_ONEFILE_DEBUG"), QStringLiteral("1"));
         env.remove(QStringLiteral("FW_ONEFILE_NO_MUTEX"));
+        env.remove(QStringLiteral("FW_ONEFILE_SHORT_PATHS"));
         env.remove(QStringLiteral("FW_LAUNCHER_DIR"));
         env.remove(QStringLiteral("FW_LAUNCHER_EXE"));
         return env;
@@ -366,6 +368,7 @@ private slots:
         QTest::addColumn<QString>("damage");
         QTest::newRow("missing file") << QStringLiteral("delete");
         QTest::newRow("truncated file") << QStringLiteral("truncate");
+        QTest::newRow("changed in place, same size") << QStringLiteral("change");
         QTest::newRow("no marker") << QStringLiteral("marker");
     }
 
@@ -383,6 +386,20 @@ private slots:
             QFile f(victim);
             QVERIFY(f.open(QIODevice::ReadWrite));
             QVERIFY(f.resize(1000));
+        } else if (damage == QLatin1String("change")) {
+            // A DLL altered in place (by security software, a disk repair, a
+            // user): same size, written after the folder was unpacked. The
+            // time is set explicitly so the clock's resolution cannot hide it.
+            const QDateTime unpacked = QFileInfo(dir + QStringLiteral("/.onefile-complete")).lastModified();
+            QFile f(victim);
+            QVERIFY(f.open(QIODevice::ReadWrite));
+            const qint64 size = f.size();
+            QVERIFY(f.seek(100));
+            QCOMPARE(f.write("altered"), qint64(7));
+            QVERIFY(f.flush());
+            QVERIFY(f.setFileTime(unpacked.addSecs(2), QFileDevice::FileModificationTime));
+            f.close();
+            QCOMPARE(QFileInfo(victim).size(), size);
         } else {
             QVERIFY(QFile::remove(dir + QStringLiteral("/.onefile-complete")));
         }
@@ -391,6 +408,32 @@ private slots:
         QVERIFY2(r.err.contains(QLatin1String("unpacked")), qPrintable(r.err));
         QCOMPARE(folders(d.runtime()), QStringList{QFileInfo(dir).fileName()}); // damaged copy removed, no leftovers
         QCOMPARE(sha256Of(victim), sha256Of(m_payload + QStringLiteral("/plugins/platforms/qtext.dll")));
+    }
+
+    // A damaged copy that passes the quick check (same size, the old time
+    // put back) is found when it does not start, and unpacked again.
+    void cachedProgramThatDoesNotStartIsUnpackedAgain()
+    {
+        const Dirs d = fresh();
+        QVERIFY(run(m_onefile, {}, envFor(d)).exitCode == 0);
+        const QString dir = onlyRuntime(d.runtime());
+        QVERIFY(!dir.isEmpty());
+        const QString program = dir + QLatin1Char('/') + kEntry;
+        const QDateTime written = QFileInfo(program).lastModified();
+        {
+            QFile f(program);
+            QVERIFY(f.open(QIODevice::ReadWrite));
+            const QByteArray zeros(int(f.size()), '\0');
+            QCOMPARE(f.write(zeros), qint64(zeros.size()));
+            QVERIFY(f.flush());
+            QVERIFY(f.setFileTime(written, QFileDevice::FileModificationTime));
+        }
+        const Run r = run(m_onefile, {QStringLiteral("--exit=3")}, envFor(d));
+        QVERIFY2(r.exitCode == 3 && r.childRan(), qPrintable(r.describe()));
+        QVERIFY2(r.err.contains(QLatin1String("fw-onefile: cached copy does not start")), qPrintable(r.err));
+        QVERIFY2(r.err.contains(QLatin1String("fw-onefile: unpacked")), qPrintable(r.err));
+        QCOMPARE(folders(d.runtime()), QStringList{QFileInfo(dir).fileName()});
+        QCOMPARE(sha256Of(program), sha256Of(m_payload + QLatin1Char('/') + kEntry));
     }
 
     void damagedPayloadIsRefused_data()
@@ -561,6 +604,46 @@ private slots:
         QCOMPARE(canonical(r.value(QStringLiteral("exe"))), canonical(dir + QLatin1Char('/') + kEntry));
         QCOMPARE(canonical(r.value(QStringLiteral("launcher_dir"))), canonical(app));
         QVERIFY(!QFileInfo::exists(d.runtime()));
+    }
+
+    // Without long path support (Windows' default) a program cannot be
+    // started from a path of MAX_PATH characters or more: a portable launcher
+    // in a folder that deep (it starts itself) unpacks to %LOCALAPPDATA%.
+    void deepPortableFolderFallsBackWithoutLongPaths()
+    {
+        // 200 characters: the launcher's own path stays below MAX_PATH, the
+        // runtime's files ("...\exFAT Image Builder.data\runtime\1.0.0-<12>\
+        // plugins\platforms\qtext.dll", 80 more) do not.
+        const QString base = QDir::toNativeSeparators(m_tmp.filePath(QStringLiteral("deep")));
+        QVERIFY(base.size() < 190);
+        const QString app = base + QLatin1Char('\\') + QString(200 - base.size() - 1, QLatin1Char('d'));
+        QCOMPARE(app.size(), 200);
+        QVERIFY(QDir().mkpath(app));
+        const QString exe = app + QLatin1Char('\\') + kEntry;
+        QVERIFY(QFile::copy(m_onefile, exe));
+        QVERIFY(writeFile(app + QStringLiteral("\\portable.txt"), QByteArray()));
+        const QString portableRoot = app + QStringLiteral("\\exFAT Image Builder.data\\runtime");
+
+        const Dirs d = fresh();
+        QProcessEnvironment env = envFor(d);
+        env.insert(QStringLiteral("FW_ONEFILE_SHORT_PATHS"), QStringLiteral("1"));
+        const Run r = run(exe, {}, env);
+        QVERIFY2(r.exitCode == 0 && r.childRan(), qPrintable(r.describe()));
+        QVERIFY2(r.err.contains(QLatin1String("fw-onefile: skipping ")) && r.err.contains(QLatin1String("too deep")), qPrintable(r.err));
+        const QString dir = onlyRuntime(d.runtime());
+        QVERIFY(!dir.isEmpty());
+        QCOMPARE(canonical(r.value(QStringLiteral("exe"))), canonical(dir + QLatin1Char('/') + kEntry));
+        QVERIFY(folders(portableRoot).isEmpty());
+
+        // With long path support the portable folder is kept as it is.
+        const QSettings fs(QStringLiteral("HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem"),
+                           QSettings::NativeFormat);
+        if (fs.value(QStringLiteral("LongPathsEnabled")).toInt() != 1)
+            QSKIP("Long paths are off in Windows here: the portable folder cannot be shown to be kept.");
+        const Run kept = run(exe, {}, envFor(fresh()));
+        QVERIFY2(kept.exitCode == 0 && kept.childRan(), qPrintable(kept.describe()));
+        QVERIFY2(!kept.err.contains(QLatin1String("too deep")), qPrintable(kept.err));
+        QVERIFY(!onlyRuntime(portableRoot).isEmpty());
     }
 
     // cmd.exe-style start without redirection: output with arguments reaches

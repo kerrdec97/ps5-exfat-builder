@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <vector>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -228,6 +229,113 @@ struct JobHandle {
     }
 };
 
+// Holds a tool and everything it started still while its job is paused:
+// every process of the job object (or only the tool when it could not join
+// one) is suspended as a whole, and resumed when the pause ends. The handles
+// stay open while suspended, so a process id cannot pass to another program
+// before it is resumed. Whatever is still suspended is resumed on destruction.
+class TreeSuspender {
+public:
+    TreeSuspender(HANDLE job, qint64 onlyPid) : m_job(job), m_onlyPid(DWORD(onlyPid)) {}
+    TreeSuspender(const TreeSuspender&) = delete;
+    TreeSuspender& operator=(const TreeSuspender&) = delete;
+    ~TreeSuspender() { resume(); }
+
+    bool isSuspended() const { return !m_held.empty(); }
+
+    // Several rounds: a process that was starting a child when it was
+    // suspended may have added that child to the job in between.
+    bool suspend()
+    {
+        const Ntdll& nt = ntdll();
+        if (!nt.suspend || !nt.resume)
+            return false;
+        for (int round = 0; round < 8; ++round) {
+            bool added = false;
+            for (const DWORD id : members()) {
+                if (std::find(m_ids.cbegin(), m_ids.cend(), id) != m_ids.cend())
+                    continue;
+                const HANDLE h = OpenProcess(PROCESS_SUSPEND_RESUME | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, id);
+                if (!h)
+                    continue;
+                BOOL inJob = m_job == nullptr;
+                if (m_job && !IsProcessInJob(h, m_job, &inJob))
+                    inJob = FALSE;
+                if (inJob && nt.suspend(h) >= 0) {
+                    m_held.push_back(h);
+                    m_ids.push_back(id);
+                    added = true;
+                } else {
+                    CloseHandle(h);
+                }
+            }
+            if (!added)
+                break;
+        }
+        return isSuspended();
+    }
+
+    void resume()
+    {
+        const Ntdll& nt = ntdll();
+        for (const HANDLE h : m_held) {
+            if (nt.resume)
+                (void)nt.resume(h);
+            CloseHandle(h);
+        }
+        m_held.clear();
+        m_ids.clear();
+    }
+
+private:
+    using NtProcessFn = LONG(NTAPI*)(HANDLE);
+    struct Ntdll {
+        NtProcessFn suspend = nullptr;
+        NtProcessFn resume = nullptr;
+    };
+    static const Ntdll& ntdll()
+    {
+        static const Ntdll fns = [] {
+            Ntdll n;
+            if (HMODULE m = GetModuleHandleW(L"ntdll.dll")) {
+                n.suspend = reinterpret_cast<NtProcessFn>(reinterpret_cast<void*>(GetProcAddress(m, "NtSuspendProcess")));
+                n.resume = reinterpret_cast<NtProcessFn>(reinterpret_cast<void*>(GetProcAddress(m, "NtResumeProcess")));
+            }
+            return n;
+        }();
+        return fns;
+    }
+
+    std::vector<DWORD> members() const
+    {
+        if (!m_job)
+            return {m_onlyPid};
+        // The list: two counts, then one ULONG_PTR per process id.
+        std::vector<ULONG_PTR> buf(2 + 256);
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(buf.data());
+            const DWORD bytes = DWORD(buf.size() * sizeof(ULONG_PTR));
+            const bool ok = QueryInformationJobObject(m_job, JobObjectBasicProcessIdList, list, bytes, nullptr) != FALSE;
+            if (!ok && GetLastError() != ERROR_MORE_DATA)
+                return {};
+            if (ok || attempt == 3) {
+                std::vector<DWORD> ids;
+                const DWORD n = std::min<DWORD>(list->NumberOfProcessIdsInList, DWORD(buf.size() - 2));
+                for (DWORD i = 0; i < n; ++i)
+                    ids.push_back(DWORD(list->ProcessIdList[i]));
+                return ids;
+            }
+            buf.resize(2 + size_t(list->NumberOfAssignedProcesses) + 64);
+        }
+        return {};
+    }
+
+    HANDLE m_job = nullptr;
+    DWORD m_onlyPid = 0;
+    std::vector<HANDLE> m_held;
+    std::vector<DWORD> m_ids;
+};
+
 // Resumes every thread of a process started with CREATE_SUSPENDED.
 bool resumeProcessThreads(qint64 pid)
 {
@@ -342,6 +450,7 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
         if (pid > 0) {
             ::kill(-pid_t(pid), SIGTERM);
             ::kill(pid_t(pid), SIGTERM);
+            ::kill(-pid_t(pid), SIGCONT); // a stopped (paused) process only acts on SIGTERM once it runs
         }
 #endif
     };
@@ -350,10 +459,53 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
 #ifdef Q_OS_WIN
         jobObject.terminate();
 #else
-        if (pid > 0)
+        if (pid > 0) {
             ::kill(-pid_t(pid), SIGTERM);
+            ::kill(-pid_t(pid), SIGCONT);
+        }
 #endif
     });
+
+    // A paused job holds its tool and everything the tool started; the
+    // timeout counts only the time it may run.
+#ifdef Q_OS_WIN
+    TreeSuspender suspender(inJobObject ? jobObject.job : nullptr, pid);
+#endif
+    bool held = false;
+    bool killed = false;
+    bool ended = false;
+    qint64 heldMs = 0;
+    QElapsedTimer heldFor;
+    const auto followPause = [&] {
+        bool hold = token.isPaused();
+        if (ended)
+            hold = false;
+        else if (killed || cancelRequested.load())
+            hold = held; // being ended: a held tool is ended as it is, never run again first
+        if (hold == held)
+            return;
+        if (hold) {
+#ifdef Q_OS_WIN
+            if (!suspender.suspend())
+                log.warn(QStringLiteral("Could not pause %1; it keeps running while the job is paused.")
+                             .arg(QFileInfo(spec.program).fileName()));
+#else
+            if (pid > 0)
+                ::kill(-pid_t(pid), SIGSTOP);
+#endif
+            heldFor.start();
+        } else {
+#ifdef Q_OS_WIN
+            suspender.resume();
+#else
+            if (pid > 0)
+                ::kill(-pid_t(pid), SIGCONT);
+#endif
+            heldMs += heldFor.elapsed();
+        }
+        held = hold;
+    };
+    const auto runningMs = [&] { return timer.elapsed() - heldMs - (held ? heldFor.elapsed() : 0); };
 
     ProcessResult result;
     LineSplitter outSplit, errSplit;
@@ -363,21 +515,27 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
         target += line;
         target += u'\n';
     };
+    // Before each line: a callback that waits in checkpoint() during a pause
+    // must find the tool already held.
     const auto handleOut = [&](const QByteArray& bytes) {
         const QString line = decodeConsoleOutput(bytes, spec.encoding);
         keep(result.output, line);
-        if (onLine)
+        if (onLine) {
+            followPause();
             onLine(line, false);
+        }
     };
     const auto handleErr = [&](const QByteArray& bytes) {
         const QString line = decodeConsoleOutput(bytes, spec.encoding);
         keep(result.errorOutput, line);
-        if (onLine)
+        if (onLine) {
+            followPause();
             onLine(line, true);
+        }
     };
 
-    bool killed = false;
     while (proc.state() != QProcess::NotRunning) {
+        followPause();
         proc.waitForReadyRead(100);
         {
             const QByteArray out = proc.readAllStandardOutput();
@@ -398,7 +556,7 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
             killTree();
             proc.kill();
         }
-        if (!killed && spec.timeout.count() > 0 && timer.elapsed() > spec.timeout.count()) {
+        if (!killed && spec.timeout.count() > 0 && runningMs() > spec.timeout.count()) {
             killed = true;
             result.timedOut = true;
             log.warn(QStringLiteral("Timed out after %1 s: %2")
@@ -410,6 +568,10 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
         if (killed)
             proc.waitForFinished(5000);
     }
+    // Whatever of the tree is still held (the tool ended as it was being
+    // paused) runs on and ends with the job object.
+    ended = true;
+    followPause();
     {
         const QByteArray out = proc.readAllStandardOutput();
         if (spec.onRawOutput && !out.isEmpty())

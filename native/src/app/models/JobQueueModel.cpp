@@ -3,24 +3,64 @@
 #include "core/FileUtil.h"
 #include "core/Tr.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace fw {
 
 QString progressDetailText(const ProgressSnapshot& p)
 {
+    return progressDetailText(p, p.jobEtaMs);
+}
+
+QString progressDetailText(const ProgressSnapshot& p, qint64 timeLeftMs)
+{
     QStringList parts;
     if (p.total > 0) {
+        // Never more than the total, whatever a snapshot made by hand says.
+        const qint64 done = std::clamp<qint64>(p.done, 0, p.total);
         if (p.unitIsBytes)
-            parts << FW_TR("%1 of %2").arg(formatBytes(p.done), formatBytes(p.total));
+            parts << FW_TR("%1 of %2").arg(formatBytes(done), formatBytes(p.total));
         else
-            parts << FW_TR("%1 of %2").arg(formatCount(p.done), formatCount(p.total));
+            parts << FW_TR("%1 of %2").arg(formatCount(done), formatCount(p.total));
+    } else if (p.unitIsBytes && p.done > 0) {
+        parts << formatBytes(p.done); // how much so far, of a size nobody knows yet
     }
     if (p.filesTotal > 0)
-        parts << FW_TR("%1 of %2 files").arg(formatCount(p.filesDone), formatCount(p.filesTotal));
+        parts << FW_TR("%1 of %2 files").arg(formatCount(std::clamp<qint64>(p.filesDone, 0, p.filesTotal)), formatCount(p.filesTotal));
+    else if (p.filesDone > 0)
+        parts << (p.filesDone == 1 ? FW_TR("%1 file") : FW_TR("%1 files")).arg(formatCount(p.filesDone));
     if (p.unitIsBytes && p.ratePerSec > 0)
         parts << formatRate(p.ratePerSec);
-    if (p.etaMs >= 0)
-        parts << formatTimeLeft(p.etaMs);
+    // Unqualified, "About 3 min left" is read as the job's: never the stage's.
+    if (timeLeftMs >= 0)
+        parts << formatTimeLeft(timeLeftMs);
     return parts.join(QStringLiteral(" · "));
+}
+
+QString currentItemText(const QString& item)
+{
+    const QString whole = i18n::translate(item);
+    if (whole != item)
+        return whole;
+    const QString sep = QStringLiteral(" · ");
+    const qsizetype at = item.indexOf(sep);
+    if (at <= 0)
+        return item;
+    return i18n::translate(item.left(at)) + item.mid(at);
+}
+
+double shownFraction(const JobRecord& r)
+{
+    if (r.state == JobState::Succeeded)
+        return 1.0;
+    const double f = r.progress.overallFraction;
+    return std::isfinite(f) ? std::clamp(f, 0.0, 0.999) : 0.0;
+}
+
+QStringList stageNames(const JobRecord& r)
+{
+    return r.progress.phaseNames.isEmpty() ? r.phases : r.progress.phaseNames;
 }
 
 JobQueueModel::JobQueueModel(JobQueue& queue, QObject* parent) : QAbstractListModel(parent), m_queue(queue)
@@ -145,12 +185,12 @@ static QString elapsedText(const JobRecord& r)
     if (!r.started.isValid())
         return {};
     const QDateTime end = r.finished.isValid() ? r.finished : QDateTime::currentDateTime();
-    const qint64 s = r.started.secsTo(end);
+    const qint64 s = std::max<qint64>(0, r.started.secsTo(end)); // the clock may have been set back
     if (s < 60)
-        return QStringLiteral("%1 s").arg(s);
+        return FW_TR("%1 s").arg(s);
     if (s < 3600)
-        return QStringLiteral("%1 min %2 s").arg(s / 60).arg(s % 60);
-    return QStringLiteral("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60);
+        return FW_TR("%1 min %2 s").arg(s / 60).arg(s % 60);
+    return FW_TR("%1 h %2 min").arg(s / 3600).arg((s % 3600) / 60);
 }
 
 QVariant JobQueueModel::data(const QModelIndex& index, int role) const
@@ -170,24 +210,30 @@ QVariant JobQueueModel::data(const QModelIndex& index, int role) const
     case PhaseRole: return i18n::translate(p.phase);
     case PhaseIndexRole: return p.phaseIndex;
     case PhaseCountRole: return p.phaseCount;
-    case FractionRole: return p.overallFraction;
-    case PhaseFractionRole: return p.phaseFraction();
+    case FractionRole: return shownFraction(r);
+    case PhaseFractionRole: return p.phaseNames.isEmpty() ? p.phaseFraction() : p.phaseProgress; // the reporter's never falls back
     case IndeterminateRole: return p.indeterminate;
     case DoneRole: return p.done;
     case TotalRole: return p.total;
     case FilesDoneRole: return p.filesDone;
     case FilesTotalRole: return p.filesTotal;
-    case RateTextRole: return p.unitIsBytes && p.ratePerSec > 0 ? formatRate(p.ratePerSec) : QString();
-    case EtaTextRole: return formatTimeLeft(p.etaMs);
+    case RateTextRole: return r.state == JobState::Running && p.unitIsBytes && p.ratePerSec > 0 ? formatRate(p.ratePerSec) : QString();
+    case EtaTextRole: return r.state == JobState::Running ? formatTimeLeft(p.jobEtaMs) : QString();
     case DetailTextRole:
-        if (r.isActive())
-            return progressDetailText(p);
+        if (r.isActive()) {
+            // Paused or stopping: no speed and no time left.
+            if (r.state == JobState::Running)
+                return progressDetailText(p);
+            ProgressSnapshot still = p;
+            still.ratePerSec = 0;
+            return progressDetailText(still, -1);
+        }
         if (r.state == JobState::Succeeded && r.outcome)
             return i18n::translate(r.outcome->summary);
         if (r.error)
             return r.error->message;
         return {};
-    case CurrentItemRole: return i18n::translate(p.currentItem);
+    case CurrentItemRole: return currentItemText(p.currentItem);
     case VerificationRole: return r.outcome ? int(r.outcome->verification) : int(Verification::NotRun);
     case VerificationTextRole:
         return r.outcome ? i18n::translate(verificationName(r.outcome->verification)) : QString();

@@ -30,9 +30,12 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
     m_filter = new LogFilterModel(this);
     m_filter->setSourceModel(&m_model);
 
-    auto* copy = new IconButton(QStringLiteral("copy"), FW_TR("Copy the shown lines"), IconButton::Size::Regular, this);
+    // One kind of button in the header, each with its word.
+    auto* copy = button(FW_TR("Copy"), ButtonVariant::Secondary, QStringLiteral("copy"), this);
+    copy->setAccessibleName(FW_TR("Copy the shown lines"));
     copy->setToolTip(FW_TR("Copy the shown lines"));
-    auto* clear = new IconButton(QStringLiteral("trash"), FW_TR("Clear the view"), IconButton::Size::Regular, this);
+    auto* clear = button(FW_TR("Clear"), ButtonVariant::Secondary, QStringLiteral("trash"), this);
+    clear->setAccessibleName(FW_TR("Clear the view"));
     clear->setToolTip(FW_TR("Clear the view (the log file is kept)"));
     auto* exportBtn = button(FW_TR("Export…"), ButtonVariant::Secondary, QStringLiteral("download"), this);
     exportBtn->setToolTip(FW_TR("Save the shown lines as a text file"));
@@ -41,7 +44,7 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
     header()->addAction(clear);
     header()->addAction(exportBtn);
     header()->addAction(m_openFolder);
-    connect(copy, &QToolButton::clicked, this, [this] {
+    connect(copy, &QPushButton::clicked, this, [this] {
         QGuiApplication::clipboard()->setText(shownText());
         const int n = m_filter->rowCount();
         emit toastRequested(Tone::Ok, FW_TR("Copied"),
@@ -62,7 +65,7 @@ LogsPage::LogsPage(AppContext& ctx, LogModel& logModel, QWidget* parent)
         const QString f = m_ctx.logFilePath().isEmpty() ? Paths::logsDir() : QFileInfo(m_ctx.logFilePath()).absolutePath();
         openInFileManager(f);
     });
-    connect(clear, &QToolButton::clicked, this, [this] {
+    connect(clear, &QPushButton::clicked, this, [this] {
         m_model.clearView();
         updateCounts();
         updateFooter();
@@ -267,11 +270,15 @@ void LogsPage::refreshSources()
 void LogsPage::updateCounts()
 {
     int warn = 0, err = 0;
+    bool anyJob = false;
     for (int r = 0; r < m_model.rowCount(); ++r)
         if (const LogRecord* rec = m_model.recordAt(r)) {
             if (rec->level == LogLevel::Warning) ++warn;
             else if (rec->level == LogLevel::Error) ++err;
+            anyJob = anyJob || !rec->jobId.isEmpty();
         }
+    // A column that would be empty in every row is left out until a job logs.
+    m_table->setColumnHidden(LogModel::JobColumn, !anyJob);
     m_level->setSegmentText(2, warn > 0 ? FW_TR("Warnings %1").arg(warn) : FW_TR("Warnings"));
     m_level->setSegmentText(3, err > 0 ? FW_TR("Errors %1").arg(err) : FW_TR("Errors"));
 }

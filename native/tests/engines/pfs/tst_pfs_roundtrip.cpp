@@ -3,6 +3,7 @@
 // extraction, short (Lazy RAM-mode) images and thread-count determinism.
 
 #include "engines/pfs/PfsBuilder.h"
+#include "engines/pfs/PfsFormat.h"
 #include "engines/pfs/PfsReader.h"
 #include "engines/pfs/PfsSource.h"
 #include "engines/pfs/PfsVerify.h"
@@ -569,8 +570,8 @@ private slots:
         QCOMPARE(refreshed.amprAction, AmprIndexAction::RebuiltAlways);
         QCOMPARE(plan(ampr, pa).amprAction, AmprIndexAction::Off);
 
-        // Auto: an index that does not match the game's files is rebuilt, one
-        // that matches (also with other file times) is kept as the dump has it.
+        // Auto: an index that does not match the game's files is rebuilt, the
+        // one this build would write is kept as the dump has it.
         pa.ampr = AmprMode::Auto;
         const SourcePlan outdated = plan(ampr, pa);
         QVERIFY(outdated.amprGenerated);
@@ -586,9 +587,16 @@ private slots:
         QCOMPARE(current.amprAction, AmprIndexAction::KeptUpToDate);
         QVERIFY(!indexOf(current).generated);
         QCOMPARE(indexOf(current).absPath, QFileInfo(ampr + QStringLiteral("/ampr_emu.index")).absoluteFilePath());
-        QVERIFY(pfstest::writeFile(ampr + QStringLiteral("/eboot.bin"), "x", 1700000000)); // touched, same size
+        // Touched, same size: the runtime reports the index's time as the
+        // file's, so the old one no longer matches.
+        QVERIFY(pfstest::writeFile(ampr + QStringLiteral("/eboot.bin"), "x", 1700000000));
         const SourcePlan touched = plan(ampr, pa);
-        QCOMPARE(touched.amprAction, AmprIndexAction::KeptUpToDate);
+        QCOMPARE(touched.amprAction, AmprIndexAction::Rebuilt);
+        QVERIFY(indexOf(touched).generated);
+        QVERIFY(indexOf(touched).content != idx->content);
+        QVERIFY(amprIndexesDifferOnlyInTimes(indexOf(touched).content, idx->content));
+        QVERIFY(pfstest::writeFile(ampr + QStringLiteral("/ampr_emu.index"), indexOf(touched).content, 1600000000));
+        QCOMPARE(plan(ampr, pa).amprAction, AmprIndexAction::KeptUpToDate);
         QVERIFY(pfstest::writeFile(ampr + QStringLiteral("/eboot.bin"), "xx", 1700000000)); // another size
         QCOMPARE(plan(ampr, pa).amprAction, AmprIndexAction::Rebuilt);
         // A packed game's index lists the files inside its packs and stays.
@@ -619,6 +627,106 @@ private slots:
         QCOMPARE(amprModeFromSetting(QStringLiteral("?"), AmprMode::Missing), AmprMode::Missing);
         QVERIFY(isAmprPackIndexName(QStringLiteral("AMPR_ASSETS.index.runtime")));
         QVERIFY(!isAmprPackIndexName(QStringLiteral("ampr_emu.index")));
+    }
+
+    // The index a folder build writes is the one the AMPR index tool (and the
+    // exFAT and FFPKG builds) write for the same folder: the emulator's own
+    // files and the .pfskeep markers of empty folders are not listed, so Auto
+    // keeps an index the tool made. The dump's own index keeps the one name
+    // the runtime opens, however the dump spells it.
+    void amprIndexOfAFolderIsTheToolsIndex()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString game = tmp.filePath(QStringLiteral("game"));
+        QVERIFY(pfstest::writeFile(game + QStringLiteral("/eboot.bin"), "boot", 1600000000));
+        QVERIFY(pfstest::writeFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), "prx", 1600000001));
+        QVERIFY(pfstest::writeFile(game + QStringLiteral("/apr_emu.log"), "emulator log", 1600000002));
+        QVERIFY(pfstest::writeFile(game + QStringLiteral("/ampr_commands.bin"), "commands", 1600000003));
+        QVERIFY(pfstest::writeFile(game + QStringLiteral("/ampr_emu.index.bak"), "old index", 1600000004));
+        QVERIFY(QDir().mkpath(game + QStringLiteral("/data/empty")));
+        auto scan = scanAmprFolder(game);
+        QVERIFY(scan.ok());
+        const QByteArray tool = buildAmprIndex(amprToolRows(scan->files).rows);
+        QVERIFY(tool.startsWith("AMPRIDX3"));
+        const auto indexOf = [](const SourcePlan& p) {
+            auto it = std::find_if(p.files.begin(), p.files.end(), [](const SourceFile& f) { return f.relPath == "ampr_emu.index"; });
+            return it == p.files.end() ? SourceFile() : *it;
+        };
+        PlanOptions pa = planOptions();
+        pa.ampr = AmprMode::Refresh;
+        const SourcePlan fresh = plan(game, pa);
+        QCOMPARE(fresh.emptyFolderMarkers, 1);
+        QCOMPARE(indexOf(fresh).content, tool);
+
+        QVERIFY(pfstest::writeFile(game + QStringLiteral("/ampr_emu.index"), tool, 1600000005));
+        pa.ampr = AmprMode::Auto;
+        const SourcePlan kept = plan(game, pa);
+        QCOMPARE(kept.amprAction, AmprIndexAction::KeptUpToDate);
+        QVERIFY(!kept.amprGenerated);
+
+        // AMPR_EMU.INDEX: found on Windows, kept, and named as the runtime opens it.
+        QVERIFY(QFile::remove(game + QStringLiteral("/ampr_emu.index")));
+        QVERIFY(pfstest::writeFile(game + QStringLiteral("/AMPR_EMU.INDEX"), tool, 1600000005));
+        for (const AmprMode mode : {AmprMode::Auto, AmprMode::Missing}) {
+            pa.ampr = mode;
+            const SourcePlan upper = plan(game, pa);
+            QVERIFY(!upper.amprGenerated);
+            QCOMPARE(std::count_if(upper.files.begin(), upper.files.end(),
+                                   [](const SourceFile& f) { return asciiLower(f.relPath) == "ampr_emu.index"; }),
+                     std::ptrdiff_t(1));
+            QVERIFY(!indexOf(upper).absPath.isEmpty());
+            QVERIFY(!indexOf(upper).generated);
+        }
+        // "off" (what a conversion builds with) keeps the dump's index as it
+        // is, under that name too: only the letters' case changes.
+        pa.ampr = AmprMode::Off;
+        const SourcePlan off = plan(game, pa);
+        QCOMPARE(off.amprAction, AmprIndexAction::Off);
+        QVERIFY(!indexOf(off).generated);
+        QCOMPARE(QFileInfo(indexOf(off).absPath).fileName(), QStringLiteral("AMPR_EMU.INDEX"));
+        // An image made before that, with the folder's spelling, still
+        // verifies against the folder; so does one made now.
+        for (const bool before : {true, false}) {
+            BuildInput in;
+            in.plan = off;
+            if (before)
+                for (SourceFile& f : in.plan.files)
+                    if (f.relPath == "ampr_emu.index")
+                        f.relPath = QByteArrayLiteral("AMPR_EMU.INDEX");
+            const QString image = tmp.filePath(before ? QStringLiteral("before.ffpfsc") : QStringLiteral("now.ffpfsc"));
+            QVERIFY(writeImage(in, OutputFormat::Container, options(), image, CancellationToken()).ok());
+            VerifyExpectation ex;
+            ex.kind = VerifyExpectation::Kind::Folder;
+            ex.format = OutputFormat::Container;
+            ex.plan = &off;
+            auto r = verifyImage(image, ex, VerifyDepth::Full, CancellationToken());
+            QVERIFY(r.ok());
+            QVERIFY2(r->passed, qPrintable(r->problems.join(u'\n')));
+            QCOMPARE(r->filesChecked, qint64(off.files.size()));
+        }
+        // A game without the AMPR library never opens the file: its name stays.
+        QVERIFY(QFile::rename(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), game + QStringLiteral("/fakelib/other.sprx")));
+        for (const AmprMode mode : {AmprMode::Off, AmprMode::Auto}) {
+            pa.ampr = mode;
+            const SourcePlan plain = plan(game, pa);
+            QVERIFY(indexOf(plain).relPath.isEmpty());
+            QVERIFY(std::any_of(plain.files.begin(), plain.files.end(),
+                                [](const SourceFile& f) { return f.relPath == "AMPR_EMU.INDEX"; }));
+        }
+        QVERIFY(QFile::rename(game + QStringLiteral("/fakelib/other.sprx"), game + QStringLiteral("/fakelib/libSceAmpr.sprx")));
+
+        // Names the runtime cannot list are left out of a new index (it would set the whole index aside).
+        QVERIFY(QFile::remove(game + QStringLiteral("/AMPR_EMU.INDEX")));
+        QString deep; // five names of 210 letters: more than the 1023 bytes the runtime allows in all
+        for (int i = 0; i < 5; ++i)
+            deep += u'/' + QString(210, QChar(u'a' + i));
+        QVERIFY(pfstest::writeFile(game + deep + QStringLiteral("/far.bin"), "far", 1600000006));
+        pa.ampr = AmprMode::Auto;
+        const SourcePlan added = plan(game, pa);
+        QCOMPARE(added.amprAction, AmprIndexAction::Added);
+        QCOMPARE(added.amprLeftOut, QStringList{deep.mid(1) + QStringLiteral("/far.bin")});
+        QVERIFY(amprLeftOutLogLine(added.amprLeftOut).startsWith(QStringLiteral("ampr_emu.index: 1 file(s) left out")));
     }
 
 private:

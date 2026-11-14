@@ -34,7 +34,6 @@
 class QLineEdit;
 
 namespace fw::ui {
-class ChoiceTiles;
 class Disclosure;
 class DropZone;
 class Sheet;
@@ -74,6 +73,13 @@ public:
     void setExtractDestination(const QString& folder);
     bool verifyOnly() const; // Verify against the image's own checksums
     bool compareMode() const; // Verify against a folder or another image
+
+    // "Verify after extracting" / "Verify after converting": this job's
+    // verification.verifyAfterBuild, shown where the action's job honours it
+    // (nullptr for the other actions and for images whose extraction has no
+    // verification). It starts at the setting and is kept in step with the
+    // same row of the job options.
+    ui::Switch* verifySwitch() const;
 
     // ---- Compare. A is the open image; `b` an image or a folder; depth "full" | "structure".
     void setCompareInputs(const QString& a, const QString& b, const QString& depth = QStringLiteral("full"));
@@ -139,6 +145,8 @@ private:
     void rebuildConvertChoices();
     void ensureTree();
     bool usesGameExtract() const;
+    bool extractVerifies() const; // the extraction job of the open image has a verification step
+    void syncVerifySwitches();
     // Compare
     void updateCompareKind();
     bool checkCompareInputs(QString* problem);
@@ -188,6 +196,8 @@ private:
     // extract
     ui::PathField* m_destination = nullptr;
     QLabel* m_extractNote = nullptr; // what happens to a folder that has files in it
+    QWidget* m_extractVerifyRow = nullptr;
+    ui::Switch* m_extractVerify = nullptr;
 
     // verify / compare
     ui::Segmented* m_verifyMode = nullptr;
@@ -213,12 +223,15 @@ private:
 
     // convert
     QWidget* m_convertTilesHost = nullptr;
-    ui::ChoiceTiles* m_convertTo = nullptr;
+    OptionTiles* m_convertTo = nullptr; // the Build page's format tiles
+    void fitTreeHeight(); // the Contents list as tall as its rows (within limits)
     QString m_convertFrom; // the format the tiles were made for
     ui::PathField* m_convertOutput = nullptr;
     QWidget* m_methodRow = nullptr;
     ui::Segmented* m_method = nullptr;
     QLabel* m_methodHelp = nullptr;
+    QWidget* m_convertVerifyRow = nullptr;
+    ui::Switch* m_convertVerify = nullptr;
 
     // edit
     ui::ImageTreeReader* m_reader;

@@ -176,6 +176,11 @@ QPushButton* Sheet::addButton(const QString& text, Role role)
     const int index = m_buttonList.size();
     m_buttonList << b;
     m_roles << role;
+    if (role == Role::Aside) {
+        // At the start of the row, before the stretch, in the order added.
+        m_buttons->insertWidget(int(std::count(m_roles.cbegin(), m_roles.cend(), Role::Aside)) - 1, b);
+        return b; // acts on the content: the sheet stays open
+    }
     m_buttons->addWidget(b);
     connect(b, &QPushButton::clicked, this, [this, index] { close(index); });
     return b;
@@ -218,7 +223,13 @@ void Sheet::open()
         m_counted = true;
         ++g_openSheets;
     }
-    m_previousFocus = QApplication::focusWidget();
+    // The focus in this sheet's window, also while another window is the
+    // active one (the countdown opens with the app in the background), when
+    // QApplication::focusWidget() is that window's or none.
+    QWidget* focus = QApplication::focusWidget();
+    if (!focus || focus->window() != window())
+        focus = window()->focusWidget();
+    m_previousFocus = focus;
     m_previousByKeyboard = hasKeyboardFocus(m_previousFocus);
     m_closing = false;
     setAttribute(Qt::WA_TransparentForMouseEvents, false);
@@ -226,10 +237,27 @@ void Sheet::open()
     relayout();
     raise();
     show();
+    // A sheet that keeps on top (the end-of-queue countdown) stays above this
+    // one and keeps the keyboard; this one gets the focus when that one closes.
+    Sheet* above = keepOnTopAbove();
+    if (above)
+        above->raise();
     if (motion::enabled()) { // the scrim fades in, the panel rises and fades in
         m_shown->setDuration(motion::base);
         m_shown->jumpTo(0.0);
         m_shown->animateTo(1.0);
+    }
+    if (above) {
+        // The focus is in that sheet: where that one would have given it back
+        // is now this one's to give back (the other is deleted when it closes).
+        if (!m_previousFocus || m_previousFocus == above || above->isAncestorOf(m_previousFocus)) {
+            m_previousFocus = above->m_previousFocus;
+            m_previousByKeyboard = above->m_previousByKeyboard;
+        }
+        QPushButton* target = defaultButton();
+        above->m_previousFocus = target ? static_cast<QWidget*>(target) : this;
+        above->m_previousByKeyboard = target != nullptr;
+        return;
     }
     if (QPushButton* focusTarget = defaultButton()) {
         window()->setAttribute(Qt::WA_KeyboardFocusChange, true);
@@ -239,17 +267,31 @@ void Sheet::open()
     }
 }
 
-// The safe action for destructive dialogs, the primary one otherwise.
+// The open sheet of the same window that keeps on top of this one, or null
+// (also for a sheet that keeps on top itself).
+Sheet* Sheet::keepOnTopAbove() const
+{
+    Sheet* above = nullptr;
+    if (!m_keepOnTop && parentWidget())
+        for (QObject* o : parentWidget()->children())
+            if (auto* s = qobject_cast<Sheet*>(o); s && s != this && s->m_keepOnTop && s->isOpen())
+                above = s;
+    return above;
+}
+
+// The safe action for destructive dialogs, the primary one otherwise; an
+// information sheet's Close when it has no primary action.
 QPushButton* Sheet::defaultButton() const
 {
     const bool destructive = m_roles.contains(Role::Destructive);
-    for (int i = 0; i < m_roles.size(); ++i) {
-        if (destructive && m_roles[i] == Role::Safe)
+    const Role wanted = destructive ? Role::Safe : m_roles.contains(Role::Primary) ? Role::Primary : Role::Close;
+    for (int i = 0; i < m_roles.size(); ++i)
+        if (m_roles[i] == wanted)
             return m_buttonList[i];
-        if (!destructive && m_roles[i] == Role::Primary)
+    for (int i = int(m_roles.size()) - 1; i >= 0; --i)
+        if (m_roles[i] != Role::Aside)
             return m_buttonList[i];
-    }
-    return m_buttonList.isEmpty() ? nullptr : m_buttonList.last();
+    return nullptr;
 }
 
 int Sheet::exec()
@@ -259,9 +301,13 @@ int Sheet::exec()
     m_loop = &loop;
     m_answered = false;
     QPointer<Sheet> self(this);
+    // The answer as it was given: without a fade the sheet deletes itself
+    // right after it, and may be gone before this loop returns.
+    int answer = -1;
+    connect(this, &Sheet::finished, &loop, [&answer](int r) { answer = r; });
     loop.exec(QEventLoop::DialogExec);
     if (!self)
-        return -1; // destroyed with its host while it was open: no answer
+        return answer; // -1: destroyed with its host while it was open, no answer
     m_loop = nullptr;
     // The loop also ends when the application quits: that is not "the first
     // button" but no answer, i.e. the safe one.
@@ -275,8 +321,10 @@ void Sheet::close(int result)
     if (m_closing)
         return; // answered already: it is only fading away
     if (result < 0) {
+        // Esc: an information sheet's Close, else the safe button.
+        const Role safe = m_roles.contains(Role::Close) ? Role::Close : Role::Safe;
         for (int i = 0; i < m_roles.size(); ++i)
-            if (m_roles[i] == Role::Safe) {
+            if (m_roles[i] == safe) {
                 result = i;
                 break;
             }
@@ -287,6 +335,27 @@ void Sheet::close(int result)
         m_counted = false;
         --g_openSheets;
     }
+    // A sheet opened while this one had the keyboard (or the one that keeps
+    // on top, which gave the keyboard's way back to this one) gives the focus
+    // back where this one would have. The keyboard stays where it is while
+    // another sheet still open holds it (one opened later, or the countdown
+    // above this one); that sheet gives it back in turn. Where the focus is
+    // is read before hide() moves it on.
+    QWidget* focus = window()->focusWidget();
+    const bool focusHere = focus && (focus == this || isAncestorOf(focus));
+    bool focusInAnotherSheet = false;
+    if (parentWidget())
+        for (QObject* o : parentWidget()->children()) {
+            auto* s = qobject_cast<Sheet*>(o);
+            if (!s || s == this || !s->isOpen())
+                continue;
+            if (s->m_previousFocus == this || isAncestorOf(s->m_previousFocus)) {
+                s->m_previousFocus = m_previousFocus;
+                s->m_previousByKeyboard = m_previousByKeyboard;
+            }
+            if (!focusHere && focus && (focus == s || s->isAncestorOf(focus)))
+                focusInAnotherSheet = true;
+        }
     // With motion the sheet fades away (fast) instead of vanishing: it is
     // answered and counted as closed now, lets the mouse through, and is
     // hidden and deleted when the fade ends.
@@ -300,12 +369,13 @@ void Sheet::close(int result)
     } else {
         hide();
     }
-    if (m_previousFocus) // a keyboard user gets the ring back where it was
+    if (m_previousFocus && !focusInAnotherSheet) // a keyboard user gets the ring back where it was
         m_previousFocus->setFocus(m_previousByKeyboard ? Qt::TabFocusReason : Qt::OtherFocusReason);
     if (m_loop)
         m_loop->exit(result);
     if (!fade)
         deleteLater();
+    emit finished(result);
 }
 
 void Sheet::paintEvent(QPaintEvent*)
@@ -437,14 +507,24 @@ Sheet* Sheet::notify(QWidget* host, const QString& title, const QString& text, I
 namespace {
 constexpr int kToastShadow = 16; // how far a toast's painted shadow reaches
 constexpr int kToastShadowDrop = 4;
+} // namespace
 
 // Where a toast stands in the window, `slide` px short of its place: at the
-// right edge, or the left one right to left (it slides in from that edge).
-int toastX(const QWidget* host, int slide)
+// right edge, or the left one right to left (it slides in from that edge),
+// clear of the page's scroll bar.
+int ToastHost::toastX(int slide) const
 {
-    return host->isRightToLeft() ? space::lg - slide : host->width() - space::lg - size::toast + slide;
+    const QWidget* host = parentWidget();
+    const int edge = space::lg + m_endInset;
+    return host->isRightToLeft() ? edge - slide : host->width() - edge - size::toast + slide;
 }
-} // namespace
+
+void ToastHost::setInsets(int bottom, int end)
+{
+    m_bottomInset = std::max(0, bottom);
+    m_endInset = std::max(0, end);
+    relayout();
+}
 
 ToastHost::ToastHost(QWidget* host) : QWidget(host)
 {
@@ -564,10 +644,10 @@ void ToastHost::show(Tone tone, const QString& title, const QString& body, const
             }
             t->setProperty(kSlide, qRound((1.0 - v) * 12));
             if (parentWidget())
-                t->move(toastX(parentWidget(), t->property(kSlide).toInt()), t->y());
+                t->move(toastX(t->property(kSlide).toInt()), t->y());
             update(); // its shadow follows
         });
-        t->move(toastX(parentWidget(), 12), t->y());
+        t->move(toastX(12), t->y());
         in->animateTo(1.0);
     }
 
@@ -642,7 +722,8 @@ void ToastHost::relayout()
             sheet = s;
             break; // the lowest one: children are in stacking order
         }
-    int y = parentWidget()->height() - space::lg;
+    // Above the status bar, never on it.
+    int y = parentWidget()->height() - m_bottomInset - space::lg;
     QRect all;
     for (auto it = m_toasts.rbegin(); it != m_toasts.rend(); ++it) {
         QWidget* t = *it;
@@ -650,12 +731,12 @@ void ToastHost::relayout()
         const int h = l && l->hasHeightForWidth() ? l->totalHeightForWidth(size::toast) : t->sizeHint().height();
         y -= h;
         // kSlide: how far a toast that is still sliding in is from its place.
-        t->setGeometry(toastX(parentWidget(), t->property(kSlide).toInt()), y, size::toast, h);
+        t->setGeometry(toastX(t->property(kSlide).toInt()), y, size::toast, h);
         if (sheet)
             t->stackUnder(sheet);
         else
             t->raise();
-        all |= QRect(toastX(parentWidget(), 0), y, size::toast, h);
+        all |= QRect(toastX(0), y, size::toast, h);
         y -= space::sm;
     }
     // The shadows: this widget, just large enough for them (and for a toast

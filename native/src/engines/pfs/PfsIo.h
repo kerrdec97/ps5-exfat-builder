@@ -115,6 +115,8 @@ public:
     Status writeZeros(qint64 offset, qint64 len);
     Status flush();
     Status resize(qint64 size);
+    // Writes what is buffered and flushes the file to the drive (flushToDisk)
+    // before closing it.
     Status close();
     QString path() const { return m_path; }
 

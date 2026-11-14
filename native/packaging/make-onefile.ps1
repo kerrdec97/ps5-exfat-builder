@@ -11,11 +11,18 @@
   elsewhere without touching the deploy folder ("<source>=<path inside>").
 
   The payload is staged in a temporary copy; the deploy folder is not changed.
-  In the copy:
+  The copy gets finish-deploy.ps1 (nothing changes when the deploy folder had
+  it already, as make-release.ps1 does):
    * vc_redist.x64.exe (the VC++ installer windeployqt adds) is left out, and
    * the VC++ runtime DLLs (vcruntime140*.dll, msvcp140*.dll, ...) from the
      MSVC redist folder are added next to the program, so it starts on a PC
      without the VC++ Redistributable. -NoAppLocalCrt skips both.
+   * Qt plugins and DLLs the app never loads are left out.
+
+  The payload must not hold tools\fpkg-toolkit, tools\fpkg-cli or
+  tools\youtube (the Sony Publishing Tools, fpkg-cli and YouTube packages of
+  a private build): packing stops unless -AllowPrivateTools is given, which
+  make-release.ps1 passes for a -Private... build only.
 
   Already-compressed files are stored as they are (the packer stores every
   chunk that does not shrink by 3 %); everything else is LZMS-compressed.
@@ -42,6 +49,7 @@ param(
     [string[]]$Extra = @(),
     [string]$CrtDir = '',
     [switch]$NoAppLocalCrt,
+    [switch]$AllowPrivateTools,
     [ValidateSet('lzms', 'xpress-huff', 'mszip', 'store')] [string]$Method = 'lzms'
 )
 
@@ -69,22 +77,7 @@ function Copy-Tree([string]$from, [string]$to) {
     if ($LASTEXITCODE -ge 8) { throw "Copying $from to $to failed (robocopy $LASTEXITCODE)" }
     $global:LASTEXITCODE = 0
 }
-
-function Find-CrtDir {
-    $candidates = @()
-    if ($env:VCToolsRedistDir) { $candidates += Get-ChildItem -Directory -Path (Join-Path $env:VCToolsRedistDir 'x64') -Filter 'Microsoft.VC14*.CRT' -ErrorAction SilentlyContinue }
-    if (-not $candidates) {
-        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-        if (Test-Path $vswhere) {
-            foreach ($vs in @(& $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)) {
-                $candidates += Get-ChildItem -Directory -Path (Join-Path $vs 'VC\Redist\MSVC\*\x64') -Filter 'Microsoft.VC14*.CRT' -ErrorAction SilentlyContinue
-            }
-        }
-    }
-    $best = $candidates | Sort-Object { $_.Parent.Parent.Name -as [version] }, Name -Descending | Select-Object -First 1
-    if ($best) { return $best.FullName }
-    return $null
-}
+. (Join-Path $PSScriptRoot 'private-files.ps1')
 
 $stage = Join-Path ([IO.Path]::GetTempPath()) ('fw-onefile-stage-' + [Guid]::NewGuid().ToString('N').Substring(0, 12))
 $started = Get-Date
@@ -119,16 +112,11 @@ try {
             Copy-Item -LiteralPath $src -Destination $target -Force
         }
     }
-    if (-not $NoAppLocalCrt) {
-        $redist = Join-Path $stage 'vc_redist.x64.exe'
-        if (Test-Path -LiteralPath $redist) { Remove-Item -LiteralPath $redist -Force; Write-Host '   - vc_redist.x64.exe (VC++ runtime DLLs are added instead)' }
-        if (-not $CrtDir) { $CrtDir = Find-CrtDir }
-        if (-not $CrtDir -or -not (Test-Path -LiteralPath $CrtDir)) {
-            throw 'The MSVC redist folder (Microsoft.VC14x.CRT) was not found. Run from a VS developer prompt, pass -CrtDir, or -NoAppLocalCrt.'
-        }
-        $dlls = @(Get-ChildItem -LiteralPath $CrtDir -Filter '*.dll')
-        foreach ($dll in $dlls) { Copy-Item -LiteralPath $dll.FullName -Destination $stage -Force }
-        Write-Host "   + $($dlls.Count) VC++ runtime DLLs from $CrtDir"
+    & (Join-Path $PSScriptRoot 'finish-deploy.ps1') -DeployDir $stage -CrtDir $CrtDir -NoAppLocalCrt:$NoAppLocalCrt
+    if (-not $AllowPrivateTools) {
+        # A public exe never carries the private build's Sony, fpkg-cli or YouTube files.
+        $private = @(Find-PrivateFiles $stage)
+        if ($private.Count -gt 0) { throw "The payload holds private files ($($private -join ', ')). Remove them, or build a private exe with make-release.ps1 -Private..." }
     }
 
     $files = @(Get-ChildItem -LiteralPath $stage -Recurse -File)

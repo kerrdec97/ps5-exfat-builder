@@ -10,6 +10,7 @@
 #include "core/ProcessRunner.h"
 #include "support/TestSupport.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QDateTime>
@@ -20,8 +21,13 @@
 #include <QThread>
 #include <QThreadPool>
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <tlhelp32.h>
 #else
 #include <utime.h>
 #endif
@@ -209,6 +215,29 @@ private slots:
         QVERIFY(hostNameKey(QString::fromUtf8("stra\xc3\x9f" "e.dat")) != hostNameKey(QStringLiteral("STRASSE.dat")));
         QCOMPARE(hostNameKey(QString::fromUtf8("stra\xc3\x9f" "e.dat")).size(), 10);
         QCOMPARE(hostNameKey(QString::fromUtf8("\xcf\x83")), hostNameKey(QString::fromUtf8("\xcf\x82"))); // σ and ς
+    }
+
+    // Every name Windows opens as a device gets the prefix: the superscript
+    // port numbers, the console names, and a space before the extension.
+    void deviceNamesGetAPrefix()
+    {
+        const QString sup1 = QStringLiteral("¹"), sup2 = QStringLiteral("²"), sup3 = QStringLiteral("³");
+        QCOMPARE(hostFileName(QStringLiteral("COM") + sup1, true), QStringLiteral("_COM") + sup1);
+        QCOMPARE(hostFileName(QStringLiteral("com") + sup3 + QStringLiteral(".bin"), true), QStringLiteral("_com") + sup3 + QStringLiteral(".bin"));
+        QCOMPARE(hostFileName(QStringLiteral("LPT") + sup2 + QStringLiteral(".tar.gz"), true), QStringLiteral("_LPT") + sup2 + QStringLiteral(".tar.gz"));
+        QCOMPARE(hostFileName(QStringLiteral("CONIN$"), true), QStringLiteral("_CONIN$"));
+        QCOMPARE(hostFileName(QStringLiteral("conout$.txt"), true), QStringLiteral("_conout$.txt"));
+        QCOMPARE(hostFileName(QStringLiteral("CON .txt"), true), QStringLiteral("_CON .txt"));
+        QCOMPARE(hostFileName(QStringLiteral("nul  .bin"), true), QStringLiteral("_nul  .bin"));
+        QCOMPARE(hostFileName(QStringLiteral("COM9"), true), QStringLiteral("_COM9"));
+        // Not devices: other numbers, longer names, a name that only starts like one.
+        for (const QString& plain : {QStringLiteral("COM10"), QStringLiteral("COM0"), QStringLiteral("COMFY.bin"), QStringLiteral("CONINX"),
+                                     QStringLiteral("CONOUT"), QStringLiteral("LPT") + sup1 + sup2, QStringLiteral(" CON.txt"),
+                                     QStringLiteral("x") + sup1})
+            QCOMPARE(hostFileName(plain, true), plain);
+        QCOMPARE(hostFileName(QStringLiteral("COM") + sup1, false), QStringLiteral("COM") + sup1);
+        if (hostUsesWindowsNames())
+            QCOMPARE(hostEntryName(QStringLiteral("COM") + sup2), QStringLiteral("_COM") + sup2);
     }
 
     void jsonRejectsMalformedWithPosition()
@@ -489,6 +518,108 @@ private slots:
         QVERIFY(QDir(notOurs).removeRecursively());
     }
 
+    // Two copies of the app (an installed and a portable one) may share the
+    // temporary folder chosen in Settings. A job folder whose owner still
+    // runs is in use: neither "Clear" nor the start-up sweep takes it, and it
+    // is not counted as left behind. One whose owner has ended, or that a job
+    // kept (Keep job temporary folders), goes as before.
+    void sweepLeavesFoldersStillInUse()
+    {
+        const QString custom = m_root.filePath(QStringLiteral("shared temp"));
+        TempDir running(QStringLiteral("job-J121212-001"), custom);
+        QVERIFY(running.isValid());
+        QVERIFY(fwtest::writeTextFile(running.filePath(QStringLiteral("tree/eboot.bin")), "x"));
+        // The other copy's running job: its marker names a process that runs.
+        const QString other = custom + QStringLiteral("/fw-job-J121212-002-20260101121212-0a0b0c");
+        QVERIFY(QDir().mkpath(other));
+        QVERIFY(QFile::copy(running.filePath(TempDir::ownerMarkerName()), other + u'/' + TempDir::ownerMarkerName()));
+        // Left by copies that have ended: one whose process id now belongs to
+        // a process started at another time, one whose process is gone.
+        const QString reused = custom + QStringLiteral("/fw-job-J121212-003-20260101121212-0d0e0f");
+        const QString gone = custom + QStringLiteral("/fw-job-J121212-004-20260101121212-101112");
+        QVERIFY(fwtest::writeTextFile(reused + u'/' + TempDir::ownerMarkerName(),
+                                      "fw-temp 1\nowner " + QByteArray::number(QCoreApplication::applicationPid()) + " 1\n"));
+        QVERIFY(fwtest::writeTextFile(gone + u'/' + TempDir::ownerMarkerName(), "fw-temp 1\nowner 2147483644 0\n"));
+        QString kept;
+        {
+            TempDir t(QStringLiteral("job-J121212-005"), custom);
+            QVERIFY(t.isValid());
+            t.keep();
+            kept = t.path();
+        }
+        QVERIFY(TempDir::isInUse(running.path()));
+        QVERIFY(TempDir::isInUse(other));
+        qint64 left = 0;
+        for (const QString& f : {reused, gone, kept}) {
+            QVERIFY2(TempDir::isOwnedFolder(f) && !TempDir::isInUse(f), qPrintable(f));
+            left += QFileInfo(f + u'/' + TempDir::ownerMarkerName()).size();
+        }
+        QCOMPARE(Paths::tempUsageBytesIn(custom), left);
+        QCOMPARE(Paths::sweepStaleTempIn(custom, 0), 3);
+        QCOMPARE(readAll(running.filePath(QStringLiteral("tree/eboot.bin"))), QByteArray("x"));
+        QVERIFY(QFileInfo(other).isDir());
+        for (const QString& f : {reused, gone, kept})
+            QVERIFY2(!QFileInfo::exists(f), qPrintable(f));
+        // In use is in use, however old it looks.
+        QVERIFY(setFolderAgeDays(other, 3));
+        QCOMPARE(Paths::sweepStaleTempIn(custom, 24), 0);
+        QVERIFY(QFileInfo(other).isDir());
+
+        // The same in the app's own temp root.
+        {
+            TempDir own(QStringLiteral("y2jb"));
+            QVERIFY(own.isValid());
+            (void)Paths::sweepStaleTemp(0);
+            QVERIFY(QFileInfo(own.path()).isDir());
+        }
+        QVERIFY(QDir(other).removeRecursively());
+    }
+
+    // A crashed job's process id may since have gone to a process of another
+    // account (a service) that this user cannot open. Every copy of the app
+    // the user starts can be opened, so with the start time on record that
+    // folder is left behind: the sweep takes it and Clear counts it. Without a
+    // start time nothing tells the two apart, and the folder stays.
+    void sweepTakesAFolderWhoseOwnerIdWentToAnotherAccount()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("Windows process ids");
+#else
+        DWORD denied = 0;
+        const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        QVERIFY(snap != INVALID_HANDLE_VALUE);
+        PROCESSENTRY32W pe{};
+        pe.dwSize = sizeof pe;
+        for (BOOL more = Process32FirstW(snap, &pe); more && !denied; more = Process32NextW(snap, &pe)) {
+            if (pe.th32ProcessID == 0)
+                continue;
+            if (const HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID))
+                CloseHandle(h);
+            else if (GetLastError() == ERROR_ACCESS_DENIED)
+                denied = pe.th32ProcessID;
+        }
+        CloseHandle(snap);
+        if (!denied) { // run as an administrator: System opens, so the start time tells instead
+            qInfo("every running process opens; System (4) stands in for another account's process");
+            denied = 4;
+        }
+        const QString custom = m_root.filePath(QStringLiteral("shared temp 2"));
+        const QString reused = custom + QStringLiteral("/fw-job-J131313-001-20260101131313-0a0b0c");
+        const QString unknown = custom + QStringLiteral("/fw-job-J131313-002-20260101131313-0d0e0f");
+        QVERIFY(fwtest::writeTextFile(reused + u'/' + TempDir::ownerMarkerName(),
+                                      "fw-temp 1\nowner " + QByteArray::number(qulonglong(denied)) + " 1\n"));
+        QVERIFY(fwtest::writeTextFile(unknown + u'/' + TempDir::ownerMarkerName(),
+                                      "fw-temp 1\nowner " + QByteArray::number(qulonglong(denied)) + " 0\n"));
+        QVERIFY(!TempDir::isInUse(reused));
+        QVERIFY(TempDir::isInUse(unknown));
+        QCOMPARE(Paths::tempUsageBytesIn(custom), QFileInfo(reused + u'/' + TempDir::ownerMarkerName()).size());
+        QCOMPARE(Paths::sweepStaleTempIn(custom, 0), 1);
+        QVERIFY(!QFileInfo::exists(reused));
+        QVERIFY(QFileInfo(unknown).isDir());
+        QVERIFY(QDir(unknown).removeRecursively());
+#endif
+    }
+
     void crashFilesAreListedNewestFirst()
     {
         const QString dir = m_root.filePath(QStringLiteral("crashes"));
@@ -509,6 +640,118 @@ private slots:
         const QStringList listed = crash::previousCrashFiles(dir);
         QCOMPARE(listed.size(), 2);
         QCOMPARE(QFileInfo(listed.first()).fileName(), QStringLiteral("crash-20260302-101500.txt"));
+    }
+
+    // Pausing the job holds the tool and what it started: neither makes a
+    // step while paused, and the pause does not count against the timeout
+    // (the run takes longer than the timeout, the tool's own work does not).
+    void pauseHoldsTheToolAndItsTimeout()
+    {
+        const QString ticks = m_root.filePath(QStringLiteral("grandchild.ticks"));
+        QFile::remove(ticks);
+        ProcessSpec spec;
+        spec.program = fwtest::helperPath();
+        spec.arguments = {QStringLiteral("spawn-tick"), QStringLiteral("40"), QDir::toNativeSeparators(ticks)};
+        spec.timeout = std::chrono::milliseconds(4000);
+        CancellationSource cs;
+        std::atomic<int> last{0};
+        std::atomic<int> before{-1}, after{-1};
+        std::atomic<qint64> grandBefore{-1}, grandAfter{-1};
+        QElapsedTimer t;
+        t.start();
+        std::thread controller([&] {
+            for (int i = 0; i < 1000 && (last.load() < 3 || QFileInfo(ticks).size() < 3); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            cs.pause();
+            std::this_thread::sleep_for(std::chrono::milliseconds(400)); // lines already in the pipe arrive
+            before = last.load();
+            grandBefore = QFileInfo(ticks).size();
+            std::this_thread::sleep_for(std::chrono::milliseconds(4500));
+            after = last.load();
+            grandAfter = QFileInfo(ticks).size();
+            cs.resume();
+        });
+        auto r = runProcess(spec, cs.token(), [&](const QString& line, bool) {
+            if (line.startsWith(QStringLiteral("tick ")))
+                last = line.mid(5).toInt();
+        });
+        const qint64 took = t.elapsed();
+        controller.join();
+        QVERIFY(r.ok());
+        QVERIFY2(before.load() > 0 && before.load() < 40, qPrintable(QString::number(before.load())));
+        QVERIFY2(grandBefore.load() > 0, "the helper's second process never ticked");
+        QCOMPARE(after.load(), before.load());           // the tool made no step while paused
+        QCOMPARE(grandAfter.load(), grandBefore.load()); // nor did what it started
+        QVERIFY2(!r->timedOut, qPrintable(QString::number(took)));
+        QVERIFY(r->succeeded());
+        QCOMPARE(last.load(), 40); // it went on after the pause
+        QVERIFY2(took > spec.timeout.count(), qPrintable(QString::number(took)));
+    }
+
+    // A cancel during a pause ends the held tool and what it started.
+    void cancelWhilePausedEndsTheTool()
+    {
+        const QString pidFile = m_root.filePath(QStringLiteral("paused-grandchild.pid"));
+        QFile::remove(pidFile);
+        ProcessSpec spec;
+        spec.program = fwtest::helperPath();
+        spec.arguments = {QStringLiteral("spawn-sleep"), QStringLiteral("60000"), QDir::toNativeSeparators(pidFile)};
+        spec.timeout = std::chrono::milliseconds(3000); // never reached: the pause stops its clock
+        CancellationSource cs;
+        std::atomic<qint64> cancelledAt{0};
+        QElapsedTimer t;
+        t.start();
+        std::thread controller([&] {
+            for (int i = 0; i < 3000 && !QFileInfo::exists(pidFile); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            cs.pause();
+            std::this_thread::sleep_for(std::chrono::milliseconds(4000));
+            cancelledAt = t.elapsed();
+            cs.cancel();
+        });
+        auto r = runProcess(spec, cs.token());
+        const qint64 returnedAt = t.elapsed();
+        controller.join();
+        QVERIFY(r.ok());
+        QVERIFY(r->cancelled);
+        QVERIFY(!r->timedOut);
+        QVERIFY2(returnedAt - cancelledAt.load() < 8000, qPrintable(QString::number(returnedAt - cancelledAt.load())));
+        QFile f(pidFile);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const qint64 grandchild = f.readAll().trimmed().toLongLong();
+        QVERIFY(grandchild > 0);
+        QTRY_VERIFY2_WITH_TIMEOUT(!fwtest::processIsRunning(grandchild), qPrintable(QString::number(grandchild)), 10000);
+    }
+
+    // A data folder deep enough that the crash files' paths pass MAX_PATH
+    // (a portable copy in a deep folder): the dump and the report are still
+    // written, and the next start lists them.
+    void crashFilesAreWrittenInALongFolder()
+    {
+#ifndef Q_OS_WIN
+        QSKIP("crash dumps are written on Windows only");
+#endif
+        QString dir = m_root.filePath(QStringLiteral("long"));
+        while (dir.size() < 280)
+            dir += u'/' + QString(60, u'd');
+        dir += QStringLiteral("/crashes");
+        crash::install(dir);
+        QVERIFY(QFileInfo(dir).isDir());
+        QVERIFY(crash::previousCrashFiles(dir).isEmpty());
+        QCOMPARE(crash::writeReportForTesting(), 2);
+        const QStringList files = crash::previousCrashFiles(dir);
+        QCOMPARE(files.size(), 2);
+        for (const QString& f : files) {
+            QVERIFY2(f.size() > 300, qPrintable(f));
+            QVERIFY2(QFileInfo(f).size() > 0, qPrintable(f));
+        }
+        const QString txt = files.filter(QStringLiteral(".txt")).value(0);
+        QVERIFY(readAll(txt).contains("crashed: exception"));
+        // An ordinary folder, and one given with a trailing separator, still work.
+        const QString shortDir = m_root.filePath(QStringLiteral("crashes-short/"));
+        crash::install(shortDir);
+        QCOMPARE(crash::writeReportForTesting(), 2);
+        QCOMPARE(crash::previousCrashFiles(shortDir).size(), 2);
     }
 
     void cpuLimitCanBeAppliedWhileRunning()

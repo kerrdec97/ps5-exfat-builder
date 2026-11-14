@@ -193,6 +193,12 @@ struct Extractor {
                 if (progress.cancel)
                     ok = false;
             }
+            // On the disk before the marker says "complete": after a power cut
+            // a folder with a marker must not hold files whose data never got there.
+            if (ok && !FlushFileBuffers(h)) {
+                setError(L"Cannot write " + path + L": " + errorText(GetLastError()));
+                ok = false;
+            }
             CloseHandle(h);
             if (!ok)
                 break;
@@ -246,7 +252,27 @@ bool openPayload(Payload& p, std::wstring& err)
     return true;
 }
 
-std::vector<std::wstring> runtimeRoots(const Payload& p, bool portable)
+bool longPathsEnabled()
+{
+    wchar_t b[8] = {};
+    const DWORD n = GetEnvironmentVariableW(L"FW_ONEFILE_SHORT_PATHS", b, 8);
+    if (n > 0 && n < 8 && b[0] != L'0')
+        return false;
+    using Fn = BOOLEAN(NTAPI*)();
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto fn = ntdll ? reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlAreLongPathsEnabled"))) : nullptr;
+    return fn && fn() != 0; // older than Windows 10 1607: never
+}
+
+size_t longestRuntimePath(const Payload& p)
+{
+    size_t longest = 0;
+    for (const File& f : p.index.files)
+        longest = std::max(longest, nativeRel(f.path).size());
+    return 1 + p.folderName.size() + 1 + longest; // "\<folder>\<file>"
+}
+
+std::vector<std::wstring> runtimeRoots(const Payload& p, bool portable, TraceFn trace)
 {
     std::vector<std::wstring> roots;
     const std::wstring tail = std::wstring(L"\\") + kVendor + L"\\" + kProduct + L"\\runtime";
@@ -279,7 +305,20 @@ std::vector<std::wstring> runtimeRoots(const Payload& p, bool portable)
         if (!dup)
             unique.push_back(r);
     }
-    return unique;
+    // Unpacking works at any depth (\\?\ paths), starting the program and
+    // loading its DLLs and plug-ins does not without long path support.
+    if (longPathsEnabled())
+        return unique;
+    const size_t need = longestRuntimePath(p);
+    std::vector<std::wstring> fit;
+    for (const auto& r : unique) {
+        if (r.size() + need < MAX_PATH)
+            fit.push_back(r);
+        else if (trace)
+            trace(L"skipping " + r + L": too deep for paths of " + std::to_wstring(MAX_PATH) +
+                  L" characters (long paths are off in Windows)");
+    }
+    return fit.empty() ? unique : fit;
 }
 
 HANDLE openIfComplete(const std::wstring& dir, const Payload& p)
@@ -293,13 +332,18 @@ HANDLE openIfComplete(const std::wstring& dir, const Payload& p)
     DWORD n = 0;
     const bool read = ReadFile(h, got.data(), DWORD(got.size()), &n, nullptr);
     got.resize(n);
-    bool ok = read && got == expected;
+    // Every file was written before the marker. One written later has been
+    // changed since it was unpacked (a size check alone misses a DLL that was
+    // altered in place), so the copy is not used.
+    FILETIME markerWritten{};
+    bool ok = read && got == expected && GetFileTime(h, nullptr, nullptr, &markerWritten);
     for (size_t i = 0; ok && i < p.index.files.size(); ++i) {
         const File& f = p.index.files[i];
         WIN32_FILE_ATTRIBUTE_DATA a{};
         ok = GetFileAttributesExW(extendedPath(dir + L"\\" + nativeRel(f.path)).c_str(), GetFileExInfoStandard, &a) &&
              !(a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-             ((uint64_t(a.nFileSizeHigh) << 32) | a.nFileSizeLow) == f.rawSize;
+             ((uint64_t(a.nFileSizeHigh) << 32) | a.nFileSizeLow) == f.rawSize &&
+             CompareFileTime(&a.ftLastWriteTime, &markerWritten) <= 0;
     }
     if (!ok) {
         CloseHandle(h);
@@ -412,7 +456,7 @@ Install install(const Payload& p, const std::wstring& root, Progress& progress, 
         const std::string text = markerText(p);
         m = CreateFileW(extendedPath(tmp + L"\\" + kMarkerName).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
                         FILE_ATTRIBUTE_NORMAL, nullptr);
-        const bool ok = m != INVALID_HANDLE_VALUE && writeAll(m, text.data(), text.size());
+        const bool ok = m != INVALID_HANDLE_VALUE && writeAll(m, text.data(), text.size()) && FlushFileBuffers(m);
         if (m != INVALID_HANDLE_VALUE)
             CloseHandle(m);
         if (!ok) {

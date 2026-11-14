@@ -62,6 +62,8 @@ public:
     // passes none and the job refuses any other address.
     void checkForUpdates(bool silent, const QString& apiUrl = {});
     void setSidebarCompact(bool compact);
+    // The "When the queue finishes" countdown while it is open (else null).
+    ui::Sheet* afterQueueCountdown() const { return m_countdown; }
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -70,6 +72,7 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void buildPages();
@@ -78,6 +81,7 @@ private:
     void onJobFinished(const QString& id);
     void onQueueFinished(int succeeded, int failed, int cancelled);
     void onActionDue(power::Action action, int delaySeconds, int succeeded, int failed);
+    QString workOutsideTheQueue() const;
     void updateStatus();
     void updateChips();
     void refreshFreeSpace();
@@ -91,6 +95,7 @@ private:
     void runUpdateAction();
     void restoreWindowState();
     void saveWindowState();
+    void showDemoShell(const QString& key, const QString& state); // screenshots: chips and status bar for a page's demo state
     pages::Page* currentPageWidget() const;
 
     AppContext& m_ctx;
@@ -137,6 +142,7 @@ private:
     QPointer<ui::Sheet> m_countdown;
     QTimer m_freeSpaceTimer;
     bool m_userCompact = false; // the sidebar is collapsed (the header's menu button; remembered)
+    bool m_narrow = false;      // the window is narrower than size::sidebarFoldBelow: the sidebar shows its rail
     bool m_closeInProgress = false; // closeEvent() is waiting for the backport engine to stop
 };
 

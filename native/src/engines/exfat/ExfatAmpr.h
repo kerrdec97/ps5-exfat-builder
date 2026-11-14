@@ -29,6 +29,7 @@ void placeAmprIndex(SourceTree& tree, const QString& indexFile);
 struct AmprPlacement {
     pfs::AmprIndexAction action = pfs::AmprIndexAction::Off;
     QString indexFile; // set when the tree got a new index: the file in `tempDir` that holds it
+    QStringList leftOut; // the same: files it does not list (pfs::amprLeftOutLogLine)
 };
 // Decides and, when the image gets a new index, writes it into `tempDir` and
 // places it in `tree`.

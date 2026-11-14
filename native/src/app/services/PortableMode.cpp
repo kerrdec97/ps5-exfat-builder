@@ -100,13 +100,23 @@ Result<Outcome> makePortable(const Plan& plan, bool copyData)
                 out.kept << name;
                 continue;
             }
+            // Whole or not at all, also when the app or the computer stops half-way
+            // through: written under a name of its own, then renamed (never over a
+            // file). A half-copied settings.json under its real name would be
+            // taken for the user's own file by the next attempt and kept.
+            const QString partial = to + QStringLiteral(".fw-copy");
+            QFile::remove(partial); // what an attempt that was cut short left
             QFile source(from);
-            if (!source.copy(to)) // never over an existing file, and whole or not at all
+            const bool copied = source.copy(partial);
+            const QString why = copied ? QString() : source.errorString();
+            if (!copied || !QFile::rename(partial, to)) {
+                QFile::remove(partial);
                 return Error(ErrorCode::IoError,
                              QStringLiteral("%1 could not be copied to %2. This copy was not made portable; what was copied so far "
                                             "can stay or be deleted.")
                                  .arg(name, native(plan.dataDir)),
-                             source.errorString());
+                             copied ? QStringLiteral("could not rename %1").arg(QFileInfo(partial).fileName()) : why);
+            }
             out.copied << name;
         }
     }

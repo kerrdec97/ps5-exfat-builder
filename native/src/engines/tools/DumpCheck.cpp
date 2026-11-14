@@ -9,6 +9,7 @@
 #include "engines/backport/SdkTable.h"
 #include "engines/backport/SelfFormat.h"
 #include "engines/backport/SelfReader.h"
+#include "engines/exfat/ExfatFormat.h"
 #include "engines/gameinfo/GameInfo.h"
 #include "engines/gameinfo/ParamJson.h"
 #include "engines/gameinfo/Sfo.h"
@@ -379,19 +380,27 @@ QString dumpNameProblem(const QString& name)
         if (u < 0x20 || u == u'<' || u == u'>' || u == u':' || u == u'"' || u == u'/' || u == u'\\' || u == u'|' || u == u'?' || u == u'*')
             return QStringLiteral("The name has a character that exFAT and Windows cannot store (< > : \" / \\ | ? * or a control character).");
     }
-    static const QRegularExpression reserved(QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?$"),
-                                             QRegularExpression::CaseInsensitiveOption);
+    // Windows takes the Latin-1 superscripts ¹ ² ³ for digits in device names
+    // too, and a device name with spaces before its extension ("CON .txt").
+    static const QRegularExpression reserved(
+        QStringLiteral("^(CON|PRN|AUX|NUL|CONIN\\$|CONOUT\\$|COM[1-9¹²³]|LPT[1-9¹²³])( *\\..*)?$"),
+        QRegularExpression::CaseInsensitiveOption);
     if (reserved.match(name).hasMatch())
-        return QStringLiteral("The name is reserved by Windows (CON, PRN, AUX, NUL, COM1 to COM9, LPT1 to LPT9).");
+        return QStringLiteral("The name is reserved by Windows (CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1 to COM9, LPT1 "
+                              "to LPT9, COM¹ to COM³, LPT¹ to LPT³).");
     return {};
 }
 
 QList<QStringList> caseCollisions(const QStringList& names)
 {
+    // Twins as exFAT sees them: each UTF-16 unit through its up-case table
+    // (the one Windows writes), not Unicode case folding, which also joins
+    // names exFAT keeps apart (the Kelvin sign and "k", letters outside the BMP).
+    const exfat::UpcaseTable& upcase = exfat::UpcaseTable::recommended();
     QList<QStringList> groups;
-    QHash<QString, int> groupOf; // folded name -> index in `groups`
+    QHash<QString, int> groupOf; // up-cased name -> index in `groups`
     for (const QString& name : names) {
-        const QString key = name.toCaseFolded();
+        const QString key = upcase.upcase(name);
         const auto it = groupOf.constFind(key);
         if (it == groupOf.constEnd()) {
             groupOf.insert(key, int(groups.size()));
@@ -469,8 +478,10 @@ Result<DumpCheckResult> checkDump(const QString& folderIn, const CancellationTok
     DumpCheckResult result;
     result.folder = root;
     QJsonObject facts;
+    // Counted in files: the walk lists the files (and opens only the
+    // executables), so their sizes would show the listing as a read speed.
     if (progress)
-        progress->begin(QStringLiteral("Checking"), 0, 0, true);
+        progress->begin(QStringLiteral("Checking"), 0, 0, false);
 
     // ---- where the game is --------------------------------------------------------------
     // The folder itself, or the one game below it. With several games only the
@@ -621,7 +632,6 @@ Result<DumpCheckResult> checkDump(const QString& folderIn, const CancellationTok
             ++result.files;
             result.bytes += size;
             if (progress) {
-                progress->advance(size);
                 progress->advanceFiles(1);
                 if ((result.files & 0x3F) == 1)
                     progress->setCurrentItem(rel);

@@ -11,12 +11,17 @@
 
 #include "app/AppContext.h"
 #include "app/pages/SettingsPage.h"
+#include "app/services/Language.h"
 #include "app/services/PortableMode.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
+#include "core/Dependencies.h"
 #include "core/Paths.h"
+#include "core/Settings.h"
 #include "engines/general/Module.h"
+#include "jobs/Job.h"
+#include "jobs/JobQueue.h"
 #include "support/TestSupport.h"
 
 #include <QCheckBox>
@@ -100,6 +105,15 @@ QString sheetText(ui::Sheet* sheet)
         parts << l->text();
     return parts.join(u'\n');
 }
+
+// A job that only waits in a held queue (it never runs in these tests).
+class IdleJob : public Job {
+public:
+    QString kind() const override { return QStringLiteral("test.idle"); }
+    QString title() const override { return QStringLiteral("Idle"); }
+    QJsonObject parameters() const override { return {}; }
+    Result<JobOutcome> run(JobContext&) override { return JobOutcome{}; }
+};
 
 } // namespace
 
@@ -224,6 +238,27 @@ private slots:
         QVERIFY(!QFileInfo::exists(plan.markerFile));
         QCOMPARE(readFile(plan.dataDir), QByteArray("a file where the data folder should be"));
         QVERIFY(QFileInfo::exists(s.data + QStringLiteral("/settings.json")));
+    }
+
+    // Each file is copied under a name of its own and renamed when it is
+    // whole: an attempt that was cut short (the app or the computer stopped)
+    // leaves no half file under the real name, which the next attempt would
+    // keep as the user's own. What it left is replaced.
+    void anAttemptCutShortIsRepairedByTheNext()
+    {
+        const Stage s = stage();
+        const portable::Plan plan = portable::planFor(s.exe, s.data);
+        QVERIFY(fwtest::writeTextFile(plan.dataDir + QStringLiteral("/queue.json.fw-copy"), "{\"qu"));
+        QVERIFY(fwtest::writeTextFile(plan.dataDir + QStringLiteral("/history.jsonl"), "{\"history\":0}\n")); // the user's own: kept
+        const auto done = portable::makePortable(plan, true);
+        QVERIFY2(done.ok(), done.ok() ? "" : qPrintable(done.error().toLogString()));
+        QCOMPARE(done->copied, (QStringList{QStringLiteral("library.json"), QStringLiteral("queue.json"), QStringLiteral("settings.json")}));
+        QCOMPARE(done->kept, (QStringList{QStringLiteral("history.jsonl")}));
+        QCOMPARE(readFile(plan.dataDir + QStringLiteral("/queue.json")), QByteArray("{\"queue\":1}"));
+        QCOMPARE(readFile(plan.dataDir + QStringLiteral("/settings.json")), QByteArray("{\"settings\":1}"));
+        QCOMPARE(QDir(plan.dataDir).entryList(QDir::Files | QDir::Hidden, QDir::Name),
+                 (QStringList{QStringLiteral("history.jsonl"), QStringLiteral("library.json"), QStringLiteral("queue.json"),
+                              QStringLiteral("settings.json")}));
     }
 
     void withoutTheCopyOnlyTheMarkerIsCreated()
@@ -382,8 +417,10 @@ private slots:
                 second = onNextSheet(&page, [&](ui::Sheet* after) {
                     const QString text = sheetText(after);
                     told = text.contains(QStringLiteral("Portable from the next start")) && text.contains(QStringLiteral("start"))
-                        && text.contains(QStringLiteral("settings.json"));
-                    buttonByText(after, QStringLiteral("OK"))->click();
+                        && text.contains(QStringLiteral("settings.json"))
+                        && buttonByText(after, QStringLiteral("Restart now"))
+                        && !after->findChild<ui::InfoBar*>(QStringLiteral("portable-jobs-warning")); // nothing runs or waits
+                    buttonByText(after, QStringLiteral("Not now"))->click();
                 });
             });
             make = card->findChild<QPushButton*>(QStringLiteral("make-portable"));
@@ -404,6 +441,58 @@ private slots:
         for (auto* l : card->findChild<QWidget*>(QStringLiteral("portable-row"))->findChildren<ui::ElideLabel*>())
             markerShown = markerShown || l->fullText() == QDir::toNativeSeparators(marker);
         QVERIFY(markerShown);
+    }
+
+    // After "Make portable" the sheet offers "Restart now", so nothing the app
+    // does afterwards stays behind in the old folders; it says first that
+    // jobs which still run or wait would be stopped.
+    void restartNowAfterMakingPortable()
+    {
+        const Stage s = stage();
+        qputenv("FW_LAUNCHER_EXE", QDir::toNativeSeparators(s.exe).toUtf8());
+        qputenv("FW_LAUNCHER_DIR", QDir::toNativeSeparators(s.exeDir).toUtf8());
+        bool restarted = false;
+        language::setRestartFunction([&restarted](QWidget*) {
+            restarted = true; // never the real restart in a test
+            return true;
+        });
+        const auto back = qScopeGuard([] {
+            language::setRestartFunction({});
+            qunsetenv("FW_LAUNCHER_EXE");
+            qunsetenv("FW_LAUNCHER_DIR");
+        });
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        ctx.mutableJobFactory().add(QStringLiteral("test.idle"), QStringLiteral("Idle"),
+                                    [](const QJsonObject&) -> Result<std::unique_ptr<Job>> { return std::unique_ptr<Job>(new IdleJob); });
+        ctx.queue().holdQueue(true);
+        const auto waiting = ctx.queue().enqueue(QStringLiteral("test.idle"), {});
+        QVERIFY(waiting.ok());
+        const auto tidy = qScopeGuard([&] { ctx.queue().remove(waiting.value()); });
+        pages::SettingsPage page(ctx);
+        page.resize(1200, 900);
+        page.show();
+        page.showSection(QStringLiteral("Storage"));
+        auto* card = page.findChild<QWidget*>(QStringLiteral("locations-card"));
+        QVERIFY(card);
+        auto* make = card->findChild<QPushButton*>(QStringLiteral("make-portable"));
+        QVERIFY(make && make->isEnabled());
+        bool warned = false;
+        std::shared_ptr<bool> second;
+        const auto met = onNextSheet(&page, [&](ui::Sheet* sheet) {
+            buttonByText(sheet, QStringLiteral("Make portable"))->click();
+            second = onNextSheet(&page, [&](ui::Sheet* after) {
+                auto* busy = after->findChild<ui::InfoBar*>(QStringLiteral("portable-jobs-warning"));
+                warned = busy && sheetText(after).contains(QStringLiteral("running or waiting"));
+                buttonByText(after, QStringLiteral("Restart now"))->click();
+            });
+        });
+        make->click(); // blocks in the sheets
+        QVERIFY(*met);
+        QVERIFY(second && *second);
+        QVERIFY(warned);
+        QVERIFY(restarted);
+        QVERIFY(QFileInfo(s.exeDir + QStringLiteral("/portable.txt")).isFile());
     }
 
     // Settings › Tools: one line under the intro says where the components are, and opens Storage.
@@ -428,6 +517,59 @@ private slots:
         QTRY_COMPARE(page.currentSection(), QStringLiteral("Storage"));
         QVERIFY(!link->isVisible());
         QVERIFY(page.findChild<QWidget*>(QStringLiteral("locations-card")));
+    }
+
+    // Settings › Tools: an optional tool the user supplies and has not chosen
+    // yet is "Not set" in its row, and no problem anywhere else either: not in
+    // the section list's count, not as an amber "2 of 5 ready".
+    void toolsNotChosenYetAreNoProblem()
+    {
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        ctx.dependencies().add(QStringLiteral("test.optional"), QStringLiteral("Optional tool"), QStringLiteral("a test"), [](const SettingsValues&) {
+            DependencyInfo i;
+            i.id = QStringLiteral("test.optional");
+            i.name = QStringLiteral("Optional tool");
+            i.status = DependencyStatus::Missing;
+            i.settingKey = QStringLiteral("test.optionalToolPath"); // never chosen
+            return i;
+        });
+        (void)ctx.dependencies().probeAll(ctx.settings().snapshot());
+        // The rows' rule (DependencyRow): what is a problem, and what is only not chosen yet.
+        int problems = 0, notChosen = 0, ready = 0, total = 0;
+        for (const DependencyInfo& i : ctx.dependencies().lastAll()) {
+            const bool unchosen = i.status == DependencyStatus::Missing && !i.required && !i.settingKey.isEmpty()
+                               && ctx.settings().value(i.settingKey).toString().trimmed().isEmpty();
+            notChosen += unchosen ? 1 : 0;
+            problems += (i.status == DependencyStatus::Missing && !unchosen) || i.status == DependencyStatus::Outdated
+                             || i.status == DependencyStatus::Error
+                          ? 1
+                          : 0;
+            ready += i.status == DependencyStatus::Ready || i.status == DependencyStatus::NotApplicable ? 1 : 0;
+            ++total;
+        }
+        QVERIFY(notChosen >= 1);
+        pages::SettingsPage page(ctx);
+        page.resize(1200, 900);
+        page.show();
+        page.showSection(QStringLiteral("Tools"));
+        ui::Badge* count = nullptr;
+        for (auto* b : page.findChildren<QAbstractButton*>())
+            if (b->accessibleName() == QLatin1String("Tools"))
+                if (auto* badge = b->findChild<ui::Badge*>())
+                    count = badge;
+        QVERIFY(count);
+        if (problems == 0)
+            QVERIFY2(!count->isVisibleTo(&page), qPrintable(count->text()));
+        else
+            QCOMPARE(count->text(), QString::number(problems));
+        ui::Badge* summary = nullptr;
+        const QString shown = QStringLiteral("%1 of %2 ready").arg(ready).arg(total);
+        for (auto* b : page.findChildren<ui::Badge*>())
+            if (b->text() == shown)
+                summary = b;
+        QVERIFY2(summary, qPrintable(shown));
+        QCOMPARE(summary->tone(), problems > 0 ? ui::Tone::Warn : ready == total ? ui::Tone::Ok : ui::Tone::Neutral);
     }
 };
 

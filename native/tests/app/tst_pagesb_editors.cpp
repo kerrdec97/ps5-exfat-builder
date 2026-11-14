@@ -11,14 +11,17 @@
 #include "app/ui/SettingRow.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
+#include "engines/gameinfo/Module.h"
 #include "engines/general/Module.h"
 #include "support/TestSupport.h"
 
 #include <QAbstractButton>
 #include <QDir>
 #include <QFile>
+#include <QLabel>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
@@ -281,10 +284,15 @@ private slots:
         QFile nf(QDir(fwtest::dataDir()).filePath(QStringLiteral("../../packaging/THIRD_PARTY_NOTICES-native.md")));
         QVERIFY2(nf.open(QIODevice::ReadOnly), qPrintable(nf.fileName()));
         const QString notices = QString::fromUtf8(nf.readAll());
+        // The components table at the top; the later sections (the code inside
+        // the Qt files, the bundled programs) are the notices' own detail.
         QStringList tableLines;
-        for (const QString& line : notices.split(u'\n'))
+        for (const QString& line : notices.split(u'\n')) {
+            if (line.startsWith(QLatin1String("## ")))
+                break;
             if (line.startsWith(QLatin1String("| ")) && !line.startsWith(QLatin1String("| Component")))
                 tableLines << line;
+        }
         const auto rows = pages::AboutPage::thirdPartyComponents();
         QCOMPARE(int(rows.size()), int(tableLines.size()) + 1); // the table, then the bundled PS5 Backport engine
         static const QRegularExpression version(QStringLiteral(" \\d[\\d.]*$"));
@@ -378,6 +386,105 @@ private slots:
         QCOMPARE(page.attentionCount(), before);
         page.showSection(QStringLiteral("Logging"));
         QCOMPARE(page.attentionCount(), before); // the row is back with the stored value and no stale error
+    }
+
+    // The Library page's folders sit in General but are the user's own list:
+    // with only them changed there is nothing to reset there, and Reset
+    // section takes the other settings back and leaves them.
+    void resetSectionLeavesTheLibraryFolders()
+    {
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        SettingsStore& s = ctx.settings();
+        const QString folders = gameinfo::keys::kLibraryFolders;
+        const QString preset = gameinfo::keys::kRenamePreset;
+        s.resetSection(QStringLiteral("General"));
+        s.reset(folders);
+        const auto restore = qScopeGuard([&s, folders] { s.reset(folders); });
+        pages::SettingsPage page(ctx);
+        page.resize(1200, 800);
+        page.show();
+        page.showSection(QStringLiteral("General"));
+        QPushButton* reset = buttonByText(&page, QStringLiteral("Reset section"));
+        QVERIFY(reset);
+        QVERIFY(!reset->isVisibleTo(&page));
+        QVERIFY(s.setValue(folders, QStringList{QStringLiteral("D:\\PS5\\Games")}).ok());
+        QVERIFY(!reset->isVisibleTo(&page));
+        QVERIFY(s.setValue(preset, QStringLiteral("ppsa")).ok());
+        QVERIFY(reset->isVisibleTo(&page));
+
+        QString asked;
+        auto* poll = new QTimer(&page);
+        connect(poll, &QTimer::timeout, &page, [&page, poll, &asked] {
+            for (auto* sheet : page.findChildren<ui::Sheet*>()) {
+                QPushButton* b = sheet->isVisible() ? buttonByText(sheet, QStringLiteral("Reset section")) : nullptr;
+                if (!b)
+                    continue;
+                poll->stop();
+                poll->deleteLater();
+                for (auto* l : sheet->findChildren<QLabel*>())
+                    asked += l->text() + u'\n';
+                b->click();
+                return;
+            }
+        });
+        poll->start(20);
+        reset->click(); // blocks in the question
+        QVERIFY2(asked.contains(QStringLiteral("Reset 1 setting?")), qPrintable(asked));
+        QVERIFY(s.isDefault(preset));
+        QCOMPARE(s.value(folders).toStringList(), QStringList{QStringLiteral("D:\\PS5\\Games")});
+        QVERIFY(!reset->isVisibleTo(&page));
+    }
+
+    // Reset all leaves the Library folders too, and both its question and the
+    // toast after it say so: General still shows them as changed afterwards.
+    void resetAllSaysTheLibraryFoldersStay()
+    {
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        SettingsStore& s = ctx.settings();
+        const QString folders = gameinfo::keys::kLibraryFolders;
+        const QString preset = gameinfo::keys::kRenamePreset;
+        const auto restore = qScopeGuard([&s, folders] { s.reset(folders); });
+        QVERIFY(s.setValue(folders, QStringList{QStringLiteral("D:\\PS5\\Games")}).ok());
+        QVERIFY(s.setValue(preset, QStringLiteral("ppsa")).ok());
+        pages::SettingsPage page(ctx);
+        page.resize(1200, 800);
+        page.show();
+        page.showSection(QStringLiteral("General"));
+        // Its text may be cut short, or (a narrow list) only an icon: the tip names it then.
+        QPushButton* resetAll = nullptr;
+        for (auto* b : page.findChildren<QPushButton*>())
+            if (b->text() == QStringLiteral("Reset all settings…") || b->toolTip().startsWith(QStringLiteral("Reset all settings…"))
+                || b->toolTip() == QStringLiteral("Put every setting back to its default"))
+                resetAll = b;
+        QVERIFY(resetAll);
+
+        QString asked, toast;
+        connect(&page, &pages::Page::toastRequested, &page, [&toast](ui::Tone, const QString&, const QString& body) { toast = body; });
+        auto* poll = new QTimer(&page);
+        connect(poll, &QTimer::timeout, &page, [&page, poll, &asked] {
+            for (auto* sheet : page.findChildren<ui::Sheet*>()) {
+                QPushButton* b = sheet->isVisible() ? buttonByText(sheet, QStringLiteral("Reset all")) : nullptr;
+                if (!b)
+                    continue;
+                poll->stop();
+                poll->deleteLater();
+                for (auto* l : sheet->findChildren<QLabel*>())
+                    asked += l->text() + u'\n';
+                b->click();
+                return;
+            }
+        });
+        poll->start(20);
+        resetAll->click(); // blocks in the question
+        QVERIFY2(asked.contains(QStringLiteral("except the Library folders")), qPrintable(asked));
+        QVERIFY2(toast.contains(QStringLiteral("Library folders")), qPrintable(toast));
+        QVERIFY(s.isDefault(preset));
+        QCOMPARE(s.value(folders).toStringList(), QStringList{QStringLiteral("D:\\PS5\\Games")});
+        QPushButton* reset = buttonByText(&page, QStringLiteral("Reset section"));
+        QVERIFY(reset);
+        QVERIFY(!reset->isVisibleTo(&page));
     }
 };
 

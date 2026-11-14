@@ -200,16 +200,25 @@ private slots:
         auto same = save(dir, QString::fromUtf8(onDisk));
         QVERIFY(same.ok());
         QVERIFY(!same->changed);
-        QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak"))));
+        QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.fw.bak"))));
+
+        // Copies of the user's own (or an older version's backups) next to the
+        // file: never counted as the app's backups, never removed.
+        QStringList own;
+        for (const char* name : {"autoload.txt.bak", "autoload.txt.bak.2", "autoload.txt.bak.old"}) {
+            own << QDir(dir).filePath(QString::fromLatin1(name));
+            QFile ownFile(own.last());
+            QVERIFY(ownFile.open(QIODevice::WriteOnly) && ownFile.write("mine") == 4);
+        }
 
         // Changes keep the previous file; a backup is never overwritten.
         auto s2 = save(dir, QStringLiteral("a.elf\n"));
         QVERIFY(s2.ok());
-        QCOMPARE(QFileInfo(s2->backupPath).fileName(), QStringLiteral("autoload.txt.bak"));
+        QCOMPARE(QFileInfo(s2->backupPath).fileName(), QStringLiteral("autoload.txt.fw.bak"));
         QCOMPARE(readAll(s2->backupPath), onDisk);
         auto s3 = save(dir, QStringLiteral("b.elf\n"));
         QVERIFY(s3.ok());
-        QCOMPARE(QFileInfo(s3->backupPath).fileName(), QStringLiteral("autoload.txt.bak.2"));
+        QCOMPARE(QFileInfo(s3->backupPath).fileName(), QStringLiteral("autoload.txt.fw.bak.2"));
         QCOMPARE(readAll(s3->backupPath), QByteArray("a.elf\n"));
         auto again = load(dir);
         QVERIFY(again.ok());
@@ -217,30 +226,29 @@ private slots:
         QCOMPARE(again->text, QStringLiteral("b.elf\n"));
 
         // The newest three backups stay; older ones the saves made are removed,
-        // a file of the user's own next to them is not.
-        const QString own = QDir(dir).filePath(QStringLiteral("autoload.txt.bak.old"));
-        QFile ownFile(own);
-        QVERIFY(ownFile.open(QIODevice::WriteOnly) && ownFile.write("mine") == 4);
-        ownFile.close();
+        // the user's files next to them are not.
         auto s4 = save(dir, QStringLiteral("c.elf\n"));
         QVERIFY(s4.ok());
-        QCOMPARE(QFileInfo(s4->backupPath).fileName(), QStringLiteral("autoload.txt.bak.3"));
-        QVERIFY(QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak"))));
+        QCOMPARE(QFileInfo(s4->backupPath).fileName(), QStringLiteral("autoload.txt.fw.bak.3"));
+        QVERIFY(QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.fw.bak"))));
         auto s5 = save(dir, QStringLiteral("d.elf\n"));
         QVERIFY(s5.ok());
-        QCOMPARE(QFileInfo(s5->backupPath).fileName(), QStringLiteral("autoload.txt.bak.4"));
-        QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak"))));
+        QCOMPARE(QFileInfo(s5->backupPath).fileName(), QStringLiteral("autoload.txt.fw.bak.4"));
+        QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.fw.bak"))));
         auto s6 = save(dir, QStringLiteral("e.elf\n"));
         QVERIFY(s6.ok());
         // The number goes on from the newest backup, not back to a freed one.
-        QCOMPARE(QFileInfo(s6->backupPath).fileName(), QStringLiteral("autoload.txt.bak.5"));
+        QCOMPARE(QFileInfo(s6->backupPath).fileName(), QStringLiteral("autoload.txt.fw.bak.5"));
         QCOMPARE(readAll(s6->backupPath), QByteArray("d.elf\n"));
-        QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.bak.2"))));
-        QCOMPARE(QDir(dir).entryList({QStringLiteral("autoload.txt.bak*")}, QDir::Files, QDir::Name),
-                 (QStringList{QStringLiteral("autoload.txt.bak.3"), QStringLiteral("autoload.txt.bak.4"), QStringLiteral("autoload.txt.bak.5"),
-                              QStringLiteral("autoload.txt.bak.old")}));
-        QCOMPARE(readAll(own), QByteArray("mine"));
-        QVERIFY(QFile::remove(own));
+        QVERIFY(!QFileInfo::exists(QDir(dir).filePath(QStringLiteral("autoload.txt.fw.bak.2"))));
+        QCOMPARE(QDir(dir).entryList({QStringLiteral("autoload.txt.*")}, QDir::Files, QDir::Name),
+                 (QStringList{QStringLiteral("autoload.txt.bak"), QStringLiteral("autoload.txt.bak.2"), QStringLiteral("autoload.txt.bak.old"),
+                              QStringLiteral("autoload.txt.fw.bak.3"), QStringLiteral("autoload.txt.fw.bak.4"),
+                              QStringLiteral("autoload.txt.fw.bak.5")}));
+        for (const QString& o : own) {
+            QCOMPARE(readAll(o), QByteArray("mine"));
+            QVERIFY(QFile::remove(o));
+        }
         const auto newest = load(dir);
         QVERIFY(newest.ok());
         QCOMPARE(newest->text, QStringLiteral("e.elf\n"));

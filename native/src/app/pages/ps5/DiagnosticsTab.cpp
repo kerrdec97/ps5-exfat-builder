@@ -1,6 +1,8 @@
 #include "app/pages/ps5/DiagnosticsTab.h"
 
 #include "app/AppContext.h"
+#include "app/models/JobQueueModel.h"
+#include "app/pages/ps5/ConsoleToolTab.h"
 #include "app/services/JobSubmit.h"
 #include "app/ui/Sheet.h"
 #include "connect/ps5/Module.h"
@@ -79,6 +81,7 @@ DiagnosticsTab::DiagnosticsTab(AppContext& ctx, Source source, QWidget* parent)
     m_cancel = button(FW_TR("Cancel"), ButtonVariant::Secondary, QStringLiteral("stop"), row);
     m_speed = button(FW_TR("Run speed test"), ButtonVariant::Secondary, QStringLiteral("gauge"), row);
     m_run = button(FW_TR("Run diagnostics"), ButtonVariant::Primary, QStringLiteral("scan"), row);
+    setToolPrimary(m_run);
     rh->addWidget(m_cancel);
     rh->addWidget(m_speed);
     rh->addWidget(m_run);
@@ -103,12 +106,11 @@ DiagnosticsTab::DiagnosticsTab(AppContext& ctx, Source source, QWidget* parent)
                           {"login", FW_TR("Login"), true},              {"destination", FW_TR("Destination"), false},
                           {"passive", FW_TR("Passive mode"), true},     {"binary", FW_TR("Binary mode (TYPE I)"), true},
                           {"writable", FW_TR("Folder writable"), true}, {"server", FW_TR("Server"), false}};
+    // A badge says pass or fail; every other value is plain text in one style,
+    // a number ("4 ms") like a word ("External USB / exFAT").
     int i = 0;
     for (const Spec& s : specs) {
-        const bool text = qstrcmp(s.key, "destination") == 0 || qstrcmp(s.key, "server") == 0; // words, not numbers
-        grid->addWidget(makeCell(QString::fromLatin1(s.key), s.title, s.badge, m_results,
-                                 text ? TextStyle::Body : TextStyle::Mono),
-                        i / 4, i % 4);
+        grid->addWidget(makeCell(QString::fromLatin1(s.key), s.title, s.badge, m_results, TextStyle::BodyStrong), i / 4, i % 4);
         ++i;
     }
     for (int c = 0; c < 4; ++c)
@@ -308,7 +310,7 @@ void DiagnosticsTab::onJobChanged(const QString& id)
         setStatus(FW_TR("Waiting for the jobs ahead of it in the queue…"));
     } else if (rec->state == JobState::Running) {
         // The job's step texts are English (they are logged too): translated here, where they are shown.
-        QString text = i18n::translate(rec->progress.currentItem.isEmpty() ? rec->progress.phase : rec->progress.currentItem);
+        QString text = (rec->progress.currentItem.isEmpty() ? i18n::translate(rec->progress.phase) : currentItemText(rec->progress.currentItem));
         if (rec->progress.total > 0 && !rec->progress.indeterminate)
             text += QStringLiteral(" · %1").arg(thinPercent(rec->progress.phaseFraction()));
         setStatus(text.isEmpty() ? FW_TR("Running…") : text + QStringLiteral("…"));
@@ -508,7 +510,7 @@ void DiagnosticsTab::showSpecimen()
     d.speed.downloadMBps = 61.0;
     d.speed.readBackMatches = true;
     d.speed.path = d.folder + QStringLiteral("/.exfatbuilder_speedtest_1762257600.bin");
-    showResult(d, QStringLiteral("All checks passed"), Tone::Ok, QStringLiteral("Specimen result for the screenshot, not from a console."));
+    showResult(d, FW_TR("All checks passed"), Tone::Ok, QStringLiteral("Specimen result for the screenshot, not from a console.")); // the live verdict's words
 }
 
 QString DiagnosticsTab::statusText() const { return m_status->text(); }

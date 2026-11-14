@@ -11,7 +11,8 @@
   <version>-<commit>). Nothing needs administrator rights, nothing is
   installed, and the user's own settings are never touched: every run of the
   app uses a private data folder inside the evidence folder (FW_DATA_DIR) and
-  FW_OFFLINE=1 (no update check, no Discord message).
+  FW_OFFLINE=1 (no update check, no Discord message). FW_NO_POWER_ACTIONS=1:
+  no test and no run of the app can put the PC to sleep or shut it down.
 
   The script only uses tools that are already installed. When the Microsoft
   C++ Build Tools are missing it writes BLOCKER.md with the exact install
@@ -189,6 +190,9 @@ if (-not $SkipBuild) {
 Write-Step 'CTest'
 $env:QT_QPA_PLATFORM = 'offscreen'
 $env:FW_OFFLINE = '1'
+# Sleep, shut down and restart are refused for every test and every run of the
+# app below (beside the app's own refusal in test programs).
+$env:FW_NO_POWER_ACTIONS = '1'
 Remove-Item Env:FW_WINDOWS_MOUNT_TEST -ErrorAction SilentlyContinue # mounting a VHD needs administrator rights
 $ctestCode = Invoke-Logged 'ctest.log' { & ctest --test-dir $BuildDir --timeout 900 --output-on-failure --output-junit (Join-Path $evidence 'ctest-junit.xml') }
 $summaryMatch = Select-String -Path (Join-Path $evidence 'ctest.log') -Pattern 'tests passed' | Select-Object -Last 1
@@ -204,7 +208,7 @@ New-Item -ItemType Directory -Force $dist | Out-Null
 $built = Join-Path $BuildDir 'bin\exFAT Image Builder.exe'
 Copy-Item $built $dist
 $exe = Join-Path $dist 'exFAT Image Builder.exe'
-$code = Invoke-Logged 'windeployqt.log' { & (Join-Path $QtDir 'bin\windeployqt.exe') --release --no-translations --no-system-d3d-compiler --no-opengl-sw --compiler-runtime $exe }
+$code = Invoke-Logged 'windeployqt.log' { & (Join-Path $QtDir 'bin\windeployqt.exe') --release --no-translations --no-system-d3d-compiler --no-system-dxc-compiler --no-opengl-sw --no-compiler-runtime $exe }
 if ($code -ne 0) { Stop-Run 'deploy' 'windeployqt failed, see windeployqt.log' }
 # The same files as make-release.ps1 section 4, so the run tests what a release holds.
 Copy-Item (Join-Path $native 'packaging\README-portable.txt') (Join-Path $dist 'README.txt')
@@ -217,12 +221,18 @@ if (-not (Test-Path (Join-Path $engines 'backport\PS5BackportGUI.exe'))) {
     Stop-Run 'deploy' "the PS5 Backport engine is missing from $engines (configure with -BackportEngine <exe> or let CMake fetch it)"
 }
 Copy-Item $engines -Recurse (Join-Path $dist 'engines')
+$code = Invoke-Logged 'finish-deploy.log' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $native 'packaging\finish-deploy.ps1') -DeployDir $dist }
+if ($code -ne 0) { Stop-Run 'deploy' 'finish-deploy.ps1 failed, see finish-deploy.log' }
 $results.deploy = 'passed'
 
-# The app's own data for every run below: never the user's settings.
+# The app's own data for every run below: never the user's settings, nor the
+# PS5 Backport engine's files (shared with the standalone program).
 $appData = Join-Path $evidence 'app-data'
 $env:FW_DATA_DIR = $appData
 $env:FW_OFFLINE = '1'
+$env:D97BETA_CONFIG_DIR = Join-Path $appData 'backport-config'
+$env:D97BETA_DATA_DIR = Join-Path $appData 'backport-data'
+$env:D97BETA_ENGINE_HOME = Join-Path $appData 'backport-engine-home'
 
 # ---- 5. --self-test of the deployed exe -------------------------------------------
 Write-Step 'Self-test'
@@ -294,13 +304,24 @@ $launch = [ordered]@{
 Save-Text 'launch.json' ($launch | ConvertTo-Json)
 if ($alive) { Stop-Process -Id $p.Id -Force }
 $results.launch = $(if ($alive) { "passed (running after $AliveSeconds s, $($launch.workingSetMiB) MiB, window '$($launch.mainWindowTitle)')" } else { "FAILED (exited with $($p.ExitCode))" })
-Remove-Item Env:FW_DATA_DIR -ErrorAction SilentlyContinue
+foreach ($k in 'FW_DATA_DIR', 'D97BETA_CONFIG_DIR', 'D97BETA_DATA_DIR', 'D97BETA_ENGINE_HOME') { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
 
 # ---- 8. Portable zip and checksums --------------------------------------------------
 Write-Step 'Package'
 $zip = Join-Path $evidence "exFAT-Image-Builder-$version-win64-portable.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
-Compress-Archive -Path $dist -DestinationPath $zip
+# As make-release.ps1: entry names with "/" (Compress-Archive of Windows
+# PowerShell 5.1 writes "\", which the zip format does not allow).
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$base = (Get-Item -LiteralPath $dist).FullName.TrimEnd('\') # as Get-ChildItem spells it (an -OutRoot may be relative)
+$top = Split-Path $base -Leaf
+$archive = [IO.Compression.ZipFile]::Open($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($zip), [IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($f in @(Get-ChildItem -LiteralPath $base -Recurse -File -Force | Sort-Object FullName)) {
+        $entry = $top + '/' + $f.FullName.Substring($base.Length + 1).Replace('\', '/')
+        [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
+    }
+} finally { $archive.Dispose() }
 $sums = @()
 # The two files in the evidence folder itself (the deployed exe has the same
 # leaf name as the single-file exe; its hash is in SUMMARY.md).

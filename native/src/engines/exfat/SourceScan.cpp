@@ -6,6 +6,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QTimeZone>
 
 #include <algorithm>
 
@@ -57,18 +58,122 @@ bool ExcludeMatcher::excludesDir(const QString& name, const QString& rel) const
     return anyMatch(m_dirName, name) || anyMatch(m_dirPath, rel);
 }
 
+#ifdef Q_OS_WIN
+namespace {
+
+// The exFAT bits of Windows attributes (they have the same values).
+quint16 exfatAttributes(DWORD windowsAttributes, bool isDir)
+{
+    const quint16 attrs =
+        quint16(windowsAttributes & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE));
+    return quint16(attrs | (isDir ? kAttrDirectory : 0));
+}
+
+// A listed time as QFileInfo gives it: millisecond precision, local time,
+// invalid when the file system stores none.
+QDateTime listedTime(const FILETIME& ft)
+{
+    if (ft.dwHighDateTime == 0 && ft.dwLowDateTime == 0)
+        return {};
+    SYSTEMTIME st;
+    if (!FileTimeToSystemTime(&ft, &st))
+        return {};
+    return QDateTime(QDate(st.wYear, st.wMonth, st.wDay), QTime(st.wHour, st.wMinute, st.wSecond, st.wMilliseconds),
+                     QTimeZone::UTC)
+        .toLocalTime();
+}
+
+struct ListedEntry {
+    QString name;
+    bool isDir = false;
+    DWORD attributes = 0;
+    qint64 size = 0;
+    FILETIME created{}, accessed{}, modified{};
+};
+
+// Lists `dirAbs` in one pass (FindFirstFileExW, no short names, large
+// fetches): a file's attributes, size and times come with the listing, so no
+// file is opened or queried on its own. They are what asking the file gives
+// while nobody is writing it (QFileInfo takes the size from the listing too).
+// A folder's copy of its times in the listing can lag behind (it is brought
+// up to date once the folder has been opened), so each folder is still
+// asked, once. Returns
+// false, and lists nothing, when the folder holds an entry QFileInfo
+// describes from elsewhere — a reparse point (symbolic link, junction, cloud
+// placeholder …) or a .lnk shortcut — or when the listing or a query fails:
+// the caller then lists the folder with Qt, so links, shortcuts and errors
+// are handled as they always were.
+bool listPlainFolder(const QString& dirAbs, std::vector<ListedEntry>& out)
+{
+    out.clear();
+    QString pattern = toLongPath(dirAbs);
+    if (!pattern.endsWith(u'\\'))
+        pattern += u'\\';
+    pattern += u'*';
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileExW(reinterpret_cast<const wchar_t*>(pattern.utf16()), FindExInfoBasic, &fd,
+                                FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    bool plain = true;
+    for (;;) {
+        const wchar_t* n = fd.cFileName;
+        const bool dots = n[0] == L'.' && (n[1] == 0 || (n[1] == L'.' && n[2] == 0));
+        if (!dots) {
+            ListedEntry e;
+            e.name = QString::fromWCharArray(n);
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+                || e.name.endsWith(QLatin1String(".lnk"), Qt::CaseInsensitive)) {
+                plain = false;
+                break;
+            }
+            e.isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            e.attributes = fd.dwFileAttributes;
+            e.size = (qint64(fd.nFileSizeHigh) << 32) | qint64(fd.nFileSizeLow);
+            e.created = fd.ftCreationTime;
+            e.accessed = fd.ftLastAccessTime;
+            e.modified = fd.ftLastWriteTime;
+            out.push_back(std::move(e));
+        }
+        if (!FindNextFileW(h, &fd)) {
+            plain = GetLastError() == ERROR_NO_MORE_FILES;
+            break;
+        }
+    }
+    FindClose(h);
+    for (size_t i = 0; plain && i < out.size(); ++i) {
+        ListedEntry& e = out[i];
+        if (!e.isDir)
+            continue;
+        const QString lp = toLongPath(dirAbs + u'/' + e.name);
+        WIN32_FILE_ATTRIBUTE_DATA d;
+        if (!GetFileAttributesExW(reinterpret_cast<const wchar_t*>(lp.utf16()), GetFileExInfoStandard, &d)
+            || (d.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            plain = false;
+            break;
+        }
+        e.attributes = d.dwFileAttributes;
+        e.created = d.ftCreationTime;
+        e.accessed = d.ftLastAccessTime;
+        e.modified = d.ftLastWriteTime;
+    }
+    if (!plain)
+        out.clear();
+    return plain;
+}
+
+} // namespace
+#endif
+
 quint16 sourceAttributes(const QString& absolutePath, bool isDir, bool writable)
 {
 #ifdef Q_OS_WIN
     Q_UNUSED(writable);
     const QString lp = toLongPath(absolutePath);
     const DWORD a = GetFileAttributesW(reinterpret_cast<const wchar_t*>(lp.utf16()));
-    quint16 attrs = 0;
-    if (a != INVALID_FILE_ATTRIBUTES)
-        attrs = quint16(a & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE));
-    else if (!isDir)
-        attrs = kAttrArchive;
-    return quint16(attrs | (isDir ? kAttrDirectory : 0));
+    if (a == INVALID_FILE_ATTRIBUTES)
+        return isDir ? kAttrDirectory : kAttrArchive;
+    return exfatAttributes(a, isDir);
 #else
     Q_UNUSED(absolutePath);
     if (isDir)
@@ -139,12 +244,73 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
             return Error(ErrorCode::PermissionDenied,
                          QStringLiteral("Could not read the folder %1. Check that you have access to it, or exclude it.")
                              .arg(QDir::toNativeSeparators(dirAbs)));
-        const QFileInfoList list = QDir(toLongPath(dirAbs)).entryInfoList(filters, QDir::NoSort);
-        if (list.isEmpty())
+        std::vector<int> kids;
+        // Ordinary files and folders (nearly every folder of a game) are taken
+        // straight from the listing; the rules are those of the loop below.
+        const auto excludedDir = [&](const QString& name, const QString& rel) {
+            if (!matcher.excludesDir(name, rel))
+                return false;
+            ++tree.excludedCount;
+            if (tree.excludedSamples.size() < 20)
+                tree.excludedSamples << rel + u'/';
+            return true;
+        };
+        const auto excludedFile = [&](const QString& name, const QString& rel, bool hidden) {
+            if (!matcher.excludesFile(name, rel, hidden))
+                return false;
+            ++tree.excludedCount;
+            if (tree.excludedSamples.size() < 20)
+                tree.excludedSamples << rel;
+            return true;
+        };
+        const auto add = [&](SourceNode&& n) {
+            n.parent = cur.node;
+            if (n.isDir)
+                ++tree.dirCount;
+            else {
+                ++tree.fileCount;
+                tree.totalBytes += n.size;
+            }
+            kids.push_back(int(tree.nodes.size()));
+            tree.nodes.push_back(std::move(n));
+        };
+        bool listed = false;
+#ifdef Q_OS_WIN
+        std::vector<ListedEntry> plain;
+        listed = listPlainFolder(dirAbs, plain) && !plain.empty();
+        if (listed) {
+            kids.reserve(plain.size());
+            for (const ListedEntry& e : plain) {
+                if ((++seen & 0xFF) == 0 && !token.checkpoint())
+                    return Error::cancelled();
+                const QString& name = e.name;
+                const QString rel = dirRel.isEmpty() ? name : dirRel + u'/' + name;
+                const bool isDir = e.isDir;
+                if (isDir ? excludedDir(name, rel) : excludedFile(name, rel, (e.attributes & FILE_ATTRIBUTE_HIDDEN) != 0))
+                    continue;
+                SourceNode n;
+                n.name = name;
+                n.relativePath = rel;
+                n.absolutePath = dirAbs + u'/' + name;
+                n.isDir = isDir;
+                n.size = isDir ? 0 : e.size;
+                n.attributes = exfatAttributes(e.attributes, isDir);
+                n.modified = listedTime(e.modified);
+                const QDateTime born = listedTime(e.created);
+                const QDateTime read = listedTime(e.accessed);
+                n.created = born.isValid() ? born : n.modified;
+                n.accessed = read.isValid() ? read : n.modified;
+                add(std::move(n));
+            }
+        }
+#endif
+        // Folders with links or shortcuts, empty folders and folders the fast
+        // listing could not read.
+        const QFileInfoList list = listed ? QFileInfoList() : QDir(toLongPath(dirAbs)).entryInfoList(filters, QDir::NoSort);
+        if (!listed && list.isEmpty())
             FW_TRY(ensureFolderListable(dirAbs)); // empty, or not allowed to look?
 
-        std::vector<int> kids;
-        kids.reserve(size_t(list.size()));
+        kids.reserve(kids.size() + size_t(list.size()));
         for (const QFileInfo& fi : list) {
             if ((++seen & 0xFF) == 0 && !token.checkpoint())
                 return Error::cancelled();
@@ -156,18 +322,15 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
             // size and times are read from an open handle below.
             const bool shortcut = fi.isShortcut();
             const bool isLink = !shortcut && (fi.isSymLink() || fi.isJunction());
-            if (isLink && !fi.exists())
+            // QFileInfo calls a junction whose folder is gone existing: its target tells.
+            if (isLink && (!fi.exists() || (fi.isJunction() && !QFileInfo::exists(fi.junctionTarget()))))
                 return Error(ErrorCode::NotFound,
                              QStringLiteral("%1 is a link whose target is missing. Remove it or exclude it, then try again.")
                                  .arg(QDir::toNativeSeparators(abs)));
             const bool isDir = !shortcut && fi.isDir();
             if (isDir) {
-                if (matcher.excludesDir(name, rel)) {
-                    ++tree.excludedCount;
-                    if (tree.excludedSamples.size() < 20)
-                        tree.excludedSamples << rel + u'/';
+                if (excludedDir(name, rel))
                     continue;
-                }
                 if (isLink) {
                     const QString target = fi.canonicalFilePath();
                     const QString parentCanon = QFileInfo(dirAbs).canonicalFilePath();
@@ -178,10 +341,7 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
                         continue;
                     }
                 }
-            } else if (matcher.excludesFile(name, rel, fi.isHidden())) {
-                ++tree.excludedCount;
-                if (tree.excludedSamples.size() < 20)
-                    tree.excludedSamples << rel;
+            } else if (excludedFile(name, rel, fi.isHidden())) {
                 continue;
             }
 
@@ -207,15 +367,7 @@ Result<SourceTree> scanSource(const QString& rootPath, const ScanRules& rules, c
                 n.created = born.isValid() ? born : n.modified;
                 n.accessed = read.isValid() ? read : n.modified;
             }
-            n.parent = cur.node;
-            if (isDir)
-                ++tree.dirCount;
-            else {
-                ++tree.fileCount;
-                tree.totalBytes += n.size;
-            }
-            kids.push_back(int(tree.nodes.size()));
-            tree.nodes.push_back(std::move(n));
+            add(std::move(n));
         }
 
         // Stable, case-insensitive order (what Windows lists for NTFS folders).

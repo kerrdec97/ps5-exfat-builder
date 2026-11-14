@@ -11,6 +11,8 @@
 #include <QTextCursor>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace fw::ui {
 
 using namespace theme;
@@ -399,8 +401,30 @@ void LogConsole::appendRecord(const LogRecord& r)
     appendLine(r.time, r.level, r.message, m_job.isEmpty() ? r.source : QString());
 }
 
+bool LogConsole::isDecoration(const QString& message)
+{
+    // "SDK: |____________|", "-----", "SDK: |": a tool's bar frame or rule,
+    // after an optional "Tool: " prefix there is not one letter or digit.
+    QStringView rest(message);
+    if (const qsizetype colon = rest.indexOf(QLatin1String(": ")); colon > 0 && colon <= 24) {
+        bool word = true;
+        for (QChar ch : rest.first(colon))
+            word = word && (ch.isLetterOrNumber() || ch == u' ' || ch == u'_' || ch == u'-');
+        if (word)
+            rest = rest.sliced(colon + 2);
+    }
+    rest = rest.trimmed();
+    if (rest.isEmpty())
+        return !message.trimmed().isEmpty(); // "SDK:" alone; a blank message is shown as it is
+    return std::none_of(rest.begin(), rest.end(), [](QChar ch) { return ch.isLetterOrNumber(); });
+}
+
 void LogConsole::appendLine(const QDateTime& time, LogLevel level, const QString& message, const QString& source)
 {
+    // Bar frames and rules say nothing in a narrow console (they wrap into a
+    // dashed line and a lone "|"); Verbose and the Logs page keep them.
+    if (m_min > LogLevel::Debug && level < LogLevel::Warning && isDecoration(message))
+        return;
     QTextCursor c(document());
     c.movePosition(QTextCursor::End);
     if (m_lines > 0)

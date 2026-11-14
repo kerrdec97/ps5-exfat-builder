@@ -610,7 +610,8 @@ private slots:
         QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/locked.bin")), "original"));
         auto o = server(root);
         o.throttleBytesPerSec = 1024 * 1024; // several seconds for the whole file: time to cancel
-        o.readOnlyPaths = {QStringLiteral("/g/locked.bin")};
+        // (and its replacement, which goes to a temporary next to it first)
+        o.readOnlyPaths = {QStringLiteral("/g/locked.bin"), QStringLiteral("/g/locked.bin.uploading")};
         o.refuseDeleteWhileOpen = true; // like a Windows-hosted server: the aborted STOR still holds the file
         FakeFtpServer srv(o);
         TransferOptions opt;
@@ -653,8 +654,10 @@ private slots:
         const QString root = fresh(QStringLiteral("dlcancel"));
         QVERIFY(fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("g/huge.exfat")), 8 * 1024 * 1024, 12));
         const QString local = fresh(QStringLiteral("dlcancel-local"));
-        // What was in the folder before stays.
+        // What was in the folder before stays, also a file that has the name
+        // older versions gave their partial download (a browser's download).
         QVERIFY(fwtest::writeTextFile(QDir(local).filePath(QStringLiteral("keep.txt")), "mine"));
+        QVERIFY(fwtest::writeTextFile(QDir(local).filePath(QStringLiteral("huge.exfat.part")), "browser"));
         auto o = server(root);
         o.throttleBytesPerSec = 1024 * 1024; // seconds for the whole file: time to cancel
         FakeFtpServer srv(o);
@@ -671,7 +674,7 @@ private slots:
         }
         QCOMPARE(int(plan.files.size()), 1);
         const QString target = plan.files.front().local;
-        const QString part = target + QStringLiteral(".part");
+        const QString part = target + QStringLiteral(".fw.part");
         ProgressReporter progress;
         progress.begin(QStringLiteral("Downloading"), plan.totalBytes, 1);
         CancellationSource cs;
@@ -690,8 +693,10 @@ private slots:
         QCOMPARE(rep->removedPartials, QStringList{part});
         QVERIFY(!QFileInfo::exists(part));
         QVERIFY(!QFileInfo::exists(target)); // and nothing that looks like the finished file
-        QCOMPARE(QDir(local).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), QStringList{QStringLiteral("keep.txt")});
+        QCOMPARE(QDir(local).entryList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name),
+                 (QStringList{QStringLiteral("huge.exfat.part"), QStringLiteral("keep.txt")}));
         QCOMPARE(readAll(QDir(local).filePath(QStringLiteral("keep.txt"))), QByteArray("mine"));
+        QCOMPARE(readAll(QDir(local).filePath(QStringLiteral("huge.exfat.part"))), QByteArray("browser"));
     }
 
     // The server says 226 but kept only part of the file: the upload counts as
@@ -818,6 +823,235 @@ private slots:
             QCOMPARE(rep->transferred, 0);
             QVERIFY(QDir(down).entryList(QDir::Files).isEmpty());
         }
+    }
+
+    // ---- resume on: an interrupted file keeps what arrived ---------------------------------
+    void withResumeACancelledTransferKeepsItsPartialAndContinues()
+    {
+        const QString root = fresh(QStringLiteral("keep-cancel"));
+        const QString local = fresh(QStringLiteral("keep-cancel-local"));
+        const QString src = QDir(local).filePath(QStringLiteral("huge.exfat"));
+        QVERIFY(fwtest::writeRandomFile(src, 8 * 1024 * 1024, 41));
+        auto o = server(root);
+        o.throttleBytesPerSec = 1024 * 1024; // seconds for the whole file: time to cancel
+        FakeFtpServer srv(o);
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        opt.resume = true;
+        const auto plan = planUpload({src}, QStringLiteral("/g"));
+        QVERIFY(plan.ok());
+        {
+            CancellationSource cs;
+            Result<TransferReport> rep = Error(ErrorCode::Internal, QString());
+            std::unique_ptr<QThread> worker(QThread::create([&] { rep = runUpload(plan.value(), opt, cs.token()); }));
+            worker->start();
+            const bool flowing = QTest::qWaitFor([&] { return srv.bytesReceived() > 300 * 1024; }, 10000);
+            cs.cancel();
+            worker->wait();
+            QVERIFY(flowing);
+            QVERIFY(rep.ok());
+            QVERIFY(rep->cancelled);
+            QCOMPARE(rep->keptPartials, QStringList{QStringLiteral("/g/huge.exfat")});
+            QVERIFY(rep->removedPartials.isEmpty());
+            QVERIFY(!srv.sawCommand(QStringLiteral("DELE")));
+        }
+        // The fake may still write what it had buffered when the client went.
+        qint64 kept = -1;
+        for (int i = 0; i < 60; ++i) {
+            const qint64 now = QFileInfo(srv.path(QStringLiteral("/g/huge.exfat"))).size();
+            if (now == kept)
+                break;
+            kept = now;
+            QTest::qWait(150);
+        }
+        QVERIFY(kept > 0 && kept < 8 * 1024 * 1024);
+        // The next resume run sends only the rest.
+        srv.setThrottle(0);
+        const qint64 before = srv.bytesReceived();
+        auto again = runUpload(plan.value(), opt, {});
+        QVERIFY(again.ok());
+        QCOMPARE(again->transferred, 1);
+        QCOMPARE(srv.bytesReceived() - before, qint64(8 * 1024 * 1024) - kept);
+        QVERIFY(srv.sawCommand(QStringLiteral("REST %1").arg(kept)));
+        QCOMPARE(readAll(srv.path(QStringLiteral("/g/huge.exfat"))), readAll(src));
+
+        // The other direction: the .part stays and the next run continues it.
+        const QString down = fresh(QStringLiteral("keep-cancel-down"));
+        TransferPlan dplan;
+        {
+            FtpClient c(quick());
+            QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+            auto p = planDownload(c, {QStringLiteral("/g/huge.exfat")}, down);
+            QVERIFY(p.ok());
+            dplan = p.value();
+            c.quit();
+        }
+        const QString part = dplan.files.front().local + QStringLiteral(".fw.part");
+        srv.setThrottle(1024 * 1024);
+        {
+            ProgressReporter progress;
+            progress.begin(QStringLiteral("Downloading"), dplan.totalBytes, 1);
+            CancellationSource cs;
+            Result<TransferReport> rep = Error(ErrorCode::Internal, QString());
+            std::unique_ptr<QThread> worker(QThread::create([&] { rep = runDownload(dplan, opt, cs.token(), &progress); }));
+            worker->start();
+            const bool flowing = QTest::qWaitFor([&] { return progress.snapshot().done > 200 * 1024; }, 20000);
+            cs.cancel();
+            worker->wait();
+            QVERIFY(flowing);
+            QVERIFY(rep.ok());
+            QVERIFY(rep->cancelled);
+            QCOMPARE(rep->keptPartials, QStringList{part});
+            QVERIFY(rep->removedPartials.isEmpty());
+        }
+        const qint64 have = QFileInfo(part).size();
+        QVERIFY(have > 0);
+        srv.setThrottle(0);
+        auto dagain = runDownload(dplan, opt, {});
+        QVERIFY(dagain.ok());
+        QCOMPARE(dagain->transferred, 1);
+        QCOMPARE(dagain->bytes, qint64(8 * 1024 * 1024) - have);
+        QVERIFY(!QFileInfo::exists(part));
+        QCOMPARE(readAll(dplan.files.front().local), readAll(src));
+    }
+
+    void withResumeAFileGivenUpKeepsItsPartial()
+    {
+        const QString local = fresh(QStringLiteral("keep-gone-local"));
+        const QString src = QDir(local).filePath(QStringLiteral("big.bin"));
+        QVERIFY(fwtest::writeRandomFile(src, 2 * 1024 * 1024, 42));
+        TransferOptions opt;
+        opt.retries = 1;
+        opt.resume = true;
+        // Upload: the console is back after the retry budget, but nothing is deleted.
+        {
+            const QString root = fresh(QStringLiteral("keep-gone"));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            o.goneAfterDrop = 1;
+            FakeFtpServer srv(o);
+            opt.endpoint = endpoint(srv.port());
+            auto plan = planUpload({src}, QStringLiteral("/up"));
+            QVERIFY(plan.ok());
+            auto rep = runUpload(plan.value(), opt, {});
+            QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(rep->keptPartials, QStringList{QStringLiteral("/up/big.bin")});
+            QVERIFY(rep->removedPartials.isEmpty());
+            QVERIFY(rep->leftoverPartials.isEmpty());
+            QVERIFY(!srv.sawCommand(QStringLiteral("DELE")));
+            QCOMPARE(QFileInfo(srv.path(QStringLiteral("/up/big.bin"))).size(), qint64(600 * 1024));
+            auto again = runUpload(plan.value(), opt, {});
+            QVERIFY(again.ok());
+            QCOMPARE(again->transferred, 1);
+            QVERIFY(srv.sawCommand(QStringLiteral("REST 614400")));
+            QCOMPARE(readAll(srv.path(QStringLiteral("/up/big.bin"))), readAll(src));
+        }
+        // Download: the console stays away; the .part stays for the next run.
+        {
+            const QString root = fresh(QStringLiteral("keep-gone-down"));
+            QVERIFY(QDir().mkpath(QDir(root).filePath(QStringLiteral("up"))));
+            QVERIFY(QFile::copy(src, QDir(root).filePath(QStringLiteral("up/big.bin"))));
+            const QString down = fresh(QStringLiteral("keep-gone-down-local"));
+            TransferPlan plan;
+            {
+                auto o = server(root);
+                o.dropAfterBytes = 500 * 1024;
+                o.goneAfterDrop = -1;
+                FakeFtpServer srv(o);
+                opt.endpoint = endpoint(srv.port());
+                FtpClient c(quick());
+                QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+                auto p = planDownload(c, {QStringLiteral("/up/big.bin")}, down);
+                QVERIFY(p.ok());
+                plan = p.value();
+                c.quit();
+                auto rep = runDownload(plan, opt, {});
+                QVERIFY(rep.ok());
+                QCOMPARE(rep->failed, 1);
+                const QString part = plan.files.front().local + QStringLiteral(".fw.part");
+                QCOMPARE(rep->keptPartials, QStringList{part});
+            }
+            const qint64 have = QFileInfo(plan.files.front().local + QStringLiteral(".fw.part")).size();
+            QVERIFY(have > 0 && have <= 500 * 1024);
+            FakeFtpServer back(server(root)); // the console is back (another port)
+            opt.endpoint = endpoint(back.port());
+            auto rep = runDownload(plan, opt, {});
+            QVERIFY(rep.ok());
+            QCOMPARE(rep->transferred, 1);
+            QCOMPARE(rep->bytes, qint64(2 * 1024 * 1024) - have);
+            QVERIFY(back.sawCommand(QStringLiteral("REST %1").arg(have)));
+            QCOMPARE(readAll(plan.files.front().local), readAll(src));
+        }
+        // The job says where the partial is.
+        {
+            Module mod;
+            const QString root = fresh(QStringLiteral("keep-gone-job"));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            o.goneAfterDrop = 1;
+            FakeFtpServer srv(o);
+            const SettingsValues s(mod.schema, {{keys::kConsoleIp, QStringLiteral("127.0.0.1")}, {keys::kFtpPort, srv.port()}}, {});
+            auto job = mod.jobs.create(jobkinds::kUpload, {{QStringLiteral("sources"), QJsonArray{src}},
+                                                           {QStringLiteral("remoteDir"), QStringLiteral("/up")},
+                                                           {QStringLiteral("resume"), true},
+                                                           {QStringLiteral("retries"), 1}});
+            QVERIFY(job.ok());
+            ProgressReporter progress;
+            progress.setPhases(job.value()->phases());
+            JobContext ctx;
+            ctx.progress = &progress;
+            ctx.settings = s;
+            ctx.log = Log(QStringLiteral("test"));
+            auto out = job.value()->run(ctx);
+            QVERIFY(out.ok());
+            QCOMPARE(out->verification, Verification::Failed);
+            QCOMPARE(out->details.value(QStringLiteral("keptPartials")).toArray(), QJsonArray{QStringLiteral("/up/big.bin")});
+            QVERIFY2(out->warnings.join(u'\n').contains(QStringLiteral("Kept the partial file so the transfer can resume: /up/big.bin")),
+                     qPrintable(out->warnings.join(u'\n')));
+        }
+    }
+
+    // A file that arrived whole with the wrong size is no resume point: it goes, resume or not.
+    void withResumeAWrongSizedFileIsStillRemoved()
+    {
+        const QString root = fresh(QStringLiteral("keep-short"));
+        const QString local = fresh(QStringLiteral("keep-short-local"));
+        const QString game = QDir(local).filePath(QStringLiteral("game.ffpkg"));
+        QVERIFY(fwtest::writeRandomFile(game, 300000, 43));
+        QVERIFY(fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("dl/short.bin")), 300000, 44));
+        auto o = server(root);
+        o.corruptStorPath = QStringLiteral("/up/game.ffpkg");
+        o.shortRetrPath = QStringLiteral("/dl/short.bin");
+        QVERIFY(QDir().mkpath(QDir(root).filePath(QStringLiteral("up"))));
+        FakeFtpServer srv(o);
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        opt.resume = true;
+        auto plan = planUpload({game}, QStringLiteral("/up"));
+        QVERIFY(plan.ok());
+        auto rep = runUpload(plan.value(), opt, {});
+        QVERIFY(rep.ok());
+        QCOMPARE(rep->failed, 1);
+        QVERIFY(rep->keptPartials.isEmpty());
+        QCOMPARE(rep->removedPartials, QStringList{QStringLiteral("/up/game.ffpkg")});
+        QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/up/game.ffpkg"))));
+
+        const QString down = fresh(QStringLiteral("keep-short-down"));
+        TransferPlan dplan;
+        {
+            FtpClient c(quick());
+            QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+            auto p = planDownload(c, {QStringLiteral("/dl/short.bin")}, down);
+            QVERIFY(p.ok());
+            dplan = p.value();
+            c.quit();
+        }
+        auto drep = runDownload(dplan, opt, {});
+        QVERIFY(drep.ok());
+        QCOMPARE(drep->failed, 1);
+        QVERIFY(drep->keptPartials.isEmpty());
+        QVERIFY(QDir(down).entryList(QDir::Files).isEmpty());
     }
 
 
@@ -950,6 +1184,37 @@ private slots:
         QCOMPARE(readAll(fin), QByteArray("new"));
         QCOMPARE(QDir(dir).entryList(QDir::Files), QStringList{QStringLiteral("game.exfat")});
 
+        // A read-only old file is replaced too, and leaves nothing behind.
+        QVERIFY(QFile::setPermissions(fin, QFileDevice::ReadOwner | QFileDevice::ReadUser));
+        QVERIFY(fwtest::writeTextFile(part, "newer"));
+        QVERIFY(commitDownloadedFile(part, fin).ok());
+        QCOMPARE(readAll(fin), QByteArray("newer"));
+        QCOMPARE(QDir(dir).entryList(QDir::Files), QStringList{QStringLiteral("game.exfat")});
+#ifdef Q_OS_WIN
+        // The replace of a read-only file fails (here the .part is held): the
+        // old file keeps its name and its flag, and it was never set aside
+        // under another name (a crash then could have left it only as
+        // "game.exfat.fw-old"): nothing was renamed in the folder.
+        QVERIFY(QFile::setPermissions(fin, QFileDevice::ReadOwner | QFileDevice::ReadUser));
+        QVERIFY(fwtest::writeTextFile(part, "newest"));
+        {
+            QFile holder(part);
+            QVERIFY(holder.open(QIODevice::ReadOnly));
+            QTest::qWait(30);
+            const QDateTime folderChanged = QFileInfo(dir).lastModified();
+            const Status held = commitDownloadedFile(part, fin);
+            QVERIFY(!held.ok());
+            QVERIFY2(held.error().message.contains(QStringLiteral(".part")), qPrintable(held.error().message));
+            QCOMPARE(QFileInfo(dir).lastModified(), folderChanged);
+        }
+        QVERIFY(!QFileInfo(fin).isWritable());
+        QCOMPARE(readAll(fin), QByteArray("newer"));
+        QCOMPARE(readAll(part), QByteArray("newest"));
+        QCOMPARE(QDir(dir).entryList(QDir::Files, QDir::Name), (QStringList{QStringLiteral("game.exfat"), QStringLiteral("game.exfat.part")}));
+        QVERIFY(QFile::setPermissions(fin, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadUser | QFileDevice::WriteUser));
+        QVERIFY(QFile::remove(part));
+#endif
+
         // The old file cannot be moved out of the way: both it and the .part survive.
         const QString locked = fresh(QStringLiteral("commit-locked"));
         const QString lf = QDir(locked).filePath(QStringLiteral("x.bin"));
@@ -959,6 +1224,8 @@ private slots:
         QFile inUse(lf); // Windows does not rename a file another program has open
         QVERIFY(inUse.open(QIODevice::ReadOnly));
         const bool blocked = true;
+        QTest::qWait(30);
+        const QDateTime folderChanged = QFileInfo(locked).lastModified();
 #else
         // A folder that refuses changes (not for root, who may change it all the same).
         QFile::setPermissions(locked, QFileDevice::ReadOwner | QFileDevice::ExeOwner);
@@ -975,6 +1242,386 @@ private slots:
         QCOMPARE(readAll(lf), QByteArray("old"));
         QCOMPARE(readAll(lf + QStringLiteral(".part")), QByteArray("new"));
         QCOMPARE(QDir(locked).entryList(QDir::Files, QDir::Name), (QStringList{QStringLiteral("x.bin"), QStringLiteral("x.bin.part")}));
+#ifdef Q_OS_WIN
+        // Never copied aside instead (minutes and as much space again for an
+        // image): no file was made and removed again in the folder.
+        QCOMPARE(QFileInfo(locked).lastModified(), folderChanged);
+#endif
+    }
+
+    // The download commit is PartFile's: an existing file is replaced only
+    // when asked, in one step, and a read-only one leaves nothing behind. A
+    // "<name>.fw-old" (what an older version set aside) is never touched: it
+    // may be older than the file now under that name.
+    void downloadCommitNeverLeavesTheNameEmpty()
+    {
+        const QString dir = fresh(QStringLiteral("commit-oneStep"));
+        const QString fin = QDir(dir).filePath(QStringLiteral("game.exfat"));
+        const QString part = fin + QStringLiteral(".fw.part");
+        const QString aside = fin + QStringLiteral(".fw-old");
+        QVERIFY(fwtest::writeTextFile(fin, "old"));
+        QVERIFY(fwtest::writeTextFile(aside, "older"));
+        QVERIFY(fwtest::writeTextFile(part, "new"));
+        const Status refused = commitDownloadedFile(part, fin, false);
+        QVERIFY(!refused.ok());
+        QCOMPARE(refused.error().code, ErrorCode::AlreadyExists);
+        QVERIFY2(refused.error().message.contains(QDir::toNativeSeparators(part)), qPrintable(refused.error().message));
+        QCOMPARE(readAll(fin), QByteArray("old"));
+        QCOMPARE(readAll(part), QByteArray("new"));
+        QCOMPARE(readAll(aside), QByteArray("older"));
+
+        QVERIFY(QFile::setPermissions(fin, QFileDevice::ReadOwner | QFileDevice::ReadUser));
+        QVERIFY(commitDownloadedFile(part, fin, true).ok());
+        QCOMPARE(readAll(fin), QByteArray("new"));
+        QCOMPARE(readAll(aside), QByteArray("older"));
+        QCOMPARE(QDir(dir).entryList(QDir::Files), (QStringList{QStringLiteral("game.exfat"), QStringLiteral("game.exfat.fw-old")}));
+    }
+
+    // A download never writes into, empties or removes a file it did not
+    // create: a "<name>.part" may be a browser's download, and a console
+    // folder may hold both "x" and "x.part".
+    void downloadNeverTakesAPartFileItDidNotCreate()
+    {
+        const QString root = fresh(QStringLiteral("dl-theirs"));
+        QVERIFY(fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("g/game.ffpkg")), 300000, 51));
+        QVERIFY(fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("g/short.bin")), 200000, 52));
+        QVERIFY(fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("pair/X")), 300000, 53));
+        QVERIFY(fwtest::writeRandomFile(QDir(root).filePath(QStringLiteral("pair/X.part")), 100000, 54));
+        auto o = server(root);
+        o.shortRetrPath = QStringLiteral("/g/short.bin");
+        FakeFtpServer srv(o);
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        auto planFor = [&](const QStringList& sources, const QString& local) {
+            FtpClient c(quick());
+            if (!c.open(QStringLiteral("127.0.0.1"), srv.port()).ok())
+                return TransferPlan{};
+            auto p = planDownload(c, sources, local);
+            c.quit();
+            return p.ok() ? p.value() : TransferPlan{};
+        };
+
+        // Resume off: the other program's files stay byte for byte, through a
+        // finished download and through one that fails.
+        const QString local = fresh(QStringLiteral("dl-theirs-local"));
+        QVERIFY(fwtest::writeTextFile(QDir(local).filePath(QStringLiteral("game.ffpkg.part")), "a browser's download"));
+        QVERIFY(fwtest::writeTextFile(QDir(local).filePath(QStringLiteral("short.bin.part")), "another program's file"));
+        const TransferPlan plan = planFor({QStringLiteral("/g/game.ffpkg"), QStringLiteral("/g/short.bin")}, local);
+        QCOMPARE(int(plan.files.size()), 2);
+        auto rep = runDownload(plan, opt, {});
+        QVERIFY(rep.ok());
+        QCOMPARE(rep->transferred, 1);
+        QCOMPARE(rep->failed, 1);
+        QCOMPARE(readAll(QDir(local).filePath(QStringLiteral("game.ffpkg"))), readAll(srv.path(QStringLiteral("/g/game.ffpkg"))));
+        QCOMPARE(readAll(QDir(local).filePath(QStringLiteral("game.ffpkg.part"))), QByteArray("a browser's download"));
+        QCOMPARE(readAll(QDir(local).filePath(QStringLiteral("short.bin.part"))), QByteArray("another program's file"));
+        QCOMPARE(QDir(local).entryList(QDir::Files, QDir::Name),
+                 (QStringList{QStringLiteral("game.ffpkg"), QStringLiteral("game.ffpkg.part"), QStringLiteral("short.bin.part")}));
+
+        // "X.part" first, then "X": each keeps its own bytes, resume off and on
+        // (an "X.part" this download writes is never X's resume point).
+        for (const bool resume : {false, true}) {
+            const QString pair = fresh(QStringLiteral("dl-pair-local"));
+            TransferOptions po = opt;
+            po.resume = resume;
+            const TransferPlan pp = planFor({QStringLiteral("/pair/X.part"), QStringLiteral("/pair/X")}, pair);
+            QCOMPARE(int(pp.files.size()), 2);
+            auto pr = runDownload(pp, po, {});
+            QVERIFY(pr.ok());
+            QCOMPARE(pr->transferred, 2);
+            QCOMPARE(readAll(QDir(pair).filePath(QStringLiteral("X"))), readAll(srv.path(QStringLiteral("/pair/X"))));
+            QCOMPARE(readAll(QDir(pair).filePath(QStringLiteral("X.part"))), readAll(srv.path(QStringLiteral("/pair/X.part"))));
+            QCOMPARE(QDir(pair).entryList(QDir::Files, QDir::Name), (QStringList{QStringLiteral("X"), QStringLiteral("X.part")}));
+        }
+
+        // Resume on: a "<name>.part" is not continued either, whether its bytes
+        // are the start of the file (an older version's partial download) or
+        // not (another program's file of that name): it stays byte for byte,
+        // and the download starts from the beginning under its own name.
+        const QByteArray whole = readAll(srv.path(QStringLiteral("/g/game.ffpkg")));
+        TransferOptions ro = opt;
+        ro.resume = true;
+        for (const QByteArray& theirs : {whole.left(100000), QByteArray(100000, 'F')}) {
+            const QString older = fresh(QStringLiteral("dl-older-local"));
+            QVERIFY(fwtest::writeTextFile(QDir(older).filePath(QStringLiteral("game.ffpkg.part")), theirs));
+            auto rr = runDownload(planFor({QStringLiteral("/g/game.ffpkg")}, older), ro, {});
+            QVERIFY(rr.ok());
+            QCOMPARE(rr->transferred, 1);
+            QCOMPARE(rr->verified, 1);
+            QCOMPARE(rr->bytes, qint64(300000));
+            QVERIFY(rr->keptPartials.isEmpty());
+            QCOMPARE(readAll(QDir(older).filePath(QStringLiteral("game.ffpkg"))), whole);
+            QCOMPARE(readAll(QDir(older).filePath(QStringLiteral("game.ffpkg.part"))), theirs);
+            QCOMPARE(QDir(older).entryList(QDir::Files, QDir::Name),
+                     (QStringList{QStringLiteral("game.ffpkg"), QStringLiteral("game.ffpkg.part")}));
+        }
+        QVERIFY(!srv.sawCommand(QStringLiteral("REST 100000")));
+    }
+
+    // A console folder that holds "x" and "x.fw.part": both would be written
+    // through one file on this PC, so the second is left out and reported.
+    void downloadTargetsThatClashWithATemporaryNameAreLeftOut()
+    {
+        const QString root = fresh(QStringLiteral("dl-clash"));
+        QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("c/x")), "x"));
+        QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("c/x.fw.part")), "x temp"));
+        FakeFtpServer srv(server(root));
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        const QString local = fresh(QStringLiteral("dl-clash-local"));
+        auto p = planDownload(c, {QStringLiteral("/c")}, local);
+        QVERIFY(p.ok());
+        QCOMPARE(int(p->files.size()), 1);
+        QCOMPARE(p->skipped.size(), 1);
+        QVERIFY2(p->skipped.front().contains(QStringLiteral("temporary name")), qPrintable(p->skipped.front()));
+    }
+
+    // Uploading to a name the console already has: the old file stays the
+    // console's until the new one is complete, so a cancel or a failure
+    // never leaves it with neither (the PS5 has no recycle bin).
+    void uploadOverAnExistingFileKeepsItUntilTheNewOneIsComplete()
+    {
+        const QString local = fresh(QStringLiteral("up-replace-local"));
+        const QString src = QDir(local).filePath(QStringLiteral("game.exfat"));
+        QVERIFY(fwtest::writeRandomFile(src, 8 * 1024 * 1024, 61));
+        const QByteArray old(300000, 'O');
+        // Cancelled mid-transfer.
+        {
+            const QString root = fresh(QStringLiteral("up-replace-cancel"));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/game.exfat")), old));
+            auto o = server(root);
+            o.throttleBytesPerSec = 1024 * 1024;
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            const auto plan = planUpload({src}, QStringLiteral("/g"));
+            QVERIFY(plan.ok());
+            CancellationSource cs;
+            Result<TransferReport> rep = Error(ErrorCode::Internal, QString());
+            std::unique_ptr<QThread> worker(QThread::create([&] { rep = runUpload(plan.value(), opt, cs.token()); }));
+            worker->start();
+            const bool flowing = QTest::qWaitFor([&] { return srv.bytesReceived() > 300 * 1024; }, 10000);
+            cs.cancel();
+            worker->wait();
+            QVERIFY(flowing);
+            QVERIFY(rep.ok());
+            QVERIFY(rep->cancelled);
+            QCOMPARE(rep->removedPartials, QStringList{QStringLiteral("/g/game.exfat.uploading")});
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/game.exfat"))), old);
+            QVERIFY(!srv.commands().contains(QStringLiteral("DELE /g/game.exfat")));
+            QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/g/game.exfat.uploading"))));
+        }
+        // Given up after a lost connection, and a transfer that arrived short.
+        const QString small = QDir(local).filePath(QStringLiteral("small.exfat"));
+        QVERIFY(fwtest::writeRandomFile(small, 2 * 1024 * 1024, 62));
+        {
+            const QString root = fresh(QStringLiteral("up-replace-gone"));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/small.exfat")), old));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            o.goneAfterDrop = 1;
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            opt.retries = 1;
+            auto rep = runUpload(planUpload({small}, QStringLiteral("/g")).value(), opt, {});
+            QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/small.exfat"))), old);
+            QCOMPARE(rep->removedPartials, QStringList{QStringLiteral("/g/small.exfat.uploading")});
+        }
+        {
+            const QString root = fresh(QStringLiteral("up-replace-short"));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/small.exfat")), old));
+            auto o = server(root);
+            o.corruptStorPath = QStringLiteral("/g/small.exfat.uploading");
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({small}, QStringLiteral("/g")).value(), opt, {});
+            QVERIFY(rep.ok());
+            QCOMPARE(rep->failed, 1);
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/small.exfat"))), old);
+            QVERIFY(!QFileInfo::exists(srv.path(QStringLiteral("/g/small.exfat.uploading"))));
+        }
+        // Complete: the new file takes the name and nothing else stays; with
+        // resume on, an interrupted replace is continued from its temporary
+        // (an older file larger than the new one is no partial of it).
+        {
+            const QString root = fresh(QStringLiteral("up-replace-ok"));
+            const QByteArray larger(3 * 1024 * 1024, 'O');
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/small.exfat")), larger));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            opt.retries = 0;
+            opt.resume = true;
+            const auto plan = planUpload({small}, QStringLiteral("/g"));
+            QVERIFY(plan.ok());
+            auto first = runUpload(plan.value(), opt, {});
+            QVERIFY(first.ok());
+            QCOMPARE(first->failed, 1);
+            QCOMPARE(first->keptPartials, QStringList{QStringLiteral("/g/small.exfat.uploading")});
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/small.exfat"))), larger);
+            auto second = runUpload(plan.value(), opt, {});
+            QVERIFY(second.ok());
+            QCOMPARE(second->transferred, 1);
+            QVERIFY(srv.sawCommand(QStringLiteral("REST 614400")));
+            QCOMPARE(second->outputs, QStringList{QStringLiteral("/g/small.exfat")});
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/small.exfat"))), readAll(small));
+            QCOMPARE(QDir(srv.path(QStringLiteral("/g"))).entryList(QDir::Files), QStringList{QStringLiteral("small.exfat")});
+        }
+        // Resume on, and the old file was removed in between (to make room):
+        // the temporary is continued all the same and takes the name.
+        {
+            const QString root = fresh(QStringLiteral("up-replace-oldgone"));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/small.exfat")), QByteArray(3 * 1024 * 1024, 'O')));
+            auto o = server(root);
+            o.dropAfterBytes = 600 * 1024;
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            opt.retries = 0;
+            opt.resume = true;
+            const auto plan = planUpload({small}, QStringLiteral("/g"));
+            QVERIFY(plan.ok());
+            auto first = runUpload(plan.value(), opt, {});
+            QVERIFY(first.ok());
+            QCOMPARE(first->keptPartials, QStringList{QStringLiteral("/g/small.exfat.uploading")});
+            QVERIFY(QFile::remove(srv.path(QStringLiteral("/g/small.exfat"))));
+            auto second = runUpload(plan.value(), opt, {});
+            QVERIFY(second.ok());
+            QCOMPARE(second->transferred, 1);
+            QVERIFY(srv.sawCommand(QStringLiteral("REST 614400")));
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/small.exfat"))), readAll(small));
+            QCOMPARE(QDir(srv.path(QStringLiteral("/g"))).entryList(QDir::Files), QStringList{QStringLiteral("small.exfat")});
+        }
+        // No room on the console for the new file next to the old one: the old
+        // file stays, and the error says why a replace that used to fit fails.
+        {
+            const QString root = fresh(QStringLiteral("up-replace-full"));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/small.exfat")), old));
+            auto o = server(root);
+            o.failFirstTransferReply = "552 Insufficient storage space.";
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({small}, QStringLiteral("/g")).value(), opt, {});
+            QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+            QCOMPARE(rep->failed, 1);
+            QVERIFY(srv.sawCommand(QStringLiteral("STOR /g/small.exfat.uploading")));
+            const QString why = rep->errors.join(u'\n');
+            QVERIFY2(why.contains(QStringLiteral("out of space"))
+                         && why.contains(QStringLiteral("Replacing /g/small.exfat needs room on the PS5 for the new file"))
+                         && why.contains(QStringLiteral("which was kept")),
+                     qPrintable(why));
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/small.exfat"))), old);
+            QVERIFY(!srv.commands().contains(QStringLiteral("DELE /g/small.exfat")));
+            QCOMPARE(QDir(srv.path(QStringLiteral("/g"))).entryList(QDir::Files), QStringList{QStringLiteral("small.exfat")});
+        }
+        // A server that renames nothing: written over directly, with a warning.
+        {
+            const QString root = fresh(QStringLiteral("up-replace-norename"));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/small.exfat")), old));
+            auto o = server(root);
+            o.renameRefused = true;
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({small}, QStringLiteral("/g")).value(), opt, {});
+            QVERIFY(rep.ok());
+            QCOMPARE(rep->transferred, 1);
+            QVERIFY2(rep->warnings.join(u'\n').contains(QStringLiteral("refused to rename files")), qPrintable(rep->warnings.join(u'\n')));
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/small.exfat"))), readAll(small));
+            QCOMPARE(QDir(srv.path(QStringLiteral("/g"))).entryList(QDir::Files), QStringList{QStringLiteral("small.exfat")});
+        }
+        // ... and once the first file showed it, every other file the console
+        // has is sent once, straight to its name, under one warning for all.
+        const QString other = QDir(local).filePath(QStringLiteral("other.exfat"));
+        QVERIFY(fwtest::writeRandomFile(other, 1024 * 1024, 64));
+        {
+            const QString root = fresh(QStringLiteral("up-replace-norename-two"));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/small.exfat")), old));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/other.exfat")), old));
+            auto o = server(root);
+            o.renameRefused = true;
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({small, other}, QStringLiteral("/g")).value(), opt, {});
+            QVERIFY(rep.ok());
+            QCOMPARE(rep->transferred, 2);
+            const QStringList cmds = srv.commands();
+            QCOMPARE(cmds.count(QStringLiteral("STOR /g/small.exfat.uploading")), 1);
+            QCOMPARE(cmds.count(QStringLiteral("STOR /g/small.exfat")), 1);
+            QCOMPARE(cmds.count(QStringLiteral("STOR /g/other.exfat")), 1);
+            QVERIFY(!cmds.contains(QStringLiteral("STOR /g/other.exfat.uploading")));
+            const QStringList warned = rep->warnings.filter(QStringLiteral("refused to rename files"));
+            QCOMPARE(warned.size(), 1);
+            QVERIFY2(warned.front().contains(QStringLiteral("/g/small.exfat and 1 more file(s)")), qPrintable(warned.front()));
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/small.exfat"))), readAll(small));
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/other.exfat"))), readAll(other));
+            QCOMPARE(QDir(srv.path(QStringLiteral("/g"))).entryList(QDir::Files, QDir::Name),
+                     (QStringList{QStringLiteral("other.exfat"), QStringLiteral("small.exfat")}));
+        }
+        // A server that refuses to rename one file only still gets the safe
+        // replace for the others.
+        {
+            const QString root = fresh(QStringLiteral("up-replace-norename-one"));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/small.exfat")), old));
+            QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("g/other.exfat")), old));
+            auto o = server(root);
+            o.refuseRenameFromPaths = {QStringLiteral("/g/small.exfat")};
+            FakeFtpServer srv(o);
+            TransferOptions opt;
+            opt.endpoint = endpoint(srv.port());
+            auto rep = runUpload(planUpload({small, other}, QStringLiteral("/g")).value(), opt, {});
+            QVERIFY(rep.ok());
+            QCOMPARE(rep->transferred, 2);
+            QVERIFY(srv.sawCommand(QStringLiteral("STOR /g/other.exfat.uploading")));
+            QVERIFY(srv.sawCommand(QStringLiteral("RNFR /g/other.exfat")));
+            const QStringList warned = rep->warnings.filter(QStringLiteral("refused to rename files"));
+            QCOMPARE(warned.size(), 1);
+            QVERIFY2(warned.front().contains(QStringLiteral("so /g/small.exfat was written over")), qPrintable(warned.front()));
+            QCOMPARE(readAll(srv.path(QStringLiteral("/g/other.exfat"))), readAll(other));
+            QCOMPARE(QDir(srv.path(QStringLiteral("/g"))).entryList(QDir::Files, QDir::Name),
+                     (QStringList{QStringLiteral("other.exfat"), QStringLiteral("small.exfat")}));
+        }
+    }
+
+    // Resume on, cancelled after the STOR was accepted but before the console
+    // took a byte: the empty file is no resume point and is not reported as one.
+    void withResumeACancelBeforeAnyByteKeepsNothing()
+    {
+        const QString root = fresh(QStringLiteral("keep-none"));
+        QVERIFY(QDir().mkpath(QDir(root).filePath(QStringLiteral("g"))));
+        const QString local = fresh(QStringLiteral("keep-none-local"));
+        const QString src = QDir(local).filePath(QStringLiteral("x.exfat"));
+        QVERIFY(fwtest::writeRandomFile(src, 4 * 1024 * 1024, 63));
+        auto o = server(root);
+        o.stallAfterBytes = 0; // accepts the STOR, then takes nothing
+        FakeFtpServer srv(o);
+        TransferOptions opt;
+        opt.endpoint = endpoint(srv.port());
+        opt.resume = true;
+        const auto plan = planUpload({src}, QStringLiteral("/g"));
+        QVERIFY(plan.ok());
+        CancellationSource cs;
+        Result<TransferReport> rep = Error(ErrorCode::Internal, QString());
+        std::unique_ptr<QThread> worker(QThread::create([&] { rep = runUpload(plan.value(), opt, cs.token()); }));
+        worker->start();
+        const bool stored = QTest::qWaitFor([&] { return srv.sawCommand(QStringLiteral("STOR /g/x.exfat")); }, 10000);
+        QTest::qWait(300);
+        cs.cancel();
+        worker->wait();
+        QVERIFY(stored);
+        QVERIFY(rep.ok());
+        QVERIFY(rep->cancelled);
+        QCOMPARE(QFileInfo(srv.path(QStringLiteral("/g/x.exfat"))).size(), qint64(0));
+        QVERIFY2(rep->keptPartials.isEmpty(), qPrintable(rep->keptPartials.join(u' ')));
+        QCOMPARE(rep->removedPartials + rep->leftoverPartials, QStringList{QStringLiteral("/g/x.exfat")});
     }
 
     void remoteNamesAreNeverTrusted()
@@ -1375,7 +2022,8 @@ private slots:
         }
         QVERIFY(fwtest::writeTextFile(QDir(root).filePath(QStringLiteral("up/f3.bin")), "locked"));
         auto o = server(root);
-        o.readOnlyPaths = {QStringLiteral("/up/f3.bin")}; // one file fails
+        // One file fails (its replacement goes to a temporary next to it first).
+        o.readOnlyPaths = {QStringLiteral("/up/f3.bin"), QStringLiteral("/up/f3.bin.uploading")};
         FakeFtpServer srv(o);
         TransferOptions opt;
         opt.endpoint = endpoint(srv.port());
