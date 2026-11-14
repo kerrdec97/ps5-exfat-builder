@@ -697,14 +697,14 @@ struct FpkgSettings {
     bool removeAmprLeftovers = true;       // fpkg.removeAmprLeftovers
     bool removeDumpLeftovers = true;       // fpkg.removeDumpLeftovers
     bool repairSelf = true;                // fpkg.repairSelf
-    bool repairUcp = false;                // fpkg.repairUcp: off until the UCP layout is confirmed
+    bool repairUcp = true;                 // fpkg.repairUcp (5.0.3; false before: off until the UCP layout was confirmed)
     bool recoverPngFromDds = true;         // fpkg.recoverPngFromDds (needs dds2png)
 
     // PlayGo (section "PlayGo")
     bool playGoFallback = true;            // fpkg.playGoFallback: script layout when no usable table
-    int playGoChunkCount = 100;            // fpkg.playGoChunkCount: 1..255
+    int playGoChunkCount = 100;            // fpkg.playGoChunkCount: 1..800 (1..255 before 5.0.3)
     bool fillEmptyChunks = true;           // fpkg.fillEmptyChunks
-    bool useSourcePlayGoTable = false;     // fpkg.useSourcePlayGoTable: off until the flat-path hash is confirmed
+    bool useSourcePlayGoTable = true;      // fpkg.useSourcePlayGoTable (5.0.3; false before: off until the flat-path hash was confirmed)
 
     // Verification (section "Verification")
     PostVerify postVerify = PostVerify::ToolFull;  // header always; then img_verify format(+integrity)
@@ -720,7 +720,8 @@ struct FpkgSettings {
 } // namespace fw::fpkg
 ```
 
-Defaults follow the reference except: `repairUcp` and `useSourcePlayGoTable` start off (unverified formats);
+Defaults follow the reference except (up to 5.0.2 also `repairUcp` and `useSourcePlayGoTable`, which started off; since
+5.0.3 both start on, as in the reference 3.1.0, see §9):
 `postVerify` keeps our Python default (`img_verify` with integrity, the toolkit GUI default); `updateOutput` is `Both`
 (the reference UI defaults to "update only", its CLI and request default to both; keeping both loses nothing).
 
@@ -888,7 +889,7 @@ What changed there and is ported here (`libs/sony-sdk/scripts/create-gp5-from-fo
 
 | Rule | Reference | Here |
 |---|---|---|
-| SDK version | `sdkVersion` 0 or missing: the highest version of the `.sceversion` trailer of `eboot.bin` (major and minor) is written; `requiredSystemSoftwareVersion` is raised to `sdkVersion` when lower. App packages only. The fix15 publisher keeps both values; older toolkits write 0. | `applySdkVersionRule` (ParamJson), `executableSdkVersion` (InputRepair); a warning after `img_verify` when the package carries SDK version 0 |
+| SDK version | `sdkVersion` 0 or missing: the highest version of the `.sceversion` trailer of `eboot.bin` (major and minor) is written; `requiredSystemSoftwareVersion` is raised to `sdkVersion` when lower. App packages only. The fix15 publisher keeps both values; older toolkits write 0. | `applySdkVersionRule` (ParamJson), `executableSdkVersion` (InputRepair); applied again after "Lower the required firmware", so the required version never ends below `sdkVersion`; a warning after `img_verify` when the package carries SDK version 0, and the SDK version messages of `img_verify` count as problems when it carries a real one |
 | SELF repair | PS4 signature replaced; a `.sceversion` trailer that starts up to 15 bytes before the size the SELF header names gets zero padding in front | `selfRepairPlan`, `writeSelfRepairCopy` |
 | PlayGo chunk count | from the header of the source `playgo-chunk.dat` (1-800 chunks, 1-5 scenarios), else the setting (default 100) | `sourcePlayGoChunkCount` |
 | PlayGo source layout | valid `playgo-ficm.dat` + `playgo-hash-table.dat`: chunk labels and languages from the chunk table, each file's chunk by path hash (seed and key from the hash table header, path as UTF-8 with a-z upper-cased, no leading slash; `sce_sys/*.png` also looked up as `.dds`); files the map does not name go to chunk 0; a chunk without label and languages is not declared; the scenario file gets the languages of the chunks. Not used when every file of a multi-chunk table is in chunk 0. | `readSourcePlayGoLayout`, `planToolkit` (PlayGo) |

@@ -56,16 +56,148 @@ What was different, and is now the same:
 
 **The Sony toolkit matters too.** Toolkits older than `sdk-fpkg279-fix15`
 write SDK version 0 into the package whatever `param.json` says. The app now
-warns after the build when the finished package carries SDK version 0. Use the
-fix15 toolkit (Settings › Tools). Backport updates accept fix15 as the
-recommended release; fix13 and fix12 still work, with a note.
+warns after the build when the finished package carries SDK version 0 (read
+back by img_verify, or, with only the header checked, when the toolkit's files
+are those of fix12 or fix13). Use the fix15 toolkit (Settings › Tools).
+Backport updates accept fix15 as the recommended release; fix13 and fix12
+still work, with a note.
 
 Not tested: a PS5 console and real Sony tools. The project the app writes was
 compared entry by entry with the reference toolkit's own script on a test
 folder (`native/tests/data/fpkg/compare_with_reference.py`).
 
-Three setting descriptions changed and show in English in the other 41
-languages until they are translated again.
+### From your reports (GitHub issues)
+* **Cancelling verification keeps the finished work** (#97). Cancelling the
+  check after an extraction used to throw the extracted files away. Now, when
+  only the verification is cancelled, the finished output gets its final name
+  exactly as with verification off, and the job says "Verification was
+  cancelled, so … not verified" ("Not verified" in the monitor and the queue).
+  This applies to building exFAT, FFPKG and PFS images and packed folders,
+  and to extracting, converting and editing; with "Replace" the new,
+  unverified image takes the old one's place. An FPKG package is kept under a
+  numbered name and, with **Overwrite**, the previous package stays (Overwrite
+  replaces it only after the new one passed its checks). A mismatch found
+  before the cancel still fails the job and keeps nothing (an FPKG package
+  whose `img_verify` check reports a problem is kept with a warning, as
+  before). Closing the app during a verification is not such a cancel: the
+  unverified work is not used, the previous output stays, and the job comes
+  back as interrupted. A source is never deleted nor an output uploaded after
+  a cancelled verification.
+* **Verify after extracting / Verify after converting**: Image tools › Extract
+  and Convert have a switch for each job, which starts at Settings ›
+  Verification › Verify every output.
+* **AMPR index** (#93, follow-up): "When the game uses the AMPR emulator" keeps
+  the dump's `ampr_emu.index` only when it is byte for byte the index the app
+  would write for the files as they are. One that differs only in file dates
+  gets a fresh index in the image (the AMPR emulator gives those dates to the
+  game). The dump folder is still never changed.
+* **The countdown after the queue** (#96): only jobs started in this session
+  start it, so the update check at start-up and a restored queue no longer
+  bring it back after the app was ended. It stays on top, **Cancel** is its
+  default button, and Esc or closing the window cancels it. The Queue page has
+  a **When the queue finishes** choice to see and change the action before or
+  during a run; while one is set, the queue chip at the top ends in
+  "· then sleep" (or shut down, …). Importing 4.x settings no longer sets it.
+* **Package title and DLC** (#94, #95): when the Build page's Title changes a
+  package whose `param.json` has its own name for other languages, the build
+  log says which languages keep their name (the console shows the name of its
+  own language). The log also lists the DLC folders `dlc_emu.ini` puts into
+  the package.
+
+### Safety of your files
+* **FTP transfers with Resume on keep what arrived** after a cancel, a lost
+  connection or a refused transfer, and the next resume run continues it (a
+  warning names the file). A file that arrived whole with the wrong size, and
+  an upload cancelled before the console took a byte of it, are still removed.
+* **An upload no longer removes the console's copy of a file.** A file the PS5
+  already has is replaced only once the new one is complete and size-checked
+  (it is sent as `<name>.uploading` first), so a cancel or a failure removes
+  only that temporary file. Replacing a file therefore needs free space on the
+  PS5 for the new file next to the old one; when there is not enough, the
+  upload fails, the old file stays, and the message says so (free space, or
+  delete the old file on the PS5 first). A server that cannot rename files gets
+  the files written over directly, with one warning.
+* **Downloads from the PS5 leave other programs' files alone**: they are
+  written as `<name>.fw.part`, never into a `<name>.part` a browser or another
+  program has there. With Resume on, a partial download that 5.0.2 left as
+  `<name>.part` is not continued either: the file is downloaded again and the
+  old `.part` is left for you to delete. A finished download is never copied
+  when its rename is refused, and with Overwrite the old file is replaced in
+  one step.
+* **Autoloader backups** are called `autoload.txt.fw.bak` (`.fw.bak.2`, …);
+  the newest three stay. A plain `autoload.txt.bak`, yours or one an older
+  version made, is never removed.
+* **Update downloads**: half a download left in the update cache by a crash or
+  a power cut is removed by the next download.
+* **Library folders**: the Library page and Settings › General › Library
+  folders are one list; at the first start of 5.0.3 the two are joined.
+* **A portable copy in a very deep folder** unpacks to `%LOCALAPPDATA%` when
+  Windows' long paths are off: from the portable folder the program could not
+  have started.
+* **A file of yours is never taken for the app's temporary file.** Outputs are
+  written as `<name>.fw.part`, a name only this app uses, and replace an
+  existing file in one step, so a power cut never leaves the name empty; what
+  a crash left is recognised as the app's own and removed by the next run. A
+  `<name>.part` file is left alone (one that 5.0.2 left is named in the log).
+* **ZIP, 7z and RAR sources**: an archive with two names Windows takes for one
+  (`Game.bin` and `game.bin`), or a file and a folder of one name, is refused
+  instead of unpacked with a file lost; names such as `COM¹`, `CONIN$` or
+  `CON .txt` are refused as device names; very deep or very long lists are
+  checked in a time that grows with their length, not its square.
+* **Pausing the queue pauses the external tools too** (Sony's publisher,
+  fpkg-cli, the Backport engine), and their time limit stops while paused.
+* **The end-of-queue action waits for other work**: it does not shut down or
+  restart while a Backport run or restore or a PS5 connect tool is still at
+  work, and its countdown holds while a Windows dialog covers the window.
+* **Settings › Storage › Clear** no longer removes the temporary folder of a
+  job that is still running, and Reset all keeps the Library folders.
+* **Language Stripper restore** checks the free space first, and DLC packages
+  and lists are written through a temporary file and kept when a cancel comes
+  during their read-back. FPKG Extract works in `<destination>.part` and
+  renames it when done. A crash report is written even in a very long folder.
+
+### Progress and time left
+* The bar no longer says 100 % before a job has finished and verified, never
+  moves backwards, and ends at its end when verification is off.
+* Time left is smoothed and covers the whole job; the monitor also shows the
+  average speed, the time left of the current stage, and warnings and errors
+  as they happen. Durations and numbers follow the interface language
+  ("1,5 GB" in German).
+
+### Interface
+* A polish pass over every page: the search field's icon, toasts that covered
+  the status bar, setting rows that did not line up, clipped or wrongly cut
+  texts in long languages, buttons that changed weight, sort arrows away from
+  their column, tree views without folder arrows, empty areas that said
+  nothing, "ShadowMount+" read backwards in right-to-left languages, and
+  Japanese, Chinese and Korean text now in the Windows UI font of that
+  language. The Jobs panel stays in view on long forms, and the sidebar folds
+  to its rail in a narrow window.
+* The armed end-of-queue action is shown next to **Start queue**, and Image
+  tools says when an action starts at once instead of joining the queue.
+
+### Faster
+* The exFAT source scan is about 10× faster on games with many files (one
+  directory listing per folder instead of two lookups per file), which also
+  speeds up full verification (about 2× here); extracting sets each file's
+  times and attributes on the open file (about 20 % faster).
+
+### Single exe and folder edition
+* The folder edition now carries the Visual C++ runtime, so it starts on a PC
+  without the redistributable, and is about 30 MB smaller; unused Qt plugins
+  are left out of both editions.
+* The single exe unpacks a file again when it was changed after unpacking, and
+  its first start writes everything to the disk before marking the unpack
+  complete.
+
+### Settings from version 4
+* The old after-queue action is no longer imported (it could switch on Sleep
+  or Shut down without you knowing), a 4096-byte sector size is imported as
+  512 (what 4.0.2 really built), and the Library folders are joined with the
+  ones the app already has.
+
+New and changed texts are translated into the 42 languages like the others
+(machine-made); a text a language still lacks shows in English.
 
 ## What's new in 5.0.2
 
@@ -179,7 +311,8 @@ Images built with 5.0.1 stay valid.
 * **Pause really pauses an FPKG build**: Sony's publisher is suspended until
   you resume. Performance mode and the CPU limit also apply to package
   verification, extraction and backport builds.
-* "Overwrite" keeps your previous package until the new one passed its checks.
+* "Overwrite" keeps your previous package until the new one passed its checks
+  (since 5.0.3 a package whose check you cancel replaces it, marked not verified).
 * Importing old settings no longer limits builds to one CPU thread.
 * The free-space check is repeated when you press the button, so freeing space
   or plugging the drive in is enough. A Packed folder can be saved to a FAT32
@@ -310,7 +443,9 @@ program, with a new interface and the PS5 Backport engine built in.
   %FOLDER%` (Settings › Build › Output name), imported from v4 settings.
 * exFAT images use **64 KB clusters** by default (ShadowMount+ 1.7 requires
   them).
-* Every image is read back and verified before it gets its final name.
+* Every image is read back and verified before it gets its final name, unless
+  verification is turned off or (since 5.0.3) cancelled: the job then says the
+  image is not verified.
 
 ### Backport — the PS5 Backport engine, built in
 * The Backport tab runs the **PS5 Backport engine 0.3.4 by Deckerr97** — the
@@ -424,7 +559,8 @@ From the ppr-pkg Companion's DLC Converter:
   unpacking the inner image first.
 * **Extract packed games**: an image or folder with zstd or LZ4 packs shows
   "zstd-packed"; Extract writes the game's own files (switch: keep the packs
-  as they are). Every file is read back afterwards.
+  as they are). Every file is read back afterwards (unless verification is
+  turned off or, since 5.0.3, cancelled).
 
 ### Library
 * Cover-art grid or list, format chips per game, search, filter, sort,
@@ -532,7 +668,9 @@ interface before this release. What changed:
   times a second.
 * **Extraction and files**: "Extract" of a game or image goes to a `.part`
   folder first and is renamed only after it verified (an unverified or
-  cancelled extraction never sits under the final name); a hidden
+  cancelled extraction never sits under the final name; since 5.0.3 a
+  cancelled verification keeps the finished extraction, marked not
+  verified); a hidden
   `desktop.ini` in the output folder no longer throws a finished exFAT
   extraction away; read-only folders left by an extraction can be removed
   again; a source file deleted during a build is reported as such.

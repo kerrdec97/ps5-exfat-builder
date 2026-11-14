@@ -41,8 +41,14 @@ verifies what it wrote before the image gets its final name.
 | .ffpfs (single file, raw) | image file | Lazy `main_file.py --no-compress` | Rarely useful; supported because Lazy offers it. |
 
 Lazy's default `main_folder.py` mode (folder → temporary exFAT image via
-mkfs/OSFMount → container) needs the exFAT engine; the app chains an
-`image.exfat.build` job and an `image.pfs.build` job with the `.exfat` as source instead.
+mkfs/OSFMount → container), which version 4.0.2 also used for a folder
+(`pfs_intermediate_via`: an `.exfat` or `.ffpkg` first, then that file packed),
+is not reproduced: a folder becomes a container that holds the nested PFS image
+`pfs_image.dat` (first row), and no job is chained. A container that holds an
+`.exfat` is made in two steps by hand: build the `.exfat`, then pack that image
+(second row: Image tools › Convert to `.ffpfsc`, which packs the file as it is).
+Whether ShadowMount+ and MicroMount mount both forms alike on every firmware
+has not been checked on a console.
 
 ## On-disk format
 
@@ -179,6 +185,47 @@ the lower-cased path, 0 → 1; linear probing; 2ⁿ ≥ 2 × rows slots; `u64 ha
 u32 row + 1, u32 flags`, bit 0 set on the earlier slot when a later row has
 the same 64-bit hash).
 
+What the bundled runtime (ampr-emu-ng 0.3.3) reads, from its loader in
+`libSceAmpr.sprx` (`AmprIndex.h` has the details; `tst_pfs_ampr_index` holds a
+port of its checks):
+
+| Part | Read | What depends on it |
+|---|---|---|
+| Header | every field | checked: magic, version 3, record size 24, slot size 16, 1 to 2,000,000 rows, a power-of-two slot count ≥ rows, a path blob ≤ 256 MiB, the hash table at an 8-byte boundary after the blob and inside the file |
+| Records | every field | the row number is the file's ID for the game; path offset and length locate the path; the size is what the resolve-with-sizes calls and `fstat` report; the time is `st_atime`, `st_mtime` and `st_ctime` in the `fstat` of a file opened through the emulator |
+| Path blob | each row's path | checked (NUL-terminated, `/app0/` then components that are not empty, `.` or `..`, no backslash, ≤ 255 bytes each, ≤ 1023 in all); the lookup compares it in full, ASCII case folded |
+| Slots | every field | checked (an empty slot all zero, flags 0 or 1, the hash of its row's path, every row found at its own slot); the lookup ignores the flags |
+| Padding before the hash table, bytes after it | no | nothing |
+
+One failed check sets the whole index aside, and the runtime then builds its
+own from `/app0` when it may. With `auto` a build keeps the dump's index only
+when it is byte for byte the one it would write: every field the runtime reads
+then matches, and the builder writes the same bytes for the same files. Two
+indexes can differ only in bytes the runtime does not read (padding or a tail,
+from another writer); such a dump index is rebuilt too, which changes nothing
+the game sees, and the dump itself is never written. Version 4.0.2's
+`build_ampr_index.py` wrote the same bytes for a game with plain ASCII names;
+it also listed `ampr_commands.bin`, `apr_emu.log` and `ampr_emu.index.bak` and
+hashed other names by Unicode code point (the runtime hashes the UTF-8 bytes
+and sets such an index aside), so its index of such a game is rebuilt.
+
+Every build (PFS, exFAT, FFPKG) and the index tool write the rows of
+`amprToolRows`: the files below `/app0` without the index, its temporaries and
+the emulator's own files, and for a PFS build without the `.pfskeep` markers
+of empty folders (they are the image's, not the game's), so Auto keeps an
+index the tool made for the folder. A file whose path the runtime would refuse
+(`amprRuntimeAccepts`: a name over 255 bytes, which 100 CJK letters already
+are in UTF-8, a path over 1023 bytes, a backslash) is left out, as one such
+row would set the whole index aside; the build log warns (`ampr_emu.index: 1
+file(s) left out (the AMPR runtime cannot list ...)`), the tool's outcome too.
+The runtime opens `/app0/ampr_emu.index` by that name: a dump's own index
+spelt in other letters (`AMPR_EMU.INDEX`, which Windows finds) goes into a
+PFS or FFPKG image under the exact name whenever it is kept and the game has
+`fakelib/libSceAmpr.sprx`, with `off` too (its content is not changed; a
+conversion builds that way, and an exFAT image, which does not tell letter
+case apart, may hold that spelling). A verification against the folder
+accepts an image made before this with the folder's spelling.
+
 ## Settings (`pfs.*`)
 
 All are read by `buildOptionsFrom` / `planOptionsFrom` / `threadsFrom` /
@@ -201,7 +248,7 @@ per job.
 | `pfs.imageVersion` | PFS · Image format (adv.) | PS5 | `pfs_version`; MkPFS `--version PS5` |
 | `pfs.excludes` | PFS · Source folder | `*.exfat *.ffpkg *.ffpfs *.ffpfsc` | none in Lazy; the legacy PFS tab refused dumps with stray images, the exFAT build excluded them |
 | `pfs.keepEmptyFolders` | PFS · Source folder | on | legacy PFS tab `_seed_empty_dir_markers` (`.pfskeep`) |
-| `pfs.amprIndex` | PFS · Source folder | add when missing | Lazy `ensure_ampr_index`; "refresh" = legacy Build page `_maybe_build_ampr_index`; "auto" (When the game uses the AMPR emulator) = add when missing, rebuild when the dump's index differs from a fresh one in more than file times, leave a game with asset packs alone (the default of `exfat.amprIndex` and `ufs2.amprIndex`) |
+| `pfs.amprIndex` | PFS · Source folder | add when missing | Lazy `ensure_ampr_index`; "refresh" = legacy Build page `_maybe_build_ampr_index`; "auto" (When the game uses the AMPR emulator) = add when missing, rebuild unless the dump's index is byte for byte the fresh one (file times included), leave a game with asset packs alone (the default of `exfat.amprIndex` and `ufs2.amprIndex`) |
 | `pfs.deleteSourceAfterConvert` | PFS · After converting | off | legacy `pfs_delete_source_after_convert` |
 
 Legacy keys imported (`addLegacyKey`): `pfs_compression_level` (clamped to
@@ -246,13 +293,27 @@ differ only in those times the job passes with a warning.
 `image.pfs.extract` fills a new or empty output through `<output>.part` and
 renames it at the end; the marker that says a leftover is the app's is the
 file `<output>.part.extracting` next to it (not inside it: an image may hold a
-file of any name).
+file of any name). A finished extraction whose folder cannot take its name (the
+empty folder chosen is open in another program) is kept as `<output>.new` (or,
+if even that fails, as `<output>.part` without its marker, so it is never
+removed later) and the error says where. Each file is written as
+`<file>.fw.part` (`PartFile`); a file called `<file>.part` already there (with
+"overwrite", the user's folder) is never written over. A file of the image
+whose working name another extracted entry already has (`A.BIN.FW.PART` before
+`a.bin` on Windows, which ignores letter case) gets a free name (`a.bin (2)`,
+listed in `renamed`), so that entry is not taken for a leftover.
 
 Build: cheap `validate()` (source exists, output not inside the source folder,
 no existing output unless `replaceExisting`, ASCII file name); scan; free-space
 check for the worst case (nothing compresses) plus the reserve; write
-`<output>.part`; verify the `.part`; rename. Engine errors and cancellation
-remove the `.part`. A failed verification returns `Verification::Failed` (the
+`<output>.part` (the writer flushes it to the drive when it closes it,
+`ImageWriter::close`); verify the `.part`; rename. Engine
+errors and a cancel before the image is written remove the `.part`; a cancel
+during verification (GitHub #97) saves the image as with verification turned
+off (Skipped, "Verification was cancelled, so the image is not verified.", as a
+warning too); a difference found before the cancel fails the build. A finished image that cannot replace the old one (open
+elsewhere) is kept as `<name> (new).ffpfsc` and the error says so. A failed
+verification returns `Verification::Failed` (the
 queue fails the job, audit M1/C1) and removes the image; the source is never
 deleted then. `pfs.deleteSourceAfterConvert` deletes an image source only after
 **full** verification passed; folders are never deleted. Outcome details carry
@@ -271,7 +332,11 @@ settings and the image's own build time (the generated files carry it). The
 only tolerated difference is the format's: a compressed file whose logical
 size is the source size rounded up to the block with zero bytes (counted as
 "zero-padded"). Containers built from a folder are verified through the
-nested image, without extracting it.
+nested image, without extracting it. A cancel returns `Error::cancelled()`
+while nothing was found; a problem found before the cancel returns the
+partial, failed report (`VerifyReport::cancelled`, "N problem(s) found before
+verification was cancelled; …"), so the build removes the image as after any
+failed verification instead of saving it unverified.
 
 * **full** — decodes every file and compares it byte for byte with the source.
 * **structure** — validates the whole layout (header, inode ranges and
@@ -414,11 +479,17 @@ part of the tests):
 
 ## Performance
 
-Pipeline: the job thread reads the source in 1 MiB chunks (16 PFSC blocks) in
-image order and submits them to a bounded pool of `pfs.threads` deflate
-workers (each keeps one `z_stream` and uses `deflateReset`); it consumes
-results strictly in submission order and writes them through an 8 MiB write
-buffer. At most `3 × threads` chunks are in flight (≈ 6 MiB per thread). The
+Pipeline: the source is read in 1 MiB chunks (16 PFSC blocks) in image order
+and submitted to a bounded pool of `pfs.threads` deflate workers (each keeps
+one `z_stream` and uses `deflateReset`); the job thread consumes results
+strictly in submission order and writes them through an 8 MiB write buffer.
+With two or more workers a reader thread of its own reads and submits the
+chunks, so reading no longer waits for writing (it was the limit at levels
+1–4: 0.2 s read + 0.1 s write per 512 MiB on the job thread); with one thread
+the job thread does everything, as before. The order of chunks, and so every
+byte written, is the same either way (`tst_pfs_golden`, `tst_pfs_roundtrip`,
+`tst_pfs_pipeline`). At most `3 × threads` chunks (+ 1) are in flight (≈ 6 MiB
+per thread). The
 nested image of a folder container is produced on the fly
 (`FolderImageSource`), so a folder → .ffpfsc build reads the dump once and
 writes only the compressed image — Lazy/MkPFS write and re-read a full-size
@@ -466,9 +537,14 @@ threaded (30 vs 6 MB/s); level 9 is the legacy default.
 |---|---|
 | `tst_pfs_golden` | 20 byte-identical golden cases against Lazy_MkPFS |
 | `tst_pfs_roundtrip` | build → read → compare for all four modes; verify finds changed / missing / extra / resized files; exclusions do not fail verification (H2); damaged compressed block, inode, dirent, PFSC and PFS headers, truncation → `CorruptData`; short (RAM-mode) images; extract (plain, deep, nested file, overwrite); cancelled extract leaves nothing; 1/4/7 threads → identical bytes; ASCII rule, empty source, AMPR modes |
-| `tst_pfs_jobs` | settings declared and read, legacy import, the three jobs, queue integration, validation, cancellation while writing and while verifying leaves no output or `.part`, failed verification removes the image and keeps the source (C1), delete-source rules, standalone verify with the build's exclusions (H2), game-root detection in a wrapper folder, extract job |
+| `tst_pfs_jobs` | settings declared and read, legacy import, the three jobs, queue integration, validation, cancellation while writing leaves no output or `.part`, cancellation while verifying saves the image unverified (the source image kept), a finished image is kept when the old one is in use, `ampr.index.local` checks the folder again and reads its index back before it replaces the old one, failed verification removes the image and keeps the source (C1), delete-source rules, standalone verify with the build's exclusions (H2), game-root detection in a wrapper folder, extract job |
+| `tst_pfs_ampr_index` | `ampr_emu.index` as the runtime sees it: a port of the ampr-emu-ng 0.3.3 loader accepts every index the builder writes (case-only variants, deep and 255-byte names, 5,000 rows) and sets damaged ones aside; version 4.0.2's script output (bytes kept in the test) equals ours for ASCII names and is set aside for others; `decideAmprIndex` in all four modes for a missing, current, stale (file added, removed, renamed, case-renamed, resized, changed in place, copied with other times), unusable and equivalent-but-other-bytes index, asset packs and no library; the verification's times-only tolerance |
 | `tst_pfs_hostile` | crafted images: separator / NUL / dot entry names → `CorruptData` and nothing extracted; names a drive cannot store renamed on extraction and reported, nothing written outside the folder; size without blocks and size beyond the blocks → `CorruptData` (verification and extraction fail); a PFSC header declaring a 16 GiB block table in a small file is refused without allocating it; the path-safety helpers |
-| `tst_pfs_benchmark` | MB/s native (1 and N threads) vs Lazy_MkPFS on the same input; outputs identical |
+| `tst_pfs_pipeline` | the read-ahead pipeline: a source cut short after planning is an `IoError` and a cancel from the progress callback stops the build, with 1 and 4 threads, folder image and container; repeated builds with 1, 2, 3, 8 and 16 threads give the same bytes |
+| `tst_pfs_benchmark` | MB/s native (1 and N threads) vs Lazy_MkPFS on the same input; outputs identical; then extraction (decompression) and full verification of the image just built |
 
-The benchmark honours `FW_PFS_BENCH_MIB`, `FW_PFS_BENCH_LEVEL`, `FW_PFS_BENCH_REPEAT` and
-skips the Python half when `python3` with `cryptography` is missing.
+The benchmark honours `FW_PFS_BENCH_MIB`, `FW_PFS_BENCH_LEVEL`, `FW_PFS_BENCH_REPEAT`,
+`FW_PFS_BENCH_SINGLE=0` (no one-thread build) and the Performance settings
+`FW_BENCH_MODE` / `FW_BENCH_THREADS` (`tests/engines/BenchSettings.h`, resolved as the app
+does), and skips the Python half when `python3` with `cryptography` is missing.
+Numbers on the owner's PC: `docs/PERFORMANCE.md`.

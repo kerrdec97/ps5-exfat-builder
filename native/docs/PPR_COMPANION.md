@@ -42,7 +42,19 @@ embedded .NET add-on and ported into this app's own pages and engines.
   and languages (read from the base's playgo-chunk.dat by the app itself, not
   through LibProsperoPkg), whatever the PlayGo settings say. If that table
   cannot be read, the update falls back to the game folder's own PlayGo layout
-  and the log says so.
+  and the log says so. A base the job builds itself (dual backport) gets the
+  generated layout its updates get, never the game folder's own PlayGo table
+  (Settings › PlayGo › use the game's own table), so base and updates put the
+  game's files in the same chunks.
+* Cancel while the publisher checks a finished package (the base it built, or
+  an update's delta and its full image) keeps that package under its name in
+  the output folder and finishes the job as with verification off: nothing
+  more is built, the outcome lists the packages verified so far and the kept
+  one, its verdict is *Skipped* ("Verification was cancelled, so the package
+  is not verified.", `details.verificationCancelled`), a warning names the
+  kept package, and the queue records Succeeded. Only the full image, a
+  by-product of the checks, goes. A problem img_verify reported before the
+  cancel still fails the check.
 * A base package whose digest field (0x30..0x4F) is empty or a repeated
   pattern is refused: every file "references" such a digest, so the
   CE-107891-6 check would prove nothing.

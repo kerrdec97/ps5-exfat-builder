@@ -60,7 +60,10 @@ also points both into the build folder for every test (`tests/CMakeLists.txt`).
 Because the files are shared: `settings.json` is merged per key and is not overwritten when it cannot
 be read; folders are written with native separators; an unfinished apply is not offered for restore
 while a PS5 Backport GUI that this app did not start is running, or while the journal was written in
-the last five minutes (`kApplyQuietSeconds`).
+the last five minutes (`kApplyQuietSeconds`), and no restore (offered or chosen by hand) starts while
+that program runs. A run keeps the output and backup folders its preflight checked for all of its
+games; the two folder fields are locked while it runs, and a change the standalone program makes to
+`settings.json` meanwhile applies to the next run only.
 
 ## Native helpers (`src/engines/backport/`)
 
@@ -103,7 +106,7 @@ and downloads no library, firmware table or fakelib binary; the trio pins are ha
 | Test | Covers |
 |---|---|
 | `tests/engines/backport/tst_backport_self.cpp` | The native readers on synthetic files built in memory: a fake-signed SELF unwraps to its ELF and SDK; program headers and a version segment that would inflate the output are refused; truncated and encrypted input is refused without crashing; an ELF without a param has no SDK. |
-| `tests/app/tst_backport_engine.cpp` | The engine host. Always: scanner rules, preflight refusals, AMPR / PlayGo user-file checks, the settings round trip, worker failure paths. With `FW_BACKPORT_ENGINE` set: the engine's selftest and the protocol (progress, result, cancel and tree kill). With `FW_BACKPORT_E2E_GAME` as well: a full backport with Apply off, a switch and an SDK rebuild, into temporary folders. |
+| `tests/app/tst_backport_engine.cpp` | The engine host. Always: scanner rules, preflight refusals, AMPR / PlayGo user-file checks, the settings round trip, worker failure paths. With `FW_BACKPORT_ENGINE` set: the engine's selftest and the protocol (progress, result, cancel and tree kill). With `FW_BACKPORT_E2E_GAME` as well: the game folder is copied into a temporary folder (under `FW_BACKPORT_E2E_COPY_DIR` when set) the first time an end-to-end test needs it, then a full backport of the copy with Apply off, a switch and an SDK rebuild, into temporary folders. The other tests never wait for the copy; too little free space for it skips the end-to-end tests, and a link in the dump fails them. |
 | `tests/app/tst_backport_page.cpp` | The page. |
 
 

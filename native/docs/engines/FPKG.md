@@ -2,7 +2,8 @@
 
 Builds, verifies and extracts PS5 debug packages (`.pkg`) by driving the user's **own** Sony Publishing Tools
 (`prospero-pub-cmd.exe`). Nothing from Sony is bundled or downloaded. The behaviour of the reference app (PSVIETHOA
-FPKG Builder 3.0.0) is re-implemented from `native/docs/FPKG_PARITY.md`; no code or text is copied. There is
+FPKG Builder 3.1.0, Sony toolkit `sdk-fpkg279-fix15`; FPKG_PARITY §9 lists what changed since 3.0.0) is re-implemented
+from `native/docs/FPKG_PARITY.md`; no code or text is copied. There is
 no built-in packer (LibProsperoPkg / Kraken / PFS v3) and no online metadata download.
 
 **What has been tested, and how.** Every test in this document runs against our stand-in tool
@@ -41,11 +42,11 @@ formats (GP5, scenario and `param.json`) are checked against goldens written by 
 
 | Kind | JSON parameters | Phases (weight) |
 |---|---|---|
-| `fpkg.build` | `source` (folder, `.gp5`, or an image with a registered stager), `output`?, `basePackage`?, `baseFolder`?, `exactSource`? (bool), `updateOutput`? (`both` \| `update` \| `full`, default `both`), `contentId`? (must equal `param.json`), `contentVersion`?, `title`? | Preparing the source 8 · Planning 0.5 · Writing project files 0.5 · Pre-reading files 3 · Packing 90 · Finishing 0.5 · Checking the package 1 · Verifying with img_verify 8 · Computing SHA-256 6 |
-| `fpkg.addon` | `payloadFolder`, `output`?, `contentId`?, `entitlementKey` (32 hex), `volumeType`? (`prospero_ac`; `prospero_al` is refused) | as `fpkg.build` |
+| `fpkg.build` | `source` (folder, `.gp5`, or an image with a registered stager), `output`?, `basePackage`?, `baseFolder`?, `exactSource`? (bool), `updateOutput`? (`both` \| `update` \| `full`, default `both`), `contentId`? (must equal `param.json`), `contentVersion`?, `title`? | Preparing the source 8 · Planning 0.5 · Writing project files 0.5 · Pre-reading files 3 · Packing 90 · Checking the package 1 · Verifying with img_verify 8 · Computing SHA-256 6; a stage the build skips takes no share (pre-scan off, img_verify off, no SHA-256) |
+| `fpkg.addon` | `payloadFolder`, `output`?, `contentId`?, `entitlementKey` (32 hex), `volumeType`? (`prospero_ac`; `prospero_al` is refused) | as `fpkg.build` (no Preparing the source, no Pre-reading files) |
 | `fpkg.backport` | `package`? (the base; empty with `buildBase`), `game`? (the base's game folder; required with `buildBase`), `backport4xx`?, `backport5xx`? (folder or `.zip`, at least one), `version`? (default: base + 1 in the last group), `output`?, `buildBase`? (bool) | Checking the inputs 2 · [Building the base package 40] · Checking the base package 10 · Building the 4.xx update 40 · Building the 5.xx+ update 40 |
 | `fpkg.verify` | `package`, `passcode`? (default `fpkg.passcode`), `integrity`? (default true) | Checking the header 1 · Verifying with img_verify 99 |
-| `fpkg.extract` | `package`, `destination` (must be empty or absent), `passcode`? | Extracting (indeterminate; bytes written from the free-space change) |
+| `fpkg.extract` | `package`, `destination` (must be empty or absent), `passcode`? | Extracting (indeterminate; bytes written from the free-space change). `img_extract` writes into `<destination>.part` (with a `<destination>.part.extracting` marker), which takes the destination's name once the tool has finished: a crash, failure or cancel never leaves part of a package under that name, and the clean-up removes only the staged folder (a leftover `.part` with the marker is replaced, one without it is refused). A destination that cannot be used then keeps the files as `<destination>.new` |
 
 `output` defaults to `storage.defaultOutputFolder`, else `<source>-pkg` next to the source (for a `.gp5`, next to its
 folder). A job's `fpkg.*` settings come from its snapshot, so the UI passes the user's answer to the conflict dialog as
@@ -68,23 +69,23 @@ through the same handles; elsewhere `SIGSTOP`/`SIGCONT` to the process group) wi
 | `fpkg.passcode` | FPKG (advanced, per job) | 32 printable ASCII, zeros | GP5 `passcode`, `img_verify` / `img_extract --passcode` | — |
 | `fpkg.keepIntermediate` | FPKG | bool, false | keep `<stem>.gp5`, `<stem>.playgo-scenario.json`, `.gp5-assets/<stem>/` after success (always kept after a failure). A project built from an image, an extracted base or non-ASCII folders names temporary paths (staged tree, ASCII links) that are gone after the build; `01-create-gp5.log` says so | `fpkg_keep_project` |
 | `fpkg.prescan` | FPKG | bool, true | open every game file once in parallel (clamp(2 × threads, 8, 32)) before `img_create`; runs on every OS (it only matters on Windows) | — |
-| `fpkg.outputConflict` | FPKG (per job) | enum `keepBoth` (default), `overwrite`, `fail` | keep both: the existing file becomes `name (1).pkg`, the new one takes the name; overwrite: the old file is set aside (`name.pkg.fw-replaced`) and deleted only after `img_verify` passed (or at once when only the header is checked); if verification fails or is cancelled the old file gets its name back and the new package is kept as `name (n).pkg`; fail: refused before packing (also in `validate()` for folder sources; an image source is staged first, because its Content ID is not known before). All outputs of a build (an update and its `.remastered.pkg`) are placed as one step: every existing file is set aside first, then every new one is renamed, and any failure restores all old files. Numbered names of one build share their number, so `UPDATE_x (2).pkg` belongs to `x (2).remastered.pkg`. A new package that cannot take its name is never deleted: it is kept as `name (n).pkg` (or as its `.partial.pkg`) and the error says where | — |
+| `fpkg.outputConflict` | FPKG (per job) | enum `keepBoth` (default), `overwrite`, `fail` | keep both: the existing file becomes `name (1).pkg`, the new one takes the name; overwrite: the old file is set aside (`name.pkg.fw-replaced`) and deleted only after `img_verify` passed (or at once when only the header is checked); if verification fails the old file gets its name back and the new package is kept as `name (n).pkg`; a cancelled `img_verify` counts as verification off (GitHub #97): the new package keeps the name, unverified, and the old file is deleted; fail: refused before packing (also in `validate()` for folder sources; an image source is staged first, because its Content ID is not known before). All outputs of a build (an update and its `.remastered.pkg`) are placed as one step: every existing file is set aside first, then every new one is renamed, and any failure restores all old files. Numbered names of one build share their number, so `UPDATE_x (2).pkg` belongs to `x (2).remastered.pkg`. A new package that cannot take its name is never deleted: it is kept as `name (n).pkg` (or as its `.partial.pkg`) and the error says where | — |
 | `fpkg.clearVersionFileUri` | FPKG | bool, true | non-empty string → `""` | — |
 | `fpkg.clearAttribute3` | FPKG | bool, false | non-zero number → 0 | — |
-| `fpkg.lowerRequiredFirmware` | FPKG | bool, true | `requiredSystemSoftwareVersion` > (`sdkVersion` & 0xFFFF000000000000) ≠ 0 → that value as `"0x%016x"` | — |
+| `fpkg.lowerRequiredFirmware` | FPKG | bool, true | `requiredSystemSoftwareVersion` > (`sdkVersion` & 0xFFFF000000000000) ≠ 0 → that value as `"0x%016x"`; for full packages with an SDK version read from `eboot.bin` the fix15 rule then raises it again to `sdkVersion` when it ended below it (lower digits of `sdkVersion`), as the reference applies its rule last | — |
 | `fpkg.autoSizeClass` | FPKG | bool, true | full builds: `attributePub`, `kernel.addcontMountLevel`, removes `kernel.appSizeInGib` | — |
 | `fpkg.keepEmptyFolders` | FPKG | bool, true | `<empty_dir>` for empty or junk-only folders outside `sce_sys` | — |
 | `fpkg.keepDlcEmulator` | FPKG | bool, true | on: declares `dlc_emu.ini` mount folders and root `addcont<N>` folders without files, warns about missing mount folders; off: leaves out `dlc_emu.ini` and the three DLC modules in `fakelib`/`fakelib2` | — |
 | `fpkg.removeAmprLeftovers` | FPKG | bool, true | leaves out `fakelib/ampr_emu.index` (the root `ampr_emu.index` and `fakelib/libSceAmpr.sprx` are base exclusions: always left out) | — |
 | `fpkg.removeDumpLeftovers` | FPKG | bool, true | leaves out root `_DUBLEX_`, `Engine/Saved` (whole `Engine` if `Saved` is its only child), `<project>/Saved` next to `<project>/Content/Paks` | — |
-| `fpkg.repairSelf` | FPKG | bool, true | PS4 SELF signature → PS5 signature in `.gp5-assets/<stem>/normalized-self/<rel>`; off: warning | — |
-| `fpkg.repairUcp` | FPKG | bool, **false** | checks `sce_sys/trophy2/*.ucp`, `sce_sys/uds/*.ucp` (≤ 128 MiB): stale digest → corrected copy in `repaired-ucp/`; damaged archive → error naming the file | — |
+| `fpkg.repairSelf` | FPKG | bool, true | in a copy (`.gp5-assets/<stem>/normalized-self/<rel>`): PS4 SELF signature → PS5 signature, and a `.sceversion` trailer that sits a few bytes too early is moved to where the publisher looks for it (`selfRepairPlan()` / `writeSelfRepairCopy()`, logged as ".sceversion trailer moved by N byte(s)"); off: warning | — |
+| `fpkg.repairUcp` | FPKG | bool, **true** (5.0.3) | checks `sce_sys/trophy2/*.ucp`, `sce_sys/uds/*.ucp` (≤ 128 MiB): stale digest → corrected copy in `repaired-ucp/`; an archive that cannot be read is packed as it is, with a warning; a UDS archive that `npbind.dat` names but the dump lacks, that belongs to another game or cannot be used → an empty archive (`emptyUdsUcp`), with a warning | — |
 | `fpkg.recoverPngFromDds` | FPKG | bool, true | missing or wrong-mode `sce_sys` PNG with a `.dds` → `prospero-dds2png` in parallel; off: wrong-mode presentation PNG is an error | — |
 | `fpkg.playGoFallback` | PlayGo | bool, true | layout B when there is no usable table, else layout A | — |
-| `fpkg.playGoChunkCount` | PlayGo (per job) | int 1–255, 100 | chunk count of layout B | `fpkg_chunk_count` |
+| `fpkg.playGoChunkCount` | PlayGo (per job) | int 1–800, 100 | chunk count of layout B | `fpkg_chunk_count` |
 | `fpkg.fillEmptyChunks` | PlayGo | bool, true | 1 MiB uncompressed `playgo-chunks/NNN.bin` for chunks without data | — |
 | `fpkg.playGoAllLanguages` | PlayGo | bool, false | layout B declares all 31 PlayGo languages (one chunk each, at least 32 chunks) instead of the game's own list | — |
-| `fpkg.useSourcePlayGoTable` | PlayGo (advanced) | bool, **false** | layout C from the dump's `playgo-chunk.dat` + FICM + FLT | — |
+| `fpkg.useSourcePlayGoTable` | PlayGo (advanced) | bool, **true** (5.0.3) | layout C from the dump's `playgo-chunk.dat` + FICM + FLT (chunk names, languages and the chunk of every file kept) | — |
 | `fpkg.postVerify` | Verification (per job; enabled by `verification.verifyAfterBuild`) | enum `toolFull` (default), `toolFormat`, `headerOnly` | after the header check: `img_verify` with/without integrity; `verification.verifyAfterBuild` off = header only | `fpkg_tool_verify` (false → `headerOnly`, true → `toolFull`) |
 | `fpkg.computeSha256` | Verification (per job) | bool, false | SHA-256 of every written package, in the log and `details.sha256` | — |
 
@@ -132,8 +133,10 @@ control on the running job).
 * GP5 byte format and entry order: scenario sidecar, recovered PNGs, language payloads, fillers, walked files,
   `<empty_dir>`s; `chunk` on every file in layout B, only when > 0 in C, never in A, always on payloads/fillers;
   `pfs_compression="disable"` on payloads/fillers; `param.json` → `.gp5-assets/<stem>/sce_sys/param.json`.
-* Walk order (case-folded, then code point), exclusions of §4.5 (plus our three documented extras: root `decrypted/`,
-  root image/package files and `sce_sys/lem_notification.dat`), links → error, a folder that cannot be listed → error
+* Walk order (case-folded, then code point), exclusions of §4.5 and §9 (plus our documented extras: root `decrypted/`,
+  root image/package files, `sce_sys/lem_notification.dat`, root `sce_sc/` and `playgo-languages/`, root
+  `entitlements.txt` / `entitlement_key.dat`, Unreal `…/Saved/Config/<platform>/*.ini`, `fakelib/libScePlayGo.sprx`
+  and `.auth_info` files anywhere; `DumpRules.cpp`), links → error, a folder that cannot be listed → error
   (never packaged as an empty folder), two packaged entries of one folder whose names differ only in letter case
   (`Data/` + `data/`, `Readme.TXT` + `readme.txt`) → error naming both (package paths are case-insensitive; the overlay
   of an update over its base is not affected), non-regular files left out, path rule (printable ASCII, no `%`/`;`, no
@@ -173,10 +176,13 @@ control on the running job).
 | Online metadata restore | out of scope (decision) |
 | Deleting OS junk from the source | out: the source is never modified; junk is left out and logged |
 | Legacy (non-plaintext) post-conversion | out: a package without the plaintext marker is a failure |
-| SELF `.sceversion` trailer re-padding | not implemented: only the signature is replaced (trailer rules UNVERIFIED) |
 | Confirming DLC-emulator items inside the built package; logging the tool's `sdkVersion` rewrite | not implemented (`img_file_list` / `img_info` output formats UNVERIFIED) |
 | "Base built by the Publishing Tools" probe | not implemented (needs keys or LibProsperoPkg); logged as a requirement |
 | Selective extraction of an update's base | not possible with `img_extract`: the whole base is extracted unless `baseFolder` is given |
+| SDK version 0 with only the header checked | `img_verify` does not run, so the SDK version is not read back: a toolkit whose files match an older SDK Fix release (fix12, fix13: they write SDK version 0) gets the same warning after the build; an unknown toolkit gets none. A backport job leaves it out (its note on the older release says it) |
+| Cancel during `img_verify` or the SHA-256 | the package is kept and the job ends with its outcome. Cancelled while `img_verify` runs: *Skipped* ("not verified"), unless the tool had already reported a problem (then *Inconclusive*, as for a finished run); under "Overwrite" the old package gets its name back and the new one is kept as `name (n).pkg`, as when verification does not pass. Cancelled while the placed package is hashed: no `sha256` detail; the project is cleaned up as after any finished build |
+| A `<stem>.partial.pkg` already in the output folder | left alone (an earlier build may have kept its finished package there, or another program wrote it): the build packs into `<stem>.partial-2.pkg` (the first free number) and logs it. A failure that kept a finished package is reported as `permission-denied`, not as an I/O error, so the queue does not retry it (that would pack it all again) |
+| `img_verify` messages every dump package gets | fake-signed executables ("Format of the SELF file is not valid") are counted, not reported; the two SDK version messages too while the package carries SDK version 0 (toolkits before fix15, or no "param.json: SDK Version = …" line). A package that carries a real SDK version gets them as problems (*Inconclusive*): there they mean `sdkVersion` does not match `eboot.bin` or the required version is below it |
 | `img_verify` failure after a build | reported as verification *Inconclusive* with a warning, package kept (the parity document calls it a warning; whether `img_verify` accepts plaintext debug packages is UNVERIFIED). `fpkg.verify` jobs report it as *Failed*. |
 | Verification value with `img_verify` off | still *Passed* after the header check alone (the detail text says the content was not read); other code and the history depend on the value |
 | `storage.deleteSourceAfterVerifiedBuild` | not read by this engine (nor by any other: the per-engine switches are used) |

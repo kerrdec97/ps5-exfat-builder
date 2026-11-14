@@ -41,7 +41,10 @@ does not depend on the thread count.
   file is touched. The old runtime is named in the log.
 * `ampr_emu.index` is written afresh from the game's files as the game sees
   them (loose, packed, the new runtime), on-disk case kept; the old journal
-  (`ampr_commands.bin`) and logs are left out.
+  (`ampr_commands.bin`) and logs are left out. A file whose path the runtime
+  cannot list (`amprRuntimeAccepts`, see `engines/PFS.md`) is left out of it
+  with a warning in the log and the outcome, when packing and when an unpack
+  writes a fresh index.
 * A folder that holds only packed files is not created on disk.
 * The loose files of a *Packed folder* (`ampr.pack`) are copies: the folder
   is kept, so it shares no file data with the dump it was made from and
@@ -52,7 +55,22 @@ does not depend on the thread count.
   `<output>.part.writing`) and rename it when everything is done. The output
   may be absent or an empty folder; that is checked when the job is queued,
   when it starts and again before the rename, and only the staged folder is
-  ever removed.
+  ever removed. A finished folder that cannot take its name (the chosen one
+  got files meanwhile, or is open elsewhere) is kept as `<output>.new` (or, if
+  even that rename fails, as `<output>.part` without its marker, so a later run
+  refuses it instead of removing it) and the error says so
+  (`StagedFolder::commitOrKeep`). Both renames are tried again for a moment
+  while a virus scanner or the search indexer still holds a file of the
+  folder (`renameWithoutCopying`). A cancel while `ampr.pack` checks the packs
+  ("Checking packs") keeps the finished folder, complete with its
+  `ampr_emu.index`, as with the check turned off: Skipped, "Verification was
+  cancelled, so the packs are not verified." (`PackGameReport::verifyCancelled`);
+  a pack that does not read back still fails the job. Closing the app at that
+  point keeps nothing (`CancellationToken::keepFinishedWork`): the staged
+  folder goes and the job comes back as Interrupted. `image.build.zstd` stops
+  there instead (the image, its real work, is not made yet). `game.extract`
+  works the same way (marker `<output>.part.extracting`); a cancel during its
+  verification keeps the extracted files, reported as not verified.
 * The source folder is scanned like the plain image builds scan it: symbolic
   links and junctions are followed. A link that leads back into its own
   folders, or whose target is missing, is left out and listed as a warning.
@@ -65,6 +83,16 @@ does not depend on the thread count.
   game's own names).
 * An image built with zstd packs is uploaded after the build like any other
   when "Upload new images to the PS5" is on; a packed folder is not.
+* Progress of `image.build.zstd`: Preparing 2 %, Packing 50 %, Checking packs
+  6 %, then the image build's own stages, which share the remaining 42 % as the
+  build shares its own bar. The build reports on a reporter of its own whose
+  stages and steps (the FFPKG "Checking structure" first half of Verifying)
+  the job enters in turn, so a stage the build enters again goes on from where
+  it stood. A stage that does not run takes no share: Checking packs with the
+  check turned off (its 6 % goes to Packing), and the build's Verifying with
+  verification turned off (the FFPKG build keeps 5 % there for its structure
+  check). `ampr.pack` alone: Preparing 2 %, Packing 75 %, Checking packs 23 %
+  (Packing 98 % with the check turned off).
 
 ## Reported problems and what the app does
 

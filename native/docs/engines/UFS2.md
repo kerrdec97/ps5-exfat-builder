@@ -176,10 +176,26 @@ It accepts the NetBSD `makefs` image in the tests and UFS2Tool's own images.
 
 | Kind | Parameters | Phases | Notes |
 |---|---|---|---|
-| `image.ffpkg.build` | `source` (a folder, or a ZIP of a dump, which is unpacked into the job's temporary folder first), `output`, `replaceExisting` (false) | Scanning → Writing image → Verifying | Writes `<output>.part`. The image gets its final name only after verification passed (audit H6). An existing image is set aside and restored if replacing fails (M2); the finished image is then kept as `<name> (new).ffpkg` and the error says so. Refused when the output is inside the source. A folder with more than 32,765 sub-folders is refused while planning (`di_nlink` is 16 bits). A ZIP source is never deleted. |
+| `image.ffpkg.build` | `source` (a folder, or a ZIP of a dump, which is unpacked into the job's temporary folder first), `output`, `replaceExisting` (false) | Scanning → Writing image → Verifying | Writes `<output>.part`. The image gets its final name only after verification passed (audit H6). Cancel during verification (GitHub #97) saves it as with verification turned off: the structure check, which runs then too, is finished (metadata only) and must pass; the outcome is Skipped, "Verification was cancelled…", and the source is kept. A difference the comparison found before the cancel fails the build (`compareImage` and `verifyExtracted` then return the partial report, `CompareReport::cancelled`). An existing image is replaced in one step (M2: its name is never empty, a failed replace leaves it as it was); the finished image is then kept as `<name> (new).ffpkg` and the error says so. Refused when the output is inside the source. A folder with more than 32,765 sub-folders is refused while planning (`di_nlink` is 16 bits). A ZIP source is never deleted. |
 | `image.ffpkg.verify` | `image`, `source` (optional) | Checking structure → Comparing | With `source`: compares at the configured depth. Without it, in full mode: reads every file back. A damaged image is `Verification::Failed`, not a job error. |
-| `image.ffpkg.extract` | `image`, `output` (new or empty folder), `path` ("/") | Reading image → Extracting → Verifying | Extracts into `<output>.part`, marked so a leftover of ours can be replaced (an image whose top folder holds the marker's name in any case is refused), and renames it on success; if that rename fails the extracted folder is kept as `<output>.new`. On Windows, forbidden characters and device names are changed and collisions get " (2)". Each change is reported. File times come from the inodes. |
-| `image.ffpkg.edit` | `image`, `operations` | Reading image → Writing image → Verifying → Replacing original | Rebuilds through `<image>.part` and always compares the result with the edited tree, at least by name and size. The original is replaced only after that passes; if it cannot be replaced (open elsewhere) the edited image is kept as `<name> (new).ffpkg`. Images containing links or special files are refused, because a rebuild would drop them. |
+| `image.ffpkg.extract` | `image`, `output` (new or empty folder), `path` ("/") | Reading image → Extracting → Verifying | Extracts into `<output>.part`, marked so a leftover of ours can be replaced (an image whose top folder holds the marker's name in any case is refused), and renames it on success (also when its verification is cancelled: the files are then reported as not verified); if that rename fails the extracted folder is kept as `<output>.new`. On Windows, forbidden characters and device names are changed and collisions get " (2)". Each change is reported. File times come from the inodes. |
+| `image.ffpkg.edit` | `image`, `operations` | Reading image → Writing image → Verifying → Replacing original | Rebuilds through `<image>.part` and always compares the result with the edited tree, at least by name and size. The original is replaced only after that passes (a cancel during a full comparison still finishes the name-and-size check, then applies the edit as not verified); if it cannot be replaced (open elsewhere) the edited image is kept as `<name> (new).ffpkg`. Images containing links or special files are refused, because a rebuild would drop them. |
+
+**Progress.** Build and extract share the bar 5 % (scanning, reading the
+image) · 60 % (writing) · 35 % (verifying); when verification compares names and
+sizes only, or is off and the build runs only the structure check, Verifying
+takes 5 % (an extraction with verification off: none), writing the rest. With a
+zipped dump the build gives Scanning 30 % (the unpacking is a step that takes
+its first half), writing 45 %, verifying 25 %. Where the structure check and
+the compare share Verifying, the check is a step ("Checking structure") that
+takes the first half of the stage and the compare fills the rest. Edit: 5 % ·
+50 % · 40 % · 5 % (Replacing original is a rename; names and sizes only: 5 % ·
+85 % · 5 % · 5 %). Verify: 10 % · 90 % (names and sizes: half each; an image on
+its own in structure mode: all of it in Checking structure).
+`phaseWeights(settings)` gives the queue these shares for the job's own
+settings before the job starts (a zstd build takes the image build's shares
+from it), and `run()` declares the same before the first stage begins, so they
+never change under the bar.
 
 Operations (`Ufs2Edit.h`): `{"op":"add","path":"/a/b","source":"C:/x"}`
 creates missing parent folders and adds a file or a folder recursively.
@@ -211,23 +227,29 @@ destination drive is FAT32.
 `ufs2.amprIndex` ("AMPR file index"): a game with `fakelib/libSceAmpr.sprx`
 needs `ampr_emu.index`, the AMPR emulator's list of its files, at its top
 folder. `auto` (the default, "When the game uses the AMPR emulator") adds the
-index when the dump has none and rebuilds it when the dump's differs from a
-freshly built one in more than file times (what the legacy app did before
-every build); a game with asset packs (`ampr_zstd.index`,
+index when the dump has none and rebuilds it unless the dump's is byte for
+byte the one the build would write (the legacy app rebuilt it before every
+build); file times count, since the runtime reports them for the game's files
+(`PFS.md`, ampr_emu.index); a game with asset packs (`ampr_zstd.index`,
 `ampr_assets.index[.runtime]`) keeps its own. `missing` only adds one,
 `refresh` always rebuilds it, `off` never adds or changes it. The dump folder
 is never written: a new index is a file in the job's temporary folder that
 becomes the content of the root's `ampr_emu.index` in the tree (a new entry
 goes where an NTFS listing of the folder would have it, so the image is the
-one built from a folder that holds the file). A build that adds or changes
-nothing leaves the tree alone and writes the bytes it wrote before. The job
+one built from a folder that holds the file). UFS2 names are compared byte
+for byte and the runtime opens `/app0/ampr_emu.index`: the root's index, new
+or the dump's own kept, is named exactly so in the tree, whatever the dump
+calls it (`AMPR_EMU.INDEX`); the dump's own also with `off` (which
+`image.convert` uses) when the game has `fakelib/libSceAmpr.sprx`, since only
+the letters' case changes. A build that adds or changes nothing else leaves
+the tree alone and writes the bytes it wrote before. The job
 log says what was done (`ampr_emu.index: added (the dump has none)`, `rebuilt
 (it did not match the game's files)`, `kept (up to date)`, `not needed (no
 fakelib/libSceAmpr.sprx)`), the build compares the image with the tree that
 was written, and `image.ffpkg.verify` against a folder accepts an image whose
-`ampr_emu.index` is the index of the folder's files when the folder has none
-or another one. `image.convert` and the zstd build turn the setting off for
-their own builds.
+`ampr_emu.index` is the index of the folder's files (there also with other
+file times) when the folder has none or another one. `image.convert` and the
+zstd build turn the setting off for their own builds.
 
 All of these are `perJob`. The legacy UI also offered a 128 KiB block size,
 but UFS2Tool 4.0.0 rejects it ("Block size must be between 4096 and
@@ -278,19 +300,23 @@ because nothing needs one.
   - extraction with verification, and edits
 - `ufs2.amprIndex` is covered by `tst_ufs2_ampr`: a missing index added and an
   outdated one rebuilt in the image only (the dump compared before and after),
-  an up-to-date one kept byte for byte, a packed game's index kept, a game
+  an up-to-date one kept byte for byte, one with other file times (a copied
+  dump, a file changed in place) rebuilt, a packed game's index kept, a game
   without the AMPR library and an image with an added index byte-identical to
   the ones built without the setting
 - Jobs are covered by `tst_ufs2_jobs`:
   - settings reach the superblock
   - verification gates the final name (the source is tampered with
     between writing and verifying)
-  - a cancelled build leaves nothing and keeps the old image
+  - a build cancelled while writing leaves nothing and keeps the old image;
+    a cancel during verification saves the build, extraction or edit
+    unverified (the structure check still runs)
+  - a leftover staging folder is replaced only when it carries the marker
   - existing outputs are replaced only when asked
   - the free-space reserve is enforced
   - the danger-zone delete happens only after full verification
-  - verify, extract and edit jobs, including failed and cancelled edits
-    leaving the original byte-identical
+  - verify, extract and edit jobs, including failed edits and edits
+    cancelled while writing leaving the original byte-identical
   - legacy settings import
   - an end-to-end `JobQueue` run
 

@@ -29,11 +29,14 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
   is not writable); later starts run it from there at once, and older versions
   are removed. A damaged download refuses to start. With an empty
   `portable.txt` next to the exe, the unpacked copy goes to
-  `exFAT Image Builder.data\` and settings and logs to `data\` beside it.
+  `exFAT Image Builder.data\` and settings and logs to `data\` beside it
+  (unless that folder is too deep for Windows to start the program from
+  while its long paths are off: the copy then goes to `%LOCALAPPDATA%`).
   To remove the app, delete the exe and that `runtime` folder.
 * **Folder edition**: `exFAT-Image-Builder-<version>-win64-folder.zip` is the
   same program already unpacked. Extract it anywhere (an external drive
-  works) and run the exe inside; nothing is unpacked to your profile. Use it
+  works) and run the exe inside; nothing is unpacked to your profile, and no
+  VC++ Redistributable is needed (its runtime DLLs are in the folder). Use it
   when an antivirus removes the single exe. `portable.txt` next to that exe
   keeps settings and logs in `data\` beside it.
 * Verify the download with `SHA256SUMS.txt` from the same release.

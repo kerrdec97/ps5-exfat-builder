@@ -41,6 +41,9 @@ again) stays with the Backport tab.
   warnings are also in `warnings` and in the log.
 * It fails only for a folder that is not there, and ends `Cancelled` when it
   is cancelled (checked at every directory entry; a paused job waits there).
+* Progress: one stage, "Checking", without a size (the number of files is not
+  known before the walk), counted in files. The walk lists the files and reads
+  only the executables' headers, so no byte count and no speed are reported.
 
 ### How it reads
 
@@ -101,7 +104,7 @@ again) stays with the Backport tab.
 | `sdk-differs` | info | the SDK in `eboot.bin` is not the `sdkVersion` of `param.json` |
 | `backup-files` | info | `*.bak` files (left by a tool that changed files in place) |
 | `empty-files` | info | files of 0 bytes that are not executables |
-| `case-collision` | error | names in one folder that differ only in letter case (simple case folding) |
+| `case-collision` | error | names in one folder that differ only in letter case, as exFAT compares them: each UTF-16 unit through the recommended up-case table (the Kelvin sign and "k", or letters outside the BMP, are two names there) |
 | `bad-name` | error | a name exFAT or Windows cannot store: trailing dot or space, a reserved device name, `< > : " / \ | ? *` or a control character, more than 255 UTF-16 units |
 | `junk-files` | info | `Thumbs.db`, `desktop.ini`, `.DS_Store`, `*.part`, `*.tmp` |
 | `link` | warning | a symbolic link or junction inside the dump (not followed) |

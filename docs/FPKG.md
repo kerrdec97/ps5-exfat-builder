@@ -36,8 +36,37 @@ The game itself. The source can be:
 **Content ID** is read from `param.json`. **Version** and **Title** can be
 changed for the package; the dump is never modified.
 
+The title is written for the default language of `param.json` only. A console
+set to another language shows that language's own name when the game has one
+(a European release usually has a name per language); the build log then
+warns. Renaming the dump folder, the image file or a Library entry does not
+change the title in the package.
+
 You can add backport files (4.xx and/or 5.xx+) to an App build. The job then
 builds the base package and the backport updates in one go.
+
+#### DLC in the game package
+
+A DLC `.pkg` cannot be added to an App build. DLC data can travel inside the
+game package through a DLC emulator that the dump already has (`dlc_emu.ini`
+in the game folder and its modules in `fakelib`):
+
+1. Put the files of each DLC into its own folder in the game folder, for
+   example `addcont0`.
+2. List each DLC in `dlc_emu.ini` with its Content ID,
+   `mount_point=/app0/addcont0` and `download_status=INSTALLED`
+   (**Library › DLC emulator**, or right-click the game › **Edit DLC list…**;
+   **Find entries…** suggests entries).
+3. Leave **Keep the DLC emulator** on (Settings › FPKG › Files).
+
+The build log names every mount folder that carries DLC data. A game that
+keeps the emulator asks the emulator, not the console, which DLC it has, so a
+DLC installed as a separate package may not be seen by it. To use separate DLC
+packages instead (the **DLC** page, or the Add-on type below), turn **Keep the
+DLC emulator** off. A DLC package must have the game's own title ID and
+publisher prefix (for example `EP…` for a European release); **Change
+region…** on the DLC page retargets one. None of this has been confirmed on a
+console for every game.
 
 ### Add-on
 
@@ -102,15 +131,19 @@ installs over exactly the base package it was built against.
 * After packing: the package header and the plaintext debug marker, always.
   Then `img_verify`, unless you turned it off under **Settings ›
   Verification**. When `img_verify` reports a problem the package is kept and
-  the job is marked with a warning. Backport packages must pass the integrity
-  check, or nothing is published.
+  the job is marked with a warning; when you cancel `img_verify`, the package
+  is kept and marked as not verified. Backport packages must pass the
+  integrity check, or nothing is published.
 * Left out of every package, and listed in the log: files the tools generate
   themselves (`param.sfo`, PlayGo tables, `sce_sys\about`, `.dds` …), image
   and package files in the game's top folder, dump helper libraries, and
   operating-system clutter (`Thumbs.db`, `.DS_Store` …).
 
-**Pause** suspends the Publishing Tools until you resume. **Cancel** stops
-them at once and removes the unfinished package; the logs stay.
+**Pause** suspends the Publishing Tools until you resume. **Cancel** while
+the package is being made stops them at once and removes the unfinished
+package; the logs stay. **Cancel** while `img_verify` checks a finished
+package keeps it under its name, marked as not verified (the job and the log
+say so); with **Overwrite** it then replaces the old package.
 
 ## Limits
 

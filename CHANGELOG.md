@@ -2,7 +2,7 @@
 
 All notable changes to exFAT Image Builder. Newest first.
 
-## [5.0.3] - 2026-11-12
+## [5.0.3] - 2026-11-14
 
 FPKG packages built with 5.0.2 could crash on the console. The package builder now
 follows the current PSVIETHOA FPKG Builder (3.1, Sony toolkit `sdk-fpkg279-fix15`):
@@ -13,6 +13,21 @@ is corrected, missing or unusable `sce_sys/uds` archives are replaced by empty
 ones, and more dump leftovers are left out. A warning names packages that carry
 SDK version 0 because of an older Sony toolkit. Rebuild packages made with
 5.0.0 - 5.0.2; images are not affected.
+
+From the GitHub issues: cancelling verification keeps the finished image,
+extraction, conversion, edit, packed folder or package, marked not verified
+(#97), with "Verify after extracting / converting" switches in Image tools; the
+AMPR index of a dump is kept only when it is exactly the one the app would write
+(#93); the countdown after the queue no longer comes back after a restart, can
+always be cancelled, and the Queue page has a "When the queue finishes" choice
+(#96); the build log names the languages that keep their own package title and
+the DLC folders packed with the game (#94, #95). Safety: FTP transfers with
+Resume on keep what arrived; an upload replaces a file on the PS5 only once the
+new one is complete (so it needs room for both there); downloads never write
+into or continue another program's `.part`;
+autoloader backups never remove your own `autoload.txt.bak`; the Library page
+and the Library folders setting are one list. The full notes are in
+`native/RELEASE_NOTES.md`.
 
 ## [5.0.2] - 2026-11-11
 

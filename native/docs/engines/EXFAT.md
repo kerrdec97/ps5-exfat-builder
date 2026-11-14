@@ -54,10 +54,20 @@ to read), `exfat_builder.py` (`verify_walk_tree`, `_get_cluster_size_arg`,
 
 | Kind | Parameters | Phases | Notes |
 |---|---|---|---|
-| `image.exfat.build` | `source` (a folder, or a ZIP of a dump, which is unpacked into the job's temporary folder first), `output` (file, or an existing folder → `<source name>.exfat`, without `.zip` for a ZIP), optional `label`, optional `excludes[]` | Scanning → Writing image → Verifying | Writes `<output>.part`, verifies the `.part`, then renames (an existing image is set aside by `PartFile` and restored if the rename fails). Verification failure: nothing is renamed, an older image stays. If the rename fails (the old image is mounted or open elsewhere) the finished image is kept as `<name> (new).exfat` and the error says so. |
+| `image.exfat.build` | `source` (a folder, or a ZIP of a dump, which is unpacked into the job's temporary folder first), `output` (file, or an existing folder → `<source name>.exfat`, without `.zip` for a ZIP), optional `label`, optional `excludes[]` | Scanning → Writing image → Verifying | Writes `<output>.part`, verifies the `.part`, then renames (an existing image is replaced by `PartFile` in one step, so its name is never empty; a failed rename leaves it as it was). Verification failure: nothing is renamed, an older image stays. Cancel during verification (GitHub #97): the image is saved exactly as with verification turned off (renamed now, replacing an older one only now), the job ends with an outcome (verification Skipped, "Verification was cancelled, so the image is not verified.", `details.verificationCancelled`), and the source is not deleted; a difference found before the cancel fails the job as any failed verification does. If the rename fails (the old image is mounted or open elsewhere) the finished image is kept as `<name> (new).exfat` and the error says so. |
 | `image.exfat.verify` | `image`, optional `source`, optional `excludes[]` | Reading image → Comparing | With `source`: `verification.mode` decides full or structure. Without it the image is checked on its own: structure, and in full mode every file is read back. In both modes a damaged image (boot region and backup boot region included) is a failed verification, not an error. |
-| `image.exfat.extract` | `image`, `output` (new or empty folder) | Reading image → Extracting → Verifying | Extracts into `<output>.part` (with a marker file so a stale one can be recognised as ours; an image whose root holds that name in any case is refused), verifies it against the image, then renames. A `.part` folder without the marker is never touched. If the rename fails the extracted folder is kept as `<output>.new`. Every output path is checked to stay inside the folder (`core/PathSafety.h`); names exFAT allows but the drive cannot store as they are (on Windows trailing dots or spaces and device names such as `CON`; anywhere names made only of dots and spaces) are changed, reported as "Renamed for this drive" warnings and verified under their image names. |
+| `image.exfat.extract` | `image`, `output` (new or empty folder) | Reading image → Extracting → Verifying | Extracts into `<output>.part` (with a marker file so a stale one can be recognised as ours; an image whose root holds that name in any case is refused), verifies it against the image (unless `verification.verifyAfterBuild` is off for the job: Image tools' "Verify after extracting"), then renames. Cancel during verification keeps every extracted file under the chosen name, as with verification off (Skipped, "…the extracted files are not verified."). A `.part` folder without the marker is never touched. If the rename fails the extracted folder is kept as `<output>.new`. Every output path is checked to stay inside the folder (`core/PathSafety.h`); names exFAT allows but the drive cannot store as they are (on Windows trailing dots or spaces and device names such as `CON`; anywhere names made only of dots and spaces) are changed, reported as "Renamed for this drive" warnings and verified under their image names. |
 | `image.exfat.edit` | `image`, `operations[]` of `{op: add\|replace\|delete\|mkdir, imagePath, localPath}` | Planning → Writing → Verifying | See *Editing images*. Always verified (mode from `verification.mode`). |
+
+**Progress.** Build, extract and edit share the bar 5 % (scanning, reading the
+image, planning) · 60 % (writing) · 35 % (verifying); a verification of names,
+sizes and structure takes 5 % and one that is turned off none (writing takes the
+rest). With a zipped dump the build gives Scanning 30 % (the unpacking is a step
+that takes its first half), writing 45 %, verifying 25 %. `image.exfat.verify`:
+10 % reading, 90 % comparing (an image checked on its own in structure mode:
+all of it in Reading image). `phaseWeights()` gives the queue the shares before
+the job starts and `run()` adjusts them to the settings before the first stage
+begins, so they never change under the bar.
 
 Every job checks `ctx.token` at least every 4 MiB and every 64 files (the
 undo journal of an in-place edit included), logs
@@ -82,6 +92,10 @@ name hash, cluster range, FAT chain, cross-linked clusters, clusters in use
 but free in the bitmap). Full mode additionally compares every byte, several
 files at once (`performance.workerThreads`), in image order; a mismatch names
 the first differing byte. Lost clusters (allocated, unused) are a warning.
+A cancel returns `Error::cancelled()` while nothing was found; a problem found
+before the cancel returns the partial, failed report (`VerifyReport::cancelled`,
+"Verification was cancelled after that, so there may be more."), so a job then
+treats its output as not verifying instead of saving it unverified.
 
 **Deleting the source** (`exfat.deleteSourceAfterVerify`, audit C2) happens
 only when full byte verification passed, the image got its final name, and
@@ -120,11 +134,21 @@ directly and never loses the original before the edited image has verified
   `<image>.part` — unchanged files are streamed from the original image —
   with the original cluster size, sector size, label and serial; verified
   against the expected tree (unchanged files byte-compared with the
-  original); then swapped in with set-aside/restore (if the swap fails
-  because the original is open elsewhere, the edited image is kept as
-  `<name> (new).exfat`). If the edited contents
+  original); then swapped in, in one step (if the swap fails because the
+  original is open elsewhere, the original is untouched and the edited image
+  is kept as `<name> (new).exfat`). If the edited contents
   no longer fit, the image grows using the automatic size rule. Free space for
   the whole new image is checked first.
+
+A cancel while the written edit is verified (both ways, GitHub #97) does not
+undo it when the verification had found nothing wrong yet: names, sizes and
+the structure (unchanged entries still at their clusters, the backup boot
+region) are checked instead, from the image's metadata and without the token,
+and if that passes the edit is kept (in place: the journal is retired; rebuild:
+the `.part` is swapped in) with `EditResult::verificationCancelled` set and
+that quick check in `EditResult::verification`. A failed quick check undoes the
+edit like a failed verification; a problem the verification found before the
+cancel undoes it too.
 
 Operations that cancel each other out (create a folder, then delete it) write
 nothing: `EditResult::changed` is false and the job reports no verification.
@@ -141,7 +165,7 @@ overridden for a single job.
 | Key | Section | Default | Per job | Legacy key |
 |---|---|---|---|---|
 | `exfat.clusterSize` | Build | `auto` | yes | `adv_cluster` (`Auto` → `auto`) |
-| `exfat.sectorSize` (advanced) | Build | `512` | | `adv_sector` |
+| `exfat.sectorSize` (advanced) | Build | `512` | | `adv_sector` (imported as `512` whatever it says: the old app's images were always 512) |
 | `exfat.imageSizeGiB` | Build | 0 (automatic) | yes | `adv_img_size_override` (blank → 0) |
 | `exfat.spareSpace` | Build | `legacy` | yes | |
 | `exfat.spareSpaceMiB` | Build | 256 | yes | |
@@ -188,7 +212,7 @@ the setting existed.
 
 | Value | Label | What the build does when the game has `fakelib/libSceAmpr.sprx` |
 |---|---|---|
-| `auto` (default) | When the game uses the AMPR emulator | Adds the index when the dump has none; rebuilds it when the dump's differs from a freshly built one in more than file times (`pfs::amprIndexesDifferOnlyInTimes`, so a copied or re-saved dump is not "outdated"). A game with asset packs (`ampr_zstd.index`, `ampr_assets.index[.runtime]` at the top) keeps its index: it lists the files inside the packs. |
+| `auto` (default) | When the game uses the AMPR emulator | Adds the index when the dump has none; keeps the dump's when it is byte for byte the one the build would write, and rebuilds it otherwise. File times count: the runtime reports a file's time from the index (fstat of a file opened through the emulator), so a dump copied without its times or a file changed in place gets a new index (see `PFS.md`, ampr_emu.index). A game with asset packs (`ampr_zstd.index`, `ampr_assets.index[.runtime]` at the top) keeps its index: it lists the files inside the packs. |
 | `missing` | Add when the dump has none | Adds one; a dump's own index is copied as it is. |
 | `refresh` | Always rebuild it | Adds or replaces it. |
 | `off` | Never add or change it | Nothing. |
@@ -202,8 +226,10 @@ fakelib/libSceAmpr.sprx)`; the outcome details carry `amprIndex` (`added` /
 `rebuilt`) when the image differs from the folder. The build's verification
 scans the folder again and expects the new index in place of the folder's.
 `image.exfat.verify` against a folder accepts an image whose `ampr_emu.index`
-is the index of the folder's files (also with other file times) when the
-folder has none or another one. `image.compare` (Image tools › Verify against
+is the index of the folder's files when the folder has none or another one;
+there, other file times are accepted too (`pfs::amprIndexesDifferOnlyInTimes`:
+the image was right for the files when it was built, and verification does
+not compare times). `image.compare` (Image tools › Verify against
 a folder) lists such an index as the one difference it is and adds a line
 saying where it comes from. `image.convert` and the zstd build turn the
 setting off for their own builds: the tree they hand over goes in as it is.
@@ -222,6 +248,18 @@ setting off for their own builds: the tree they hand over goes in as it is.
   verified and renamed.
 * Full verification compares several files at once; extraction can write
   several files at once (helps Windows with many small files and Defender).
+* The source scan (build and verification) takes a folder of ordinary files
+  and folders from one `FindFirstFileExW` listing (no short names, large
+  fetches): attributes, size and times come with it, so no file is opened or
+  asked on its own; each sub-folder is asked once for its own times (the
+  listing's copy can lag behind). A folder holding a reparse point (link,
+  junction, cloud placeholder) or a `.lnk` shortcut is scanned entry by entry
+  with QFileInfo, as are folders the listing cannot read. `tst_exfat_scan`
+  checks that both ways record the same values.
+* Extraction sets each file's times and attributes through the handle it has
+  just written (`SetFileInformationByHandle`), instead of opening the file
+  again for each; it falls back to the path-based calls when a file system
+  refuses.
 
 Measured in the development VM (Linux, 4 vCPU, virtio disk, Release build,
 `tst_exfat_bench` with `FW_EXFAT_BENCH_MIB=1024`: 2,005 files, 1,032 MiB of
@@ -274,19 +312,37 @@ from filling up during a 100 GB build.
   truncated images detected; strict verification (changed byte, missing,
   extra, size); extraction round trip with timestamps; a sparse 5 GiB file.
 * `tst_exfat_jobs` — the jobs through the factory, every setting read, legacy
-  import, validation, cancellation (no output, no `.part`, previous image
-  kept), insufficient space, replacing images, source deletion gating, the
-  verify and extract jobs.
+  import, validation, cancellation while writing (no output, no `.part`,
+  previous image kept), cancellation during verification (build and extract:
+  the work is saved unverified; a difference found before the cancel still
+  fails the build), insufficient space, replacing images, source deletion
+  gating, the verify and extract jobs.
 * `tst_exfat_ampr` — `exfat.amprIndex`: a missing index is added and an outdated
   one rebuilt in the image only (every file of the dump hashed before and
-  after), an up-to-date one (also with other file times) kept byte for byte,
-  a packed game's index kept, `off` and the other choices, a game without the
+  after), an up-to-date one kept byte for byte, one with other file times (a
+  copied dump, a file changed in place) rebuilt, a packed game's index kept,
+  `off` and the other choices, a game without the
   AMPR library builds the bytes it built before, the verify job, source
   deletion.
 * `tst_exfat_edit` — in-place deletes and replacements, rebuild and growth,
-  cancellation and failed verification leaving the image byte-identical,
-  interrupted-edit recovery, the edit job.
-* `tst_exfat_bench` — logs MB/s for write, verify and extract.
+  cancellation and failed verification leaving the image byte-identical, a
+  cancel during verification keeping the edit (in place and rebuilt) unless a
+  difference was found before it or the quick check fails, interrupted-edit
+  recovery, the edit job.
+* `tst_exfat_scan` (Windows) — the scan records for ordinary entries exactly
+  what QFileInfo and `GetFileAttributesW` give (size, attributes, all three
+  times and their time spec; hidden, system, read-only, no-archive, hidden
+  folders, a 4 GiB + 1 file, a path over 400 characters, hidden-file and
+  pattern exclusions); folders with junctions and shortcuts (`.lnk` in either
+  case) keep their rules and their plain entries the same values; a junction
+  whose folder is gone is reported as a link whose target is missing;
+  extraction (sequential and parallel) restores all three times and the
+  attributes, archive bit cleared included.
+* `tst_exfat_bench` — logs MB/s for scan, write, verify and extract, and the
+  room the free tail takes in a plain and a sparse file
+  (`FW_EXFAT_BENCH_MIB`; `FW_BENCH_MODE`, `FW_BENCH_THREADS`,
+  `FW_BENCH_BUFFER_MIB` for the Performance settings). Numbers on the owner's
+  PC: `docs/PERFORMANCE.md`.
 
 Independent cross-check (manual, Linux as root): images from the round-trip and
 edit tests (`FW_EXFAT_KEEP_SAMPLE=<dir>`, `FW_EXFAT_KEEP_EDIT=<dir>`) mounted
