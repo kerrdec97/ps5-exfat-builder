@@ -9,8 +9,8 @@ everything up to and including step 6 on a feature branch. Merging to
 
 * `native/CMakeLists.txt`: `project(FarewellEdition VERSION x.y.z ...)`. Every
   script reads the version from this line; `BuildInfo.h` (the app's
-  version, `--self-test`) and the version resources of the app and the
-  launcher take it from the project.
+  version, `--self-test`), the version resources and manifests of the app
+  and the launcher take it from the project.
 * `CHANGELOG.md`: a `## [x.y.z] - <date>` section at the top.
 * `native/RELEASE_NOTES.md`: title line, the folder-zip name
   (`exFAT-Image-Builder-x.y.z-win64-folder.zip`) and what is new. The release
