@@ -129,7 +129,7 @@ specification the removed pipeline was written from.
 
 | Item | Implementation | Status | Evidence |
 |---|---|---|---|
-| Windows executable | MSVC 2022 + Qt 6.8.3, windeployqt, manifest (PerMonitorV2 DPI, long paths, asInvoker) | Done | `native-windows.yml`: build, tests, deployed-exe self-test, page screenshots, 30 s launch check |
+| Windows executable | MSVC 2022 + Qt 6.10.3, windeployqt, manifest (PerMonitorV2 DPI, long paths, asInvoker) | Done | Release PC (`make-release.ps1`). `native-windows.yml` (Qt 6.10.3 since the Fable 5.2 cycle; not yet run with it): build, tests, `make-release.ps1` packaging, self-tests, page screenshots, 30 s launch check |
 | exFAT images with the real Windows driver | `tst_exfat_windows`: image wrapped in a VHD, mounted with Mount-DiskImage, read back and `chkdsk`ed; a Windows-formatted exFAT volume read by the native reader | Done | Windows CI (test log printed in the run) |
 | Single-file exe + SHA256SUMS (the release) | `fw_onefile` launcher + `fw_onefile_pack` (`packaging/make-onefile.ps1`, `make-release.ps1`) | Done | tst_onefile; the release script's smoke test |
 | Installer + portable zip | Inno Setup (per-user, no admin), zip | Done (CI artefacts only; not part of a v5 release) | CI artifacts |

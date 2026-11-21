@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/kerrdec97/ps5-exfat-builder/security/advisories/new
+    about: Please do not open a public issue for a security problem. See SECURITY.md.
+  - name: Antivirus flagged the download
+    url: https://github.com/kerrdec97/ps5-exfat-builder/blob/main/docs/ANTIVIRUS.md
+    about: How to check the download, use the folder edition and report a false positive.
+  - name: Download the newest release
+    url: https://github.com/kerrdec97/ps5-exfat-builder/releases
+    about: Please check that the problem is still there in the newest release.

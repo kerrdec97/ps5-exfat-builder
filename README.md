@@ -84,6 +84,11 @@ The exe is not code-signed and it is a self-extracting program (it unpacks
 the app and the backport engine to your user folder on first start), which
 some antivirus engines flag by heuristics (`Wacatac`, `!ml`). These are
 guesses, not matches. You can check the hash or scan it on VirusTotal.
+Please do not turn your protection off: [docs/ANTIVIRUS.md](docs/ANTIVIRUS.md)
+explains how to check your copy, use the folder edition and report a false
+positive to Microsoft or your antivirus vendor.
+
+Found a security problem? Please report it privately ([SECURITY.md](SECURITY.md)).
 
 ## 🧰 Requirements
 
@@ -110,6 +115,8 @@ This app stands on the work of these people and projects — thank you.
 | zstd compression library | Meta (Yann Collet and contributors) | [facebook/zstd](https://github.com/facebook/zstd) |
 | LZ4 library (reading LZ4 packs) | Yann Collet | [lz4/lz4](https://github.com/lz4/lz4) |
 | zlib | Jean-loup Gailly, Mark Adler | [madler/zlib](https://github.com/madler/zlib) |
+| libarchive (reading 7z and RAR build sources) | Tim Kientzle and contributors | [libarchive/libarchive](https://github.com/libarchive/libarchive) |
+| liblzma from XZ Utils (LZMA in 7z archives) | Lasse Collin and contributors | [tukaani-project/xz](https://github.com/tukaani-project/xz) |
 | Qt 6 | The Qt Company and contributors | [qt.io](https://www.qt.io) |
 | Lucide icons | Lucide contributors | [lucide-icons/lucide](https://github.com/lucide-icons/lucide) |
 
