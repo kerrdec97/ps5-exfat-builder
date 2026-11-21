@@ -60,7 +60,7 @@ imported from Settings › Advanced.
 ## Command line
 
 ```
-"exFAT Image Builder.exe" [--self-test] [--screenshot-pages <dir>] [--quit-after <ms>]
+"exFAT Image Builder.exe" [--self-test] [--screenshot-pages <dir>] [--quit-after <ms>] [--version]
 ```
 
 * `--self-test` prints a JSON report of every dependency and the registered
@@ -68,6 +68,19 @@ imported from Settings › Advanced.
   line, working folder and exit code through, and shows the output in the
   console it was started from (or wherever it is redirected).
 * `--screenshot-pages <dir>` renders every page to PNG files.
+* `--quit-after <ms>` closes the app after that many milliseconds (launch
+  smoke tests); `--version` shows the version.
+
+## Developers
+
+Start with [`../AGENTS.md`](../AGENTS.md) (build, run, test, rules) and
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Further:
+[`docs/REPOSITORY_MAP.md`](docs/REPOSITORY_MAP.md),
+[`docs/TESTING.md`](docs/TESTING.md),
+[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md),
+[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md),
+[`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) and
+[`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## Licence
 
