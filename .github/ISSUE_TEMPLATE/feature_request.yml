@@ -1,0 +1,39 @@
+name: Feature request
+description: An idea that would make exFAT Image Builder better.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. Please search the open issues first: a thumbs-up on an existing request
+        counts too. The app works only with games you own and dumped yourself; requests to download
+        games, decrypt retail packages or bypass DRM will be closed.
+  - type: input
+    id: version
+    attributes:
+      label: App version you use
+      placeholder: "5.0.3"
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task or the problem behind the idea, in your own words.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you imagine it working in the app (which page, which option).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead
+      description: Other tools or workarounds, if any.
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Screenshots, links to the tool or documentation the idea comes from (no game files).

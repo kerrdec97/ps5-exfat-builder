@@ -100,6 +100,7 @@ exfat_builder_v*.zip
 !/THIRD_PARTY_NOTICES.md
 !/AGENTS.md
 !/CONTRIBUTING.md
+!/SECURITY.md
 
 # Scratch prototype (not imported by the app — design exploration only)
 elevation_prototype.py

@@ -1,58 +1,91 @@
-name: Native (C++) release
+name: Native (C++) release draft
 
-# Pushing a tag v5.* builds, tests and packages exFAT Image Builder v5 on
-# Windows (native-windows.yml, called from here), then publishes the
-# single-file exe (the one download: nothing to unzip or install) and
-# SHA256SUMS.txt as a GitHub *pre-release*. A release that already exists for
-# the tag (the owner publishes by hand) is left as it is. A pre-release is not
-# "latest"; promote it by hand once it has been tested on a real PC and
-# console. The installer and the portable zip stay build artefacts of the
-# Windows workflow; they are not part of a release.
+# Started by hand only (Actions > Run workflow, "Use workflow from" = the tag,
+# for example v5.0.4). Builds, tests and packages exFAT Image Builder v5 on
+# Windows (native-windows.yml, called from here) and puts the single-file exe,
+# the folder edition zip and SHA256SUMS.txt into a DRAFT pre-release. A draft
+# is visible only to the repository's maintainers: nothing is published until
+# the owner reviews the draft and presses "Publish release" himself, after the
+# build has been tested on a real PC and console. A release that already exists
+# for the tag (the owner publishes by hand) is left as it is. The installer
+# stays a build artefact of the Windows workflow; it is not part of a release.
+#
+# No push, tag or schedule starts this workflow, and it never publishes.
 
 on:
-  push:
-    tags: ['v5.*']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: native-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: The run is for a v5 tag that matches the version in native/CMakeLists.txt
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v5.*) ;;
+            *) echo "::error::Start this workflow from a tag (Use workflow from: v5.x.y), not $GITHUB_REF"; exit 1 ;;
+          esac
+          version=$(grep -m1 -oE 'VERSION [0-9]+\.[0-9]+\.[0-9]+' native/CMakeLists.txt | cut -d' ' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match project VERSION $version in native/CMakeLists.txt"
+            exit 1
+          fi
+          grep -q "^# exFAT Image Builder $version " native/RELEASE_NOTES.md || {
+            echo "::error::native/RELEASE_NOTES.md is not headed for $version"; exit 1; }
+
   build:
+    needs: check
     uses: ./.github/workflows/native-windows.yml
 
-  publish:
+  draft:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: write # to create the draft release; nothing else
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: native-windows-packages
           path: dist
 
-      - name: Check the download against its checksum
+      - name: Check the downloads against their checksums
         run: |
           ls -la dist
           # GitHub serves the asset without spaces; SHA256SUMS.txt lists that name.
           cp "dist/exFAT Image Builder.exe" dist/exFAT.Image.Builder.exe
           cd dist && sha256sum -c SHA256SUMS.txt
 
-      - name: Publish the pre-release
+      - name: Create the draft pre-release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # A release published by hand (the owner uploads the exe himself) is left as it is.
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "The release $GITHUB_REF_NAME already exists (published by hand); not replacing it."
+            echo "The release $GITHUB_REF_NAME already exists; not replacing it."
             exit 0
           fi
+          zip=$(ls dist/*-win64-folder.zip)
           # The asset is "exFAT.Image.Builder.exe"; the label keeps the readable name.
           gh release create "$GITHUB_REF_NAME" \
             "dist/exFAT.Image.Builder.exe#exFAT Image Builder.exe (single file: download and run)" \
+            "$zip#Folder edition (zip: the same program, already unpacked)" \
             dist/SHA256SUMS.txt \
-            --prerelease --verify-tag \
+            --draft --prerelease --verify-tag \
             --title "exFAT Image Builder ${GITHUB_REF_NAME#v} (pre-release)" \
             --notes-file native/RELEASE_NOTES.md
+          echo "Draft created. Review it on the Releases page and publish it by hand."
