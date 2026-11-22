@@ -1009,6 +1009,33 @@ private slots:
         const QString warn = mountConfigWarnings(MountTool::ShadowMountPlus, off).join(u'\n');
         QVERIFY(warn.contains(QStringLiteral("Safe to unplug")));
         QVERIFY(warn.contains(QStringLiteral("kstuff_delay")));
+        QVERIFY(!warn.contains(QStringLiteral("zstd")));
+    }
+
+    // F6: auto_update_ampr with drakmor's ampr_emu (the default URL) breaks zstd-packed games.
+    void mountConfigWarnsWhenAmprUpdatesReplaceTheRuntime()
+    {
+        const auto warn = [](const MountConfigValues& v) {
+            return mountConfigWarnings(MountTool::ShadowMountPlus, v).join(u'\n');
+        };
+        MountConfigValues v;
+        v.insert(QStringLiteral("debug"), QStringLiteral("1"));
+        QVERIFY(!warn(v).contains(QStringLiteral("zstd"))); // off by default
+        v.insert(QStringLiteral("auto_update_ampr"), QStringLiteral("0"));
+        QVERIFY(!warn(v).contains(QStringLiteral("zstd")));
+        v.insert(QStringLiteral("auto_update_ampr"), QStringLiteral("1")); // default URL: drakmor/ampr_emu
+        QVERIFY2(warn(v).contains(QStringLiteral("zstd")), qPrintable(warn(v)));
+        QVERIFY(warn(v).contains(QStringLiteral("auto_update_ampr")));
+        v.insert(QStringLiteral("auto_update_ampr"), QStringLiteral("on"));
+        v.insert(QStringLiteral("ampr_update_url"),
+                 QStringLiteral("https://github.com/drakmor/ampr_emu/releases/latest/download/libSceAmpr.sprx"));
+        QVERIFY(warn(v).contains(QStringLiteral("zstd")));
+        v.insert(QStringLiteral("ampr_update_url"),
+                 QStringLiteral("https://github.com/quer3q/ampr-emu-ng/releases/latest/download/libSceAmpr.sprx"));
+        QVERIFY2(!warn(v).contains(QStringLiteral("zstd")), qPrintable(warn(v)));
+        v.insert(QStringLiteral("auto_update_ampr"), QStringLiteral("off"));
+        v.remove(QStringLiteral("ampr_update_url"));
+        QVERIFY(!warn(v).contains(QStringLiteral("zstd")));
     }
 
     void mountConfigV2EditsSectionsAndProfiles()
