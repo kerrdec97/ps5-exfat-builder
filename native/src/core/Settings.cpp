@@ -237,7 +237,7 @@ SettingsStore::SettingsStore(std::shared_ptr<const SettingsSchema> schema, QStri
 {
 }
 
-Status SettingsStore::load()
+Status SettingsStore::load(bool setAsideDamaged)
 {
     QVariantMap loaded;
     QJsonObject foreign;
@@ -250,7 +250,9 @@ Status SettingsStore::load()
         QJsonParseError perr{};
         const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &perr);
         f.close();
-        if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        if ((perr.error != QJsonParseError::NoError || !doc.isObject()) && !setAsideDamaged) {
+            warnings << QStringLiteral("The settings file is damaged. Defaults are in use; the file was left as it is.");
+        } else if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
             const QString aside = m_path + QStringLiteral(".corrupt-")
                 + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
             QFile::rename(m_path, aside);

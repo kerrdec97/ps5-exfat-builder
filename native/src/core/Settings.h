@@ -146,7 +146,9 @@ public:
     // this build does not know is kept for the build that does (it is written
     // back by save()), each with a warning in the log and in loadWarnings(); a
     // corrupt file is renamed to *.corrupt-<time> and defaults are used.
-    Status load();
+    // `setAsideDamaged` false (a second process reading next to the running
+    // app, --self-test): a corrupt file is reported and left where it is.
+    Status load(bool setAsideDamaged = true);
     Status save() const;
 
     QVariant value(const QString& key) const;

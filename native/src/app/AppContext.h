@@ -15,6 +15,7 @@
 #include <QList>
 #include <QMutex>
 #include <QObject>
+#include <QTimer>
 
 #include <memory>
 
@@ -57,6 +58,18 @@ public:
     // waits for any that is still running.
     void checkDependenciesAsync();
 
+    // Stops the queue when the app closes: running jobs are cancelled and
+    // waited for up to `waitMs`, what they reported meanwhile is recorded,
+    // and a job that did not stop is named in the log (whose sinks still
+    // exist here). New jobs are refused from then on. Once; main() calls it
+    // before the window goes, the destructor otherwise. Also writes a
+    // settings change that is still waiting to be saved.
+    void shutdownQueue(int waitMs = 15000);
+
+    // How many times the settings file was written since start (tests: the
+    // changes of one turn of the event loop are saved once).
+    int settingsSavesForTests() const { return m_settingsSaves; }
+
     static AppContext* instance();
 
     // Where QSettings keeps the window state, the acknowledged crash and the
@@ -74,6 +87,8 @@ signals:
 
 private:
     void applyLogLevel();
+    void saveSettingsNow();
+    void flushSettingsSave(); // a pending save, now
 
     std::shared_ptr<SettingsSchema> m_schema;
     DependencyRegistry m_deps;
@@ -91,6 +106,10 @@ private:
     QMutex m_depMutex;
     LogModel* m_logModel = nullptr; // owned (QObject child)
     bool m_saveFailureLogged = false; // a settings file that cannot be written is reported once
+    QTimer m_saveTimer;               // zero-interval: one settings save per turn of the event loop
+    bool m_savePending = false;       // a change waits for m_saveTimer
+    int m_settingsSaves = 0;
+    bool m_queueShutDown = false;     // shutdownQueue() ran
 };
 
 } // namespace fw

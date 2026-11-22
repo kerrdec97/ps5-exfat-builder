@@ -7,6 +7,7 @@
 #include "app/services/AppStores.h"
 #include "app/services/LauncherIdentity.h"
 #include "connect/ps5/Module.h"
+#include "core/Log.h"
 #include "core/Paths.h"
 #include "engines/gameinfo/Module.h"
 #include "engines/general/Module.h"
@@ -24,6 +25,10 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 using namespace fw;
 
@@ -98,6 +103,91 @@ private slots:
             ctx.queue().remove(ctx.queue().records().front().id);
             (void)ctx.settings().setValue(general::keys::kRestoreQueue, false);
         }
+    }
+
+    // Audit A13: --self-test next to the running app neither appends to nor
+    // rotates that app's log files, and a settings file it cannot read stays
+    // where it is (the running app has it in memory).
+    void readOnlyStartLeavesLogsAndSettingsAlone()
+    {
+        const QString settingsFile = Paths::settingsFile();
+        const QByteArray before = readAll(settingsFile);
+        const auto restore = qScopeGuard([&] { (void)writeBytes(settingsFile, before); });
+        const QByteArray damaged = "{ this is not json";
+        QVERIFY(writeBytes(settingsFile, damaged));
+        const QString log = QDir(Paths::logsDir()).filePath(QStringLiteral("farewell.log"));
+        const QByteArray logBytes = readAll(log) + "a line the running app wrote\n";
+        QVERIFY(writeBytes(log, logBytes));
+        {
+            AppContext probe;
+            QVERIFY(probe.initialize(AppContext::Mode::ReadOnly).ok());
+            Log(QStringLiteral("test")).info(QStringLiteral("a line of the self-test"));
+            Logger::instance().flush();
+        }
+        QCOMPARE(readAll(settingsFile), damaged);
+        QCOMPARE(readAll(log), logBytes);
+        const QStringList aside = QDir(QFileInfo(settingsFile).absolutePath())
+                                      .entryList({QFileInfo(settingsFile).fileName() + QStringLiteral(".corrupt-*")}, QDir::Files);
+        QVERIFY2(aside.isEmpty(), qPrintable(aside.join(u',')));
+    }
+
+    // Audit A14: the changes of one turn of the event loop (Reset all, the v4
+    // import) are written in one save, and the file holds the last values.
+    void settingsChangesOfOneTurnAreSavedOnce()
+    {
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        QCoreApplication::processEvents();
+        const int before = ctx.settingsSavesForTests();
+        const bool start = ctx.settings().value(general::keys::kRestoreQueue).toBool();
+        for (int i = 1; i <= 20; ++i)
+            (void)ctx.settings().setValue(general::keys::kRestoreQueue, (i % 2 == 1) ? !start : start);
+        (void)ctx.settings().setValue(general::keys::kLogMaxMiB, 33);
+        QCOMPARE(ctx.settingsSavesForTests(), before); // nothing written yet
+        QCoreApplication::processEvents();
+        QCOMPARE(ctx.settingsSavesForTests(), before + 1);
+        const QByteArray file = readAll(Paths::settingsFile());
+        QVERIFY2(file.contains("33"), file.constData());
+        ctx.settings().reset(general::keys::kLogMaxMiB);
+        // A change still waiting when the app closes is written then.
+        ctx.shutdownQueue();
+        QCOMPARE(ctx.settingsSavesForTests(), before + 2);
+    }
+
+    // Audit A1: once the context has shut the queue down (before the window
+    // goes), no job is accepted any more.
+    void aShutDownQueueRefusesNewJobs()
+    {
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        ctx.queue().holdQueue(true);
+        ctx.shutdownQueue();
+        QVERIFY(ctx.queue().isShuttingDown());
+        const auto r = queueDiagnosis(ctx);
+        QVERIFY(!r.ok());
+        QCOMPARE(r.error().message, QStringLiteral("The app is closing."));
+        ctx.shutdownQueue(); // twice is harmless
+    }
+
+    // Audit A12: a copy that holds the instance lock without a visible window
+    // is still closing. The test tells a process with a visible top-level
+    // window from one without.
+    void aProcessWithoutAWindowIsTold()
+    {
+#ifdef Q_OS_WIN
+        const qint64 self = QCoreApplication::applicationPid();
+        QVERIFY(!launcher::processHasVisibleWindow(self)); // offscreen: no native window
+        HWND hwnd = CreateWindowExW(0, L"STATIC", L"fw-test", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0, 0, 100, 100, nullptr, nullptr,
+                                    GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd);
+        const auto destroy = qScopeGuard([hwnd] { DestroyWindow(hwnd); });
+        QVERIFY(launcher::processHasVisibleWindow(self));
+        ShowWindow(hwnd, SW_HIDE);
+        QVERIFY(!launcher::processHasVisibleWindow(self));
+        QVERIFY(!launcher::processHasVisibleWindow(0x7ffffff0)); // no such process
+#else
+        QSKIP("Windows only");
+#endif
     }
 
     // A run with its own data folder keeps the window state there, not in the user's registry.
