@@ -7,6 +7,7 @@
 #include <QTcpSocket>
 #include <QThread>
 
+#include <algorithm>
 #include <memory>
 
 namespace fw::ps5 {
@@ -54,33 +55,74 @@ QString klogStateName(KlogState s)
     return {};
 }
 
+namespace {
+
+// The first kMaxLineBytes of an over-long line, without a character cut in
+// half at the end, and "…".
+QString cutLine(QByteArray bytes)
+{
+    bytes.truncate(KlogLineSplitter::kMaxLineBytes);
+    // Drop a trailing incomplete UTF-8 sequence (at most 3 bytes).
+    qsizetype lead = bytes.size();
+    for (int back = 0; back < 4 && lead > 0; ++back) {
+        const uchar b = uchar(bytes.at(lead - 1));
+        if ((b & 0xC0) != 0x80) { // an ASCII byte or a lead byte
+            const int need = b < 0x80 ? 1 : (b >> 5) == 0x6 ? 2 : (b >> 4) == 0xE ? 3 : (b >> 3) == 0x1E ? 4 : 1;
+            if (bytes.size() - (lead - 1) < need)
+                bytes.truncate(lead - 1);
+            break;
+        }
+        --lead;
+    }
+    return QString::fromUtf8(bytes) + QChar(0x2026);
+}
+
+} // namespace
+
 QStringList KlogLineSplitter::feed(const QByteArray& bytes)
 {
-    m_pending += bytes;
     QStringList out;
-    qsizetype start = 0;
-    while (true) {
-        const qsizetype nl = m_pending.indexOf('\n', start);
+    qsizetype pos = 0;
+    const qsizetype n = bytes.size();
+    while (pos < n) {
+        const qsizetype nl = bytes.indexOf('\n', pos);
+        const qsizetype end = nl < 0 ? n : nl;
+        if (m_skipping) { // the dropped rest of a line already cut
+            if (nl < 0)
+                break;
+            m_skipping = false;
+            pos = nl + 1;
+            continue;
+        }
+        const qsizetype len = end - pos;
+        if (m_pending.size() + len > kMaxLineBytes) {
+            // Too long to be a log line (or no '\n' for this long): keep its start only.
+            m_pending.append(bytes.constData() + pos, kMaxLineBytes - m_pending.size());
+            out << cutLine(std::move(m_pending));
+            m_pending.clear();
+            if (nl < 0) {
+                m_skipping = true;
+                break;
+            }
+            pos = nl + 1;
+            continue;
+        }
+        m_pending.append(bytes.constData() + pos, len);
         if (nl < 0)
             break;
-        QByteArray line = m_pending.mid(start, nl - start);
-        while (line.endsWith('\r'))
-            line.chop(1);
-        if (!line.isEmpty())
-            out << QString::fromUtf8(line);
-        start = nl + 1;
-    }
-    m_pending.remove(0, start);
-    // A stream that never sends '\n' must not grow without bound.
-    if (m_pending.size() > 1024 * 1024) {
-        out << QString::fromUtf8(m_pending);
+        while (m_pending.endsWith('\r'))
+            m_pending.chop(1);
+        if (!m_pending.isEmpty())
+            out << QString::fromUtf8(m_pending);
         m_pending.clear();
+        pos = nl + 1;
     }
     return out;
 }
 
 QString KlogLineSplitter::flush()
 {
+    m_skipping = false;
     QByteArray rest = m_pending;
     m_pending.clear();
     while (rest.endsWith('\r'))
@@ -91,8 +133,23 @@ QString KlogLineSplitter::flush()
 // ---- KlogClient ----------------------------------------------------------------------
 
 KlogClient::KlogClient(Options options, LineCallback onLine, StateCallback onState)
-    : m_opt(std::move(options)), m_onLine(std::move(onLine)), m_onState(std::move(onState))
+    : m_opt(std::move(options)), m_onState(std::move(onState))
 {
+    if (onLine)
+        m_onBatch = [onLine = std::move(onLine)](const std::vector<KlogLine>& lines) {
+            for (const KlogLine& l : lines)
+                onLine(l);
+        };
+}
+
+KlogClient::KlogClient(Options options, BatchCallback onBatch, StateCallback onState, int)
+    : m_opt(std::move(options)), m_onBatch(std::move(onBatch)), m_onState(std::move(onState))
+{
+}
+
+std::unique_ptr<KlogClient> KlogClient::withBatches(Options options, BatchCallback onBatch, StateCallback onState)
+{
+    return std::unique_ptr<KlogClient>(new KlogClient(std::move(options), std::move(onBatch), std::move(onState), 0));
 }
 
 KlogClient::~KlogClient()
@@ -156,25 +213,40 @@ void KlogClient::run()
         m_connections.fetch_add(1);
         state(KlogState::Connected, FW_TR("Connected to %1:%2").arg(m_opt.host).arg(m_opt.port));
         KlogLineSplitter split;
+        std::vector<KlogLine> batch;
+        QElapsedTimer sinceBatch; // since the last hand-over
+        sinceBatch.start();
+        const auto add = [&](const QString& line) {
+            m_lines.fetch_add(1);
+            if (m_onBatch)
+                batch.push_back(KlogLine{QDateTime::currentDateTime(), line, klogTag(line)});
+        };
+        const auto handOver = [&] {
+            if (batch.empty())
+                return;
+            std::vector<KlogLine> lines;
+            lines.swap(batch);
+            m_onBatch(lines);
+            sinceBatch.restart();
+        };
         while (!token.isCancelled()) {
-            if (s.bytesAvailable() > 0) {
-                for (const QString& line : split.feed(s.readAll())) {
-                    m_lines.fetch_add(1);
-                    if (m_onLine)
-                        m_onLine(KlogLine{QDateTime::currentDateTime(), line, klogTag(line)});
-                }
+            if (s.bytesAvailable() > 0)
+                for (const QString& line : split.feed(s.read(256 * 1024)))
+                    add(line);
+            if (!batch.empty() && sinceBatch.elapsed() >= kBatchMs)
+                handOver();
+            if (s.bytesAvailable() > 0)
                 continue;
-            }
             if (s.state() != QAbstractSocket::ConnectedState)
                 break;
-            (void)waitUntil([&] { return s.bytesAvailable() > 0 || s.state() != QAbstractSocket::ConnectedState; }, 250,
+            // With lines waiting, wake up when their interval is over.
+            const int wait = batch.empty() ? 250 : int(std::max<qint64>(1, kBatchMs - sinceBatch.elapsed()));
+            (void)waitUntil([&] { return s.bytesAvailable() > 0 || s.state() != QAbstractSocket::ConnectedState; }, wait,
                             token, {&s});
         }
-        const QString rest = split.flush();
-        if (!rest.isEmpty() && m_onLine) {
-            m_lines.fetch_add(1);
-            m_onLine(KlogLine{QDateTime::currentDateTime(), rest, klogTag(rest)});
-        }
+        if (const QString rest = split.flush(); !rest.isEmpty())
+            add(rest);
+        handOver();
         s.abort();
         if (token.isCancelled())
             break;
