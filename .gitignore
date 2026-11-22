@@ -90,13 +90,17 @@ exfat_builder_v*.zip
 *_release.zip
 
 # ── Internal working docs (design notes, audits, investigations, roadmap) ─
-# Keep ONLY README.md and CHANGELOG.md in the public repo; everything else
-# at the root that's a .md is private planning/audit material. Any new root
+# Keep only the root .md files listed below (README, CHANGELOG, notices and
+# the developer guides AGENTS and CONTRIBUTING) in the public repo; everything
+# else at the root that's a .md is private planning/audit material. Any new root
 # .md is ignored by default — un-ignore it explicitly if it should ship.
 /*.md
 !/README.md
 !/CHANGELOG.md
 !/THIRD_PARTY_NOTICES.md
+!/AGENTS.md
+!/CONTRIBUTING.md
+!/SECURITY.md
 
 # Scratch prototype (not imported by the app — design exploration only)
 elevation_prototype.py

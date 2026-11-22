@@ -4,7 +4,7 @@
 
 This document is the input for writing the native FPKG engine (`native/src/engines/fpkg/`). It lists everything the
 third-party reference app does for PS5 packages, every setting it exposes, the exact way it drives Sony's Publishing
-Tools, how our Python engine (`core/fpkg/`) compares, and a proposed C++ design with a test plan.
+Tools, how the FPKG engine of the Python app of that time (`core/fpkg/`, versions 1 to 4, removed since) compared, and a proposed C++ design with a test plan.
 
 Conventions:
 

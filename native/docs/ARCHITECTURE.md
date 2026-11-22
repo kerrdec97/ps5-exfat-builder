@@ -233,6 +233,12 @@ is never removed, by that sweep or by Settings › Storage › Clear.
 
 ## Command line
 
-`exFAT Image Builder.exe [--self-test] [--screenshot-pages <dir>] [--quit-after <ms>]`
+`exFAT Image Builder.exe [--self-test] [--screenshot-pages <dir>] [--quit-after <ms>] [--version]`
 — `--self-test` prints a JSON dependency/settings report; `--screenshot-pages`
 renders every page to PNG (CI evidence); `--quit-after` for launch smoke tests.
+
+## See also
+
+`AGENTS.md` at the repository root (build, test and agent rules),
+`REPOSITORY_MAP.md`, `TESTING.md`, `TROUBLESHOOTING.md`, `DEPENDENCIES.md`,
+`RELEASE_CHECKLIST.md`.
