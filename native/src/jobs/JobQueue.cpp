@@ -5,6 +5,7 @@
 #include "core/Power.h"
 #include "jobs/JobHistory.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -13,6 +14,7 @@
 #include <QJsonDocument>
 #include <QPointer>
 #include <QRunnable>
+#include <QSignalBlocker>
 #include <QTimer>
 
 #include <algorithm>
@@ -29,6 +31,7 @@ struct JobQueue::Entry {
     QStringList busy;                  // busyPaths() taken when the job starts
     bool startDespiteHold = false;     // startNow(): may start while the queue is held
     bool retried = false;              // an Interrupted record that retry() ran again: not saved any more
+    bool persistent = true;            // Job::persistent(): saved in queue.json
 };
 
 namespace {
@@ -46,24 +49,62 @@ JobQueue::JobQueue(SettingsStore& settings, const JobFactory& factory, QObject* 
 
 JobQueue::~JobQueue()
 {
-    if (!shutdown(15000)) {
-        // A worker that does not reach a checkpoint keeps the closed app in
-        // memory: the log says which jobs were still running.
-        QStringList titles;
-        {
-            std::lock_guard lock(m_mutex);
-            for (const auto& e : m_entries)
-                if (e->rec.isActive())
-                    titles << e->rec.title;
-        }
-        Log(QStringLiteral("queue")).warn(QStringLiteral("Still waiting for a job to stop after 15 s. Running when the app closed: %1")
-                                              .arg(titles.join(QStringLiteral("; "))));
-        Logger::instance().flush();
-    }
+    // The app's context has already shut the queue down and logged a job that
+    // did not stop (AppContext::shutdownQueue()); here it is a second, instant call.
+    (void)shutdown(15000);
     // Workers hold raw pointers into m_entries (their progress reporters), so
     // they must all be gone before the members are destroyed. Cancellation has
     // been requested and tool processes killed; this returns promptly.
     m_pool.waitForDone(-1);
+    // A job that ended after shutdown()'s wait (also between that call and
+    // this one) is still recorded (queue file, history); nobody listens any more.
+    const QSignalBlocker quiet(this);
+    if (QCoreApplication::instance())
+        deliverFinishedWorkers();
+    persist();
+}
+
+QStringList JobQueue::activeTitles() const
+{
+    QStringList titles;
+    std::lock_guard lock(m_mutex);
+    for (const auto& e : m_entries)
+        if (e->rec.isActive())
+            titles << e->rec.title;
+    return titles;
+}
+
+void JobQueue::persist()
+{
+    const Status st = saveQueue();
+    if (st.ok()) {
+        m_saveFailed = false;
+        return;
+    }
+    if (m_saveFailed)
+        return; // once per streak: every later change would say the same
+    m_saveFailed = true;
+    Log(QStringLiteral("queue")).warn(QStringLiteral("The queue could not be saved: %1").arg(st.error().toLogString()));
+    emit persistenceFailed(st.error().toLogString());
+}
+
+void JobQueue::appendHistory(const JobRecord& rec)
+{
+    if (!m_history)
+        return;
+    const Status st = m_history->append(rec);
+    if (st.ok()) {
+        m_historyFailed = false;
+    } else if (!m_historyFailed) {
+        m_historyFailed = true;
+        Log(QStringLiteral("queue")).warn(QStringLiteral("The job history could not be written: %1").arg(st.error().toLogString()));
+    }
+}
+
+void JobQueue::deliverFinishedWorkers()
+{
+    // A worker's result is posted to this object (startEntry()).
+    QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
 }
 
 QString JobQueue::newId()
@@ -95,6 +136,7 @@ Result<QString> JobQueue::enqueue(std::unique_ptr<Job> job)
     e->rec.parameters = job->parameters();
     e->rec.overrides = job->settingsOverrides;
     e->rec.runsWhileHeld = job->runsWhileHeld();
+    e->persistent = job->persistent();
     e->rec.added = QDateTime::currentDateTime();
     e->rec.progress.phase = QStringLiteral("Waiting");
     e->rec.progress.indeterminate = true;
@@ -107,7 +149,7 @@ Result<QString> JobQueue::enqueue(std::unique_ptr<Job> job)
     Log(QStringLiteral("queue"), id).info(QStringLiteral("Queued: %1").arg(e->rec.title),
                                           QJsonObject{{QStringLiteral("kind"), e->rec.kind}});
     emit jobAdded(id);
-    (void)saveQueue();
+    persist();
     schedule();
     return id;
 }
@@ -203,7 +245,7 @@ void JobQueue::startNow(const QStringList& ids)
         m_entries.insert(firstQueued, moved.begin(), moved.end());
     }
     emit orderChanged();
-    (void)saveQueue();
+    persist();
     schedule();
 }
 
@@ -240,10 +282,10 @@ void JobQueue::cancel(const QString& id)
                 std::lock_guard lock(m_mutex);
                 snapshot = e->rec;
             }
-            (void)m_history->append(snapshot); // every ending is in the history
+            appendHistory(snapshot); // every ending is in the history
         }
         emit jobFinished(id);
-        (void)saveQueue();
+        persist();
         schedule();
     }
 }
@@ -281,7 +323,7 @@ Result<QString> JobQueue::retry(const QString& id)
             std::lock_guard lock(m_mutex);
             e->retried = false;
         }
-        (void)saveQueue();
+        persist();
     }
     return again;
 }
@@ -300,7 +342,7 @@ bool JobQueue::remove(const QString& id)
         m_entries.erase(it);
     }
     emit jobRemoved(id);
-    (void)saveQueue();
+    persist();
     // The last waiting job is gone: the queue may have just run dry, and only
     // schedule() tells anybody (idle()).
     if (removed->rec.state == JobState::Queued)
@@ -321,7 +363,7 @@ bool JobQueue::move(const QString& id, int newIndex)
         m_entries.insert(m_entries.begin() + newIndex, e);
     }
     emit orderChanged();
-    (void)saveQueue();
+    persist();
     return true;
 }
 
@@ -341,7 +383,7 @@ void JobQueue::clearFinished()
     }
     for (const auto& id : ids)
         emit jobRemoved(id);
-    (void)saveQueue();
+    persist();
 }
 
 std::vector<JobRecord> JobQueue::records() const
@@ -625,7 +667,7 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
         }
         if (tryAutoRetry(e, result.error())) {
             emit jobChanged(id);
-            (void)saveQueue();
+            persist();
             schedule();
             return;
         }
@@ -655,6 +697,13 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
             e->rec.state = result.error().isCancelled() ? JobState::Cancelled : JobState::Failed;
             e->rec.error = result.error();
         }
+        // Ended while the app closes (shutdown() delivers it): only a job that
+        // succeeded is done; any other comes back as interrupted, to retry.
+        if (m_shuttingDown && e->rec.state != JobState::Succeeded) {
+            const QString detail = e->rec.error ? e->rec.error->toLogString() : QString();
+            e->rec.state = JobState::Interrupted;
+            e->rec.error = Error(ErrorCode::Internal, QStringLiteral("The app closed while this job was running. Retry to run it again."), detail);
+        }
         e->reporter.reset();
         snapshot = e->rec;
     }
@@ -665,15 +714,16 @@ void JobQueue::onWorkerFinished(const QString& id, Result<JobOutcome> result)
                      : QStringLiteral("Finished: %1").arg(snapshot.title));
     else if (snapshot.state == JobState::Cancelled)
         log.warn(QStringLiteral("Cancelled: %1").arg(snapshot.title));
+    else if (snapshot.state == JobState::Interrupted)
+        log.warn(QStringLiteral("Interrupted by the app closing: %1 (%2)").arg(snapshot.title, snapshot.error->detail));
     else
         log.error(QStringLiteral("Failed: %1 — %2").arg(snapshot.title, snapshot.error ? snapshot.error->toLogString() : QString()));
-    if (m_history)
-        (void)m_history->append(snapshot);
+    appendHistory(snapshot);
     emit jobChanged(id);
     emit jobFinished(id);
     if (m_shuttingDown)
-        return; // keep queue.json as saved at shutdown so interrupted jobs can be retried
-    (void)saveQueue();
+        return; // shutdown() saves the queue once, after every result is in
+    persist();
     schedule();
 }
 
@@ -687,6 +737,8 @@ Status JobQueue::saveQueue() const
         for (const auto& e : m_entries) {
             // Interrupted records stay until the user retries or removes them.
             if (isTerminal(e->rec.state) && (e->rec.state != JobState::Interrupted || e->retried))
+                continue;
+            if (!e->persistent) // update checks and downloads: never across a restart
                 continue;
             QJsonObject o;
             o.insert(QStringLiteral("kind"), e->rec.kind);
@@ -771,7 +823,7 @@ Status JobQueue::restoreQueue()
             }
             // A job that ended this way is part of the history too (once).
             if (fresh && m_history)
-                (void)m_history->append(e->rec);
+                appendHistory(e->rec);
             emit jobAdded(e->rec.id);
         };
         const auto keepInterrupted = [&](std::unique_ptr<Job>& j, const QString& why, bool fresh) {
@@ -799,6 +851,12 @@ Status JobQueue::restoreQueue()
             keepRecord(std::move(rec),
                        known ? before : QStringLiteral("This saved job could not be restored: %1").arg(job.error().message),
                        !known);
+            continue;
+        }
+        if (!job.value()->persistent()) {
+            // Saved by an older build (update checks and downloads were): it
+            // would hold the queue for a job nobody sees, or contact the network.
+            Log(QStringLiteral("queue")).info(QStringLiteral("A saved %1 job was not restored: it is not kept across restarts.").arg(kind));
             continue;
         }
         if (savedState == jobStateName(JobState::Interrupted)) {
@@ -832,7 +890,7 @@ Status JobQueue::restoreQueue()
         m_foreignJobs = foreign;
     }
     m_restoring = false;
-    (void)saveQueue();
+    persist();
     // Restored jobs wait for the user to resume the queue.
     m_held = previousHold || pendingCount() > 0;
     if (m_held != previousHold)
@@ -845,7 +903,7 @@ bool JobQueue::shutdown(int msecs)
 {
     if (m_shuttingDown)
         return m_pool.waitForDone(0);
-    (void)saveQueue();
+    persist();
     m_shuttingDown = true;
     power::setKeepAwake(false);
     {
@@ -858,7 +916,14 @@ bool JobQueue::shutdown(int msecs)
                 e->cancel.resume();
             }
     }
-    return m_pool.waitForDone(msecs);
+    const bool done = m_pool.waitForDone(msecs);
+    // The event loop has stopped: what the workers posted meanwhile is
+    // delivered here, so a job that finished during the wait is recorded as
+    // finished (and one that stopped as interrupted), then the file is
+    // written once more. A job still running stays "Running" in it.
+    deliverFinishedWorkers();
+    persist();
+    return done;
 }
 
 } // namespace fw

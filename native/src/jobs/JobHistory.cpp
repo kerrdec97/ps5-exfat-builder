@@ -1,6 +1,7 @@
 #include "jobs/JobHistory.h"
 
 #include "core/FileUtil.h"
+#include "core/Log.h"
 
 #include <QDir>
 #include <QFile>
@@ -159,7 +160,10 @@ void JobHistory::compactIfNeeded()
     if (lines.size() <= m_max)
         return;
     lines = lines.mid(lines.size() - m_max);
-    (void)writeFileAtomic(m_path, lines.join('\n') + '\n');
+    // Not fatal (the entry is in the file), but the file keeps growing and
+    // every read of it takes longer: the log says why.
+    if (const Status st = writeFileAtomic(m_path, lines.join('\n') + '\n'); !st.ok())
+        Log(QStringLiteral("queue")).warn(QStringLiteral("The job history could not be shortened: %1").arg(st.error().toLogString()));
 }
 
 } // namespace fw
