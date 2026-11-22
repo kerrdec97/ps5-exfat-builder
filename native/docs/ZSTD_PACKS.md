@@ -32,13 +32,21 @@ does not depend on the thread count.
 ## Rules
 
 * Always loose: empty files; `eboot.bin` anywhere and every `.elf .self .prx
-  .sprx`; the root `sce_sys/`, `sce_module/` and `fakelib*` folders; the AMPR
-  files.
+  .sprx`; every `.ini` (any folder, any case), so `dlc_emu.ini` stays editable
+  and on disk at the game root, where Kraken Mount and dlc_emu look for it, as
+  ps5-dump-forge 0.5.5 does; the root `sce_sys/`, `sce_module/` and `fakelib*`
+  folders; the AMPR files.
 * Strategy *everything* (default): every other file is packed (ampr-emu-ng
-  0.3.0+ serves fully packed games). *Compatible*: also root files,
+  0.3.0+ serves plain reads and directory listings of packed files; mmap of a
+  packed file is not served, which no measured game does). *Compatible*: also root files,
   containers (.pak, .utoc), configs, media and video folders stay loose.
 * `fakelib/libSceAmpr.sprx` becomes the bundled ampr-emu-ng; no other fakelib
-  file is touched. The old runtime is named in the log.
+  file is touched. The old runtime is named in the log; when it was a newer
+  ampr-emu-ng than the bundled one, the job warns that it was replaced (the
+  packs and the index were checked with the bundled one, so it is still the
+  one written; copy the newer file back by hand if the game ran better).
+  `identifyRuntime` reads both the 0.3.x string `ampr-emu-ng 0.3.3` and the
+  0.4.x/0.5.x notice `ampr-emu-ng: v0.5.0 (zstd) running`.
 * `ampr_emu.index` is written afresh from the game's files as the game sees
   them (loose, packed, the new runtime), on-disk case kept; the old journal
   (`ampr_commands.bin`) and logs are left out. A file whose path the runtime
@@ -101,7 +109,8 @@ does not depend on the thread count.
 | Silksong crashed: index said `Il2cppUserAssemblies.prx`, file was `Il2CppUserAssemblies.prx` (ampr-emu-ng #15) | Case is kept exactly in both indexes |
 | Forge replaced `libSceAmpr.sprx` and rewrote `ampr_emu.index` on every conversion; Uncharted, Tintin broke (dump-forge #21) | Only packing touches them; a plain build or extract leaves them as they are |
 | Backported games ship other fakelib libraries (ampr-emu-ng #2, #4, #9, #31, #34) | Only `fakelib/libSceAmpr.sprx` is replaced |
-| "Update game fakelib emulators" replaces the runtime (dump-forge #10, #23) | Every zstd build warns about it |
+| ShadowMount+'s emulator updates replace the runtime (dump-forge #10, #23; SMP 1.7 config v2 `[emulators] update_enabled`, on by default, and `auto_update_ampr`, which fetches drakmor's ampr_emu without a zstd reader) | Every zstd build warns about it (`packedGameMounterNote`) and names Kraken Mount, which brings its own ampr-emu-ng and mounts folders, not images |
+| `dlc_emu.ini` packed, so neither Kraken Mount nor the DLC editor finds it (dump-forge 0.5.5) | Every `.ini` stays loose |
 | Days Gone left 58.7 GB loose with the old default (ampr-emu-ng #3) | Pack everything by default; *compatible* is an option |
 | ASTRO BOT started with the keep-loose profile but not fully packed (dump-forge #27) | The *compatible* strategy |
 | A plain ELF eboot never starts (dump-forge 9ab367c, ampr-emu-ng #8) | Warned in the log as soon as it is seen, before packing, and again in the job's result |
@@ -117,6 +126,14 @@ does not depend on the thread count.
 * LZ4 packs are read, never written (decided: LZ4 needs traces).
 * TOML pack profiles (dump-forge #13, #15, #31) and packing straight to the
   console over FTP (dump-forge #5) are not implemented.
+* Whole-image zstd streams are not written or opened (decided). Lithiumwow's
+  PS5ZST `.exfat.zst` is one plain zstd stream of a whole exFAT image (level 3,
+  not seekable, no licence); it needs a closed console ELF to restore it, and
+  no published loader mounts it: ShadowMount+ (`.ffpkg .exfat .ffpfs .ffpfsc`
+  only) and Kraken Mount both refuse it. A file starting with the zstd magic
+  `28 B5 2F FD` is not a mountable image. (ModGames44's `.zstd`, which Kraken
+  Mount MOD reads, is a different thing: a bare exFAT image with zstd packs
+  inside; see the 5.2-cycle report on GitHub #98.)
 * YouTube packages for Y2JB are not bundled or downloaded: they are Google's
   app. The Y2JB tab installs them from the user's own folder; a private build
   can carry the owner's own copies (`make-release.ps1 -PrivateYoutube`).

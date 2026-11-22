@@ -9,6 +9,11 @@
 #   FW_FETCH_AMPR_RUNTIME  ON (default): download it from the release once
 #                          (into the build tree) and check the hash.
 # Without either, the app builds and the zstd option says the runtime is missing.
+#
+# Changing the pin is the owner's decision. The version and SHA-256 below are
+# repeated in src/engines/ampr/Runtime.h (kBundledRuntimeVersion,
+# kBundledRuntimeSha256) and must change with them; identifyRuntime() there
+# reads both the 0.3.x and the 0.4.x/0.5.x version strings.
 
 set(FW_AMPR_RUNTIME_VERSION "0.3.3")
 set(FW_AMPR_RUNTIME_SHA256 "1c1051f91bc7cba19b15362b2b832114b53a4c3d6193f50c90fdf1ae5d78d268")

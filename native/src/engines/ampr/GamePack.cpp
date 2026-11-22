@@ -332,6 +332,16 @@ Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString
     if (runtimeItem >= 0) {
         FW_TRY_ASSIGN(QByteArray old, readSmall(*logical, runtimeItem, 64LL * 1024 * 1024));
         rep.previousRuntime = identifyRuntime(old);
+        // The bundled runtime is still written (the packs and the index are
+        // checked against it), but a newer one is not replaced unsaid.
+        const QString bundled = QString::fromLatin1(kBundledRuntimeVersion);
+        if (rep.previousRuntime.kind == RuntimeKind::AmprEmuNg && !rep.previousRuntime.bundled
+            && compareVersions(rep.previousRuntime.version, bundled) > 0) {
+            rep.warnings << QStringLiteral("fakelib/libSceAmpr.sprx was ampr-emu-ng %1, newer than the bundled %2; it was "
+                                           "replaced. Copy the newer file back if the game ran better with it.")
+                                .arg(rep.previousRuntime.version, bundled);
+            log.warn(rep.warnings.back());
+        }
     }
     if (packed.empty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("The game has no files to pack (everything must stay loose)."));
