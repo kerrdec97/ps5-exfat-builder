@@ -31,6 +31,7 @@
 #include <QSet>
 #include <QTableWidget>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -65,6 +66,10 @@ public:
                         const QString& market, bool addCopies);
     QString previewText(bool iniMode) const;
     std::vector<dlc::IniExportResult> saveUpdatedInis(QStringList* log = nullptr); // no dialog (tests)
+    // Tests: replaces the online lookup of "Change region…" (it runs on a
+    // worker thread with the page's cancellation token); empty restores it.
+    using RegionLookupForTests = std::function<dlc::DlcLookupResult(const CancellationToken&)>;
+    static void setRegionLookupForTests(RegionLookupForTests fn);
 
 protected:
     Result<QString> submit(bool buildNow) override;
