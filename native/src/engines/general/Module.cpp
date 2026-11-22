@@ -193,6 +193,22 @@ void registerModule(ModuleContext& ctx)
         s.add(d);
     }
     {
+        // GitHub #96: a choice for the next run only, so a Sleep chosen for
+        // one long run is not left armed for every later one.
+        SettingDef d;
+        d.key = keys::kAfterQueueThisRunOnly;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("When the queue finishes");
+        d.label = QStringLiteral("Only after this run");
+        d.description = QStringLiteral("On: the action runs after the next run only; then this switch turns off and the choice above "
+                                       "goes back to Do nothing, also when the run ended without the action. Off: the action runs "
+                                       "after every run.");
+        d.type = SettingType::Bool;
+        d.defaultValue = false;
+        d.order = order++;
+        s.add(d);
+    }
+    {
         SettingDef d;
         d.key = keys::kAfterQueueDelay;
         d.section = QStringLiteral("General");

@@ -14,6 +14,8 @@
 #include <optional>
 #include <vector>
 
+class QLabel;
+
 namespace fw::ui {
 class SettingEditor;
 }
@@ -54,6 +56,8 @@ private:
     QPushButton* m_clearFinished;
     ui::SettingEditor* m_afterAction = nullptr; // general.afterQueueAction, for the next run
     ui::MessageRow* m_afterNote = nullptr;
+    ui::SettingEditor* m_afterOnce = nullptr; // general.afterQueueThisRunOnly ("Only after this run")
+    QLabel* m_afterOnceLabel = nullptr;
     QWidget* m_columns;
     ui::Card* m_emptyCard;
     ui::Segmented* m_filter;

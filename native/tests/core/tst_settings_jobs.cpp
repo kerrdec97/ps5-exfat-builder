@@ -1295,6 +1295,109 @@ private slots:
         QCOMPARE(due.count(), 0); // it had started: "Only if every job succeeded" keeps the computer on
     }
 
+    // GitHub #96: "Only after this run" arms the action for one run. When it
+    // is due the setting goes back to "Do nothing" and the switch off, and
+    // the next run does nothing; dueAction() still names the action for the
+    // countdown that is running.
+    void onlyAfterThisRunArmsTheActionOnce()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q22/settings.json")));
+        QVERIFY(store.load().ok());
+        QCOMPARE(store.value(general::keys::kAfterQueueThisRunOnly).toBool(), false); // default: every run
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep")).ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueThisRunOnly, true).ok());
+        JobQueue q(store, reg.jobs);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        QSignalSpy finished(&w, &QueueCompletionWatcher::queueFinished);
+        auto a = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("A q22")}});
+        auto b = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("B q22")}});
+        QVERIFY(a.ok() && b.ok());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 1; }, 5000));
+        QCOMPARE(due.count(), 1);
+        QCOMPARE(due.first().at(0).value<power::Action>(), power::Action::Sleep);
+        QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("none"));
+        QCOMPARE(store.value(general::keys::kAfterQueueThisRunOnly).toBool(), false);
+        QCOMPARE(w.dueAction(), power::Action::Sleep); // the countdown of this run may still act
+        auto c = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("C q22")}});
+        QVERIFY(c.ok());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 2; }, 5000));
+        QCOMPARE(due.count(), 1);
+        QCOMPARE(w.dueAction(), power::Action::None);
+    }
+
+    // Changing the choice during the countdown of a "this run only" action
+    // takes it back: dueAction() follows the setting again.
+    void aChoiceMadeAfterAThisRunOnlyActionWins()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q23/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("shutdown")).ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueThisRunOnly, true).ok());
+        JobQueue q(store, reg.jobs);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        auto a = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("A q23")}});
+        QVERIFY(a.ok());
+        QVERIFY(QTest::qWaitFor([&] { return due.count() == 1; }, 5000));
+        QCOMPARE(w.dueAction(), power::Action::Shutdown);
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep")).ok());
+        QCOMPARE(w.dueAction(), power::Action::Sleep);
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("none")).ok());
+        QCOMPARE(w.dueAction(), power::Action::None);
+    }
+
+    // With the switch off the choice stays for every run (as before).
+    void everyRunKeepsTheAction()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q24/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep")).ok());
+        JobQueue q(store, reg.jobs);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        auto a = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("A q24")}});
+        QVERIFY(a.ok());
+        QVERIFY(QTest::qWaitFor([&] { return due.count() == 1; }, 5000));
+        QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("sleep"));
+        QCOMPARE(w.dueAction(), power::Action::Sleep);
+        auto b = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("B q24")}});
+        QVERIFY(b.ok());
+        QVERIFY(QTest::qWaitFor([&] { return due.count() == 2; }, 5000));
+        QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("sleep"));
+    }
+
+    // "Only after this run" with "Only if every job succeeded": a failed run
+    // keeps the computer on and still ends the choice, so Sleep is not left
+    // armed for the next run.
+    void aFailedThisRunOnlyRunResetsTheChoice()
+    {
+        fwtest::Registry reg;
+        addFakeKind(reg.jobs);
+        SettingsStore store(reg.schema, m_root.filePath(QStringLiteral("q25/settings.json")));
+        QVERIFY(store.load().ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep")).ok());
+        QVERIFY(store.setValue(general::keys::kAfterQueueThisRunOnly, true).ok());
+        QVERIFY(store.value(general::keys::kAfterQueueOnlyIfOk).toBool());
+        JobQueue q(store, reg.jobs);
+        QueueCompletionWatcher w(q, store);
+        QSignalSpy due(&w, &QueueCompletionWatcher::actionDue);
+        QSignalSpy finished(&w, &QueueCompletionWatcher::queueFinished);
+        auto bad = q.enqueue(QStringLiteral("test.fake"), {{QStringLiteral("title"), QStringLiteral("Bad q25")}, {QStringLiteral("fail"), true}});
+        QVERIFY(bad.ok());
+        QVERIFY(QTest::qWaitFor([&] { return finished.count() == 1; }, 5000));
+        QCOMPARE(due.count(), 0);
+        QCOMPARE(store.value(general::keys::kAfterQueueAction).toString(), QStringLiteral("none"));
+        QCOMPARE(store.value(general::keys::kAfterQueueThisRunOnly).toBool(), false);
+        QCOMPARE(w.dueAction(), power::Action::None);
+    }
+
     // "Clear history" that cannot remove the file keeps showing the history:
     // it is still there and would be back after the next start.
     void historyThatCannotBeClearedStaysVisible()
