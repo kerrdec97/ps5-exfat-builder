@@ -28,6 +28,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QLabel>
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
@@ -356,6 +357,97 @@ private slots:
         QVERIFY(why);
         QTRY_VERIFY(why->isVisible()); // a new card is shown once the event loop has run
         QVERIFY2(why->text().contains(QStringLiteral("developer run")), qPrintable(why->text()));
+    }
+
+    // GitHub #90/#91: the Backport tab's own folders are listed too, with the
+    // paths the Backport tab uses, and the portable row says they stay.
+    void theStorageCardListsTheBackportFolders()
+    {
+        qunsetenv("FW_LAUNCHER_EXE");
+        qunsetenv("FW_LAUNCHER_DIR");
+        const QByteArray oldConfig = qgetenv("D97BETA_CONFIG_DIR"), oldData = qgetenv("D97BETA_DATA_DIR"), oldEngine = qgetenv("D97BETA_ENGINE_HOME");
+        const QString config = m_root.filePath(QStringLiteral("bp listed/config"));
+        const QString data = m_root.filePath(QStringLiteral("bp listed/data"));
+        const QString engine = m_root.filePath(QStringLiteral("bp listed/engine"));
+        qputenv("D97BETA_CONFIG_DIR", QDir::toNativeSeparators(config).toUtf8());
+        qputenv("D97BETA_DATA_DIR", QDir::toNativeSeparators(data).toUtf8());
+        qputenv("D97BETA_ENGINE_HOME", QDir::toNativeSeparators(engine).toUtf8());
+        const auto back = qScopeGuard([&] {
+            qputenv("D97BETA_CONFIG_DIR", oldConfig);
+            qputenv("D97BETA_DATA_DIR", oldData);
+            qputenv("D97BETA_ENGINE_HOME", oldEngine);
+        });
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        pages::SettingsPage page(ctx);
+        page.resize(1200, 900);
+        page.show();
+        page.showSection(QStringLiteral("Storage"));
+        auto* card = page.findChild<QWidget*>(QStringLiteral("locations-card"));
+        QVERIFY(card);
+        const auto pathOf = [&card](const QString& key) -> ui::ElideLabel* {
+            auto* row = card->findChild<QWidget*>(QStringLiteral("location-") + key);
+            return row ? row->findChild<ui::ElideLabel*>(QStringLiteral("locationPath")) : nullptr;
+        };
+        for (const QString& key : {QStringLiteral("backport-config"), QStringLiteral("backport-data"), QStringLiteral("backport-engine")}) {
+            QVERIFY2(pathOf(key), qPrintable(key));
+            QVERIFY(buttonByText(card->findChild<QWidget*>(QStringLiteral("location-") + key), QStringLiteral("Show in folder")));
+        }
+        QCOMPARE(pathOf(QStringLiteral("backport-config"))->fullText(), QDir::toNativeSeparators(config));
+        QCOMPARE(pathOf(QStringLiteral("backport-data"))->fullText(), QDir::toNativeSeparators(data));
+        QCOMPARE(pathOf(QStringLiteral("backport-engine"))->fullText(), QDir::toNativeSeparators(engine));
+        // Listing them creates nothing.
+        QVERIFY(!QFileInfo::exists(config) && !QFileInfo::exists(data) && !QFileInfo::exists(engine));
+        auto* stays = card->findChild<QLabel*>(QStringLiteral("portable-backport-note"));
+        QVERIFY(stays);
+        QVERIFY2(stays->text().contains(QStringLiteral("standalone PS5 Backport GUI")), qPrintable(stays->text()));
+    }
+
+    // A19: when the settings cannot be saved, "Make this copy portable" with
+    // the copy ticked stops with an error instead of copying an older file.
+    void aSettingsFileThatCannotBeSavedIsNotCopied()
+    {
+        const Stage s = stage();
+        qputenv("FW_LAUNCHER_EXE", QDir::toNativeSeparators(s.exe).toUtf8());
+        qputenv("FW_LAUNCHER_DIR", QDir::toNativeSeparators(s.exeDir).toUtf8());
+        const QString settingsFile = Paths::settingsFile();
+        const auto envBack = qScopeGuard([&] {
+            qunsetenv("FW_LAUNCHER_EXE");
+            qunsetenv("FW_LAUNCHER_DIR");
+            QDir(settingsFile).removeRecursively();
+        });
+        AppContext ctx;
+        QVERIFY(ctx.initialize().ok());
+        // A folder where settings.json should be: saving fails.
+        QFile::remove(settingsFile);
+        QVERIFY(QDir().mkpath(settingsFile));
+        QVERIFY(fwtest::writeTextFile(settingsFile + QStringLiteral("/blocker.txt"), "x"));
+        QVERIFY(!ctx.settings().save().ok());
+        pages::SettingsPage page(ctx);
+        page.resize(1200, 900);
+        page.show();
+        page.showSection(QStringLiteral("Storage"));
+        auto* card = page.findChild<QWidget*>(QStringLiteral("locations-card"));
+        QVERIFY(card);
+        auto* make = card->findChild<QPushButton*>(QStringLiteral("make-portable"));
+        QVERIFY(make && make->isEnabled());
+        QString errorText;
+        std::shared_ptr<bool> second;
+        const auto met = onNextSheet(&page, [&](ui::Sheet* sheet) {
+            auto* copy = sheet->findChild<QCheckBox*>();
+            QVERIFY(copy && copy->isChecked());
+            buttonByText(sheet, QStringLiteral("Make portable"))->click();
+            second = onNextSheet(&page, [&](ui::Sheet* after) {
+                errorText = sheetText(after);
+                after->close(0);
+            });
+        });
+        make->click(); // blocks in the sheets
+        QVERIFY(*met);
+        QVERIFY(second && *second);
+        QVERIFY2(errorText.contains(QStringLiteral("This copy was not made portable")), qPrintable(errorText));
+        QVERIFY(!QFileInfo::exists(s.exeDir + QStringLiteral("/portable.txt")));
+        QVERIFY(!QFileInfo::exists(s.exeDir + QStringLiteral("/data")));
     }
 
     // Started from the single-file exe: the sheet says what will happen;
