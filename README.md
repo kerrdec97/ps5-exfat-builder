@@ -96,6 +96,19 @@ guesses, not matches. You can check the hash or scan it on VirusTotal.
 * For console features: a jailbroken PS5 running an FTP server (ftpsrv or
   etaHEN), and ShadowMount+ to mount images.
 
+## Which PS5 firmware?
+
+* The builder runs on your PC and does not depend on your console's
+  firmware: images and packages are built the same way for every firmware.
+* Whether they load on the console depends on its jailbreak and loader
+  (etaHEN, ShadowMount+ and so on), not on this app.
+* A backport is only needed when a game's **Required FW** (shown on the
+  Backport tab) is higher than your console's firmware. Otherwise build the
+  game as it is.
+* On the Backport tab, **Target SDK** N gives a backport that loads on
+  firmware N.00 and later; the default, SDK 4, loads on every firmware from
+  4.00. It cannot be higher than the game's own SDK.
+
 ## 🙏 Credits
 
 Created and maintained by **Deckerr97** ([@kerrdec97](https://github.com/kerrdec97)).

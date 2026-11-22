@@ -48,11 +48,24 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
 | Settings, queue, history | `%APPDATA%\kerrdec97\exFAT Image Builder Farewell` | `<app>\data` |
 | Logs (text + JSON lines), crash reports | `%LOCALAPPDATA%\kerrdec97\exFAT Image Builder Farewell\logs` (or Settings › Logging › Log folder) | `<app>\data\logs` |
 | Temporary files | `%LOCALAPPDATA%\...\temp` (or Settings › Storage › Temporary folder); folders older than a day are removed at start | `<app>\data\temp` |
+| Backport tab: settings and applied list | `%APPDATA%\Deckerr97BackportGuiBeta` | not moved |
+| Backport tab: logs and job files | `%LOCALAPPDATA%\Deckerr97BackportGuiBeta` | not moved |
+| Backport engine (unpacked, about 160 MB) | `C:\D97B` while Windows long paths are off, else `%LOCALAPPDATA%\D97B` | not moved |
 
 Settings › Storage lists these folders as they are on your PC ("Where the app
 keeps its files"). **Make this copy portable…** there creates `portable.txt`
 next to the exe and copies your settings, queue and history; the switch
 happens at the next start and the old folders stay until you delete them.
+The Backport tab's folders are shared with the standalone PS5 Backport GUI
+and stay where they are in portable mode. When the settings cannot be saved,
+**Make this copy portable…** with the copy ticked stops with an error rather
+than copying an older settings file.
+
+Which PS5 firmware? The builder runs on the PC and does not depend on the
+console's firmware; whether an image or package loads depends on the
+console's jailbreak and loader. A backport is only needed when a game's
+Required FW is higher than the console's firmware; Target SDK N loads on
+N.00 and later, and the default SDK 4 on every firmware from 4.00.
 
 Settings from the legacy app (`~/.exfat_builder_settings.json`) can be
 imported from Settings › Advanced.
