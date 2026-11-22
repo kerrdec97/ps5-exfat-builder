@@ -177,9 +177,10 @@ void registerModule(ModuleContext& ctx)
         d.group = QStringLiteral("Folder images (.ffpfs)");
         d.label = QStringLiteral("Compress files inside .ffpfs images");
         d.description = QStringLiteral(
-            "Compresses each large file of an .ffpfs on its own. Compressed files grow to a whole number of "
-            "blocks with zero bytes, which some games do not accept; leave this off unless you know the game "
-            "works with it. .ffpfsc images are always compressed.");
+            "Compresses each large file of an .ffpfs on its own. MkPFS 1.1.0 reports that the console reads such "
+            "files incorrectly even though the image verifies, and compressed files grow to a whole number of blocks "
+            "with zero bytes, which some games do not accept. Leave this off: for a smaller image, build an .ffpfsc, "
+            "which is always compressed.");
         d.type = SettingType::Bool;
         d.defaultValue = false;
         d.perJob = true;
