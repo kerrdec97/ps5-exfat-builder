@@ -50,7 +50,7 @@ log, ShadowMount+). It replaces the Python application of v1–v4.
 | Temporary files | `%LOCALAPPDATA%\...\temp` (or Settings › Storage › Temporary folder); folders older than a day are removed at start | `<app>\data\temp` |
 | Backport tab: settings and applied list | `%APPDATA%\Deckerr97BackportGuiBeta` | not moved |
 | Backport tab: logs and job files | `%LOCALAPPDATA%\Deckerr97BackportGuiBeta` | not moved |
-| Backport engine (unpacked, about 160 MB) | `C:\D97B` while Windows long paths are off, else `%LOCALAPPDATA%\D97B` | not moved |
+| Backport engine (its unpacked files) | `C:\D97B` while Windows long paths are off, else `%LOCALAPPDATA%\D97B` | not moved |
 
 Settings › Storage lists these folders as they are on your PC ("Where the app
 keeps its files"). **Make this copy portable…** there creates `portable.txt`
