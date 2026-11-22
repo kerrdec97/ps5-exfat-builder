@@ -631,6 +631,8 @@ Result<StagePlan> planStage(const QString& source, const CancellationToken& toke
     p.root = *root;
     const QString prefix = p.root.isEmpty() ? QString() : p.root + u'/';
     QStringList excludedDirs;
+    const QString suffix = QFileInfo(source).suffix().toLower();
+    const bool pfsImage = QFileInfo(source).isFile() && (suffix == u"ffpfs" || suffix == u"ffpfsc");
     for (int i = 0; i < int(p.files->items().size()); ++i) {
         const ampr::GameItem& it = p.files->items()[size_t(i)];
         if (!prefix.isEmpty() && !it.path.startsWith(prefix))
@@ -664,6 +666,13 @@ Result<StagePlan> planStage(const QString& source, const CancellationToken& toke
         }
         if (it.isDir) {
             p.dirs << rel;
+            continue;
+        }
+        // The PFS builder's empty-folder markers (pfs.keepEmptyFolders, PFS.md:
+        // they exist only in the image): the folder is staged and declared
+        // empty, the marker itself is not part of the game.
+        if (pfsImage && it.size == 0 && name == u".pfskeep") {
+            ++p.excluded;
             continue;
         }
         p.include.push_back(i);

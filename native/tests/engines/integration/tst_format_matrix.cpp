@@ -94,9 +94,10 @@ const Known kKnown[] = {
     // store are renamed ("LEVEL1.BIN (2)") and the new image is "Verified"
     // with names the source image does not have; only a warning says so.
     {"caseOnlyNamesInImage::to-exfat-refused", "F-MX-03 convert renames case twins instead of refusing"},
-    // FPKG from an .ffpfsc packages the image's .pfskeep markers as files
-    // instead of declaring the empty folders.
-    {"fpkgMock:ffpfsc/empty-folders:files", "F-MX-04 .pfskeep markers packaged as files"},
+    // F-MX-04 (FPKG from an .ffpfsc packaged the image's .pfskeep markers as
+    // files instead of declaring the empty folders) is fixed in
+    // GameSources.cpp planStage: the row asserts it again.
+    {nullptr, nullptr},
 };
 
 const char* knownFailure(const char* step)
