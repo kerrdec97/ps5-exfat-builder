@@ -27,6 +27,7 @@
 #include <QWidget>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include <exception>
 #include <functional>
 #include <memory>
 
@@ -131,7 +132,17 @@ bool ConsoleToolTab::runLocal(LocalWork<T> work, Done<T> done)
     const CancellationToken token = m_cancel->token();
     QPointer<ConsoleToolTab> self(this);
     m_future = QtConcurrent::run([self, token, work, done]() {
-        auto result = std::make_shared<Result<T>>(work(token));
+        // Work that throws (std::bad_alloc, a parser) still ends the step: else the tab would stay busy
+        // for the rest of the session and the after-queue power action would wait for it for ever.
+        auto result = std::make_shared<Result<T>>(
+            Error(ErrorCode::Internal, QStringLiteral("The job stopped because of an internal error.")));
+        try {
+            *result = work(token);
+        } catch (const std::exception& e) {
+            *result = Error(ErrorCode::Internal, QStringLiteral("The job stopped because of an internal error."),
+                            QString::fromUtf8(e.what()));
+        } catch (...) {
+        }
         QMetaObject::invokeMethod(
             QCoreApplication::instance(),
             [self, result, done]() {
@@ -144,6 +155,10 @@ bool ConsoleToolTab::runLocal(LocalWork<T> work, Done<T> done)
     });
     return true;
 }
+
+// Waits for a pool task without rethrowing what it may have thrown (for
+// destructors: QFuture::waitForFinished() rethrows a stored exception).
+void waitQuietly(QFuture<void>& future) noexcept;
 
 // PS5 connect has one gradient button per view (DESIGN_V5, principle 6):
 // while no console is connected, the console card's Connect; once one is,
