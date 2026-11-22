@@ -430,9 +430,11 @@ private slots:
         QTemporaryDir root;
         const QString journal = QDir::toNativeSeparators(root.filePath(QStringLiteral("bak/PPSA11111/APPLY_JOURNAL.json")));
         QVERIFY(writeFile(journal, R"({"state":"IN_PROGRESS"})"));
+        const QString gameDir = QDir::toNativeSeparators(root.filePath(QStringLiteral("Games/PPSA11111")));
+        QVERIFY(QDir().mkpath(gameDir)); // a game folder that is gone has nothing to restore into
         const QJsonObject row{{QStringLiteral("state"), QStringLiteral("IN_PROGRESS")},
                               {QStringLiteral("journal"), journal},
-                              {QStringLiteral("game_dir"), QStringLiteral("D:\\Games\\PPSA11111")},
+                              {QStringLiteral("game_dir"), gameDir},
                               {QStringLiteral("backup_dir"), QFileInfo(journal).absolutePath()}};
         QVERIFY(writeFile(folders().ledgerPath, QJsonDocument(QJsonObject{{QStringLiteral("applied"), QJsonArray{row}}}).toJson()));
         QVERIFY(unfinishedApplies(kApplyQuietSeconds).empty()); // written this second
@@ -449,6 +451,146 @@ private slots:
         QVERIFY(writeFile(journal, R"({"state":"ROLLED_BACK"})"));
         QVERIFY(unfinishedApplies(0).empty());
         QFile::remove(folders().ledgerPath);
+    }
+
+    // PS5 Backport GUI 0.3.5 (public since 17 Nov) writes the same ledger with
+    // two more unfinished states. A folder in one still holds backport files:
+    // it is "applied" here too, and its restore is offered.
+    void ledgerStatesOfNewerEngines()
+    {
+        QTemporaryDir root;
+        auto game = [&](const QString& id) {
+            const QString g = QDir::toNativeSeparators(root.filePath(QStringLiteral("Games/") + id));
+            QDir().mkpath(g);
+            return g;
+        };
+        auto journalAt = [&](const QString& id, const QByteArray& body) {
+            const QString j = QDir::toNativeSeparators(root.filePath(QStringLiteral("bak/%1/APPLY_JOURNAL.json").arg(id)));
+            writeFile(j, body);
+            QFile f(j);
+            if (f.open(QIODevice::ReadWrite))
+                f.setFileTime(QDateTime::currentDateTime().addSecs(-2 * kApplyQuietSeconds), QFileDevice::FileModificationTime);
+            return j;
+        };
+        const QString restoring = game(QStringLiteral("PPSA00001")), rollback = game(QStringLiteral("PPSA00002")),
+                      leftNothing = game(QStringLiteral("PPSA00003")), applied = game(QStringLiteral("PPSA00004"));
+        const QString gone = QDir::toNativeSeparators(root.filePath(QStringLiteral("Games/PPSA00005")));
+        auto row = [](const QString& dir, const QString& state, const QString& journal) {
+            return QJsonObject{{QStringLiteral("game_dir"), dir}, {QStringLiteral("state"), state},
+                               {QStringLiteral("journal"), journal}, {QStringLiteral("started_at"), QStringLiteral("2026-11-17T10:00:00")}};
+        };
+        const QJsonArray rows{
+            1, QStringLiteral("not a row"), QJsonValue(), // damaged rows are left out
+            row(restoring, QStringLiteral("APPLIED"), journalAt(QStringLiteral("PPSA00001"), R"({"state":"RESTORING","worker_started":1.5})")),
+            row(rollback, QStringLiteral("ROLLBACK_INCOMPLETE"), QDir::toNativeSeparators(root.filePath(QStringLiteral("bak/none/APPLY_JOURNAL.json")))),
+            row(leftNothing, QStringLiteral("APPLIED"),
+                journalAt(QStringLiteral("PPSA00003"), R"({"state":"ROLLBACK_INCOMPLETE","backport_files_left":false})")),
+            row(applied, QStringLiteral("APPLIED"), journalAt(QStringLiteral("PPSA00004"), R"({"state":"APPLIED"})")),
+            row(gone, QStringLiteral("APPLIED"), journalAt(QStringLiteral("PPSA00005"), R"({"state":"ROLLBACK_INCOMPLETE"})")),
+        };
+        QVERIFY(writeFile(folders().ledgerPath, QJsonDocument(QJsonObject{{QStringLiteral("applied"), rows}}).toJson()));
+        const auto cleanup = qScopeGuard([] { QFile::remove(folders().ledgerPath); });
+
+        QCOMPARE(readLedger().size(), 5); // the three that are not objects are gone
+        QCOMPARE(activeLedgerRecord(restoring).value(QStringLiteral("state")).toString(), QStringLiteral("RESTORING")); // the journal's word
+        QCOMPARE(activeLedgerRecord(rollback).value(QStringLiteral("state")).toString(), QStringLiteral("ROLLBACK_INCOMPLETE")); // no journal: the record's
+        QVERIFY(activeLedgerRecord(leftNothing).isEmpty()); // the undo left none of the backport's files
+        QCOMPARE(activeLedgerRecord(applied).value(QStringLiteral("state")).toString(), QStringLiteral("APPLIED"));
+        QVERIFY(readGame(restoring).appliedRecord.value(QStringLiteral("state")).toString() == QLatin1String("RESTORING"));
+
+        QStringList offered;
+        bool newer = false;
+        for (const QJsonObject& r : unfinishedApplies(kApplyQuietSeconds)) {
+            offered << QFileInfo(r.value(QStringLiteral("game_dir")).toString()).fileName();
+            if (r.value(QStringLiteral("game_dir")).toString() == restoring)
+                newer = r.value(QStringLiteral("written_by_035")).toBool();
+        }
+        // RESTORING is offered; an unreadable journal, an undo that left nothing,
+        // a finished apply and a folder that is gone are not.
+        QCOMPARE(offered, QStringList{QStringLiteral("PPSA00001")});
+        QVERIFY(newer);
+    }
+
+    // A record or settings file saved with a byte-order mark (an editor, the
+    // standalone program 0.3.5 reads both kinds) is read, not taken as empty.
+    void filesWithAByteOrderMarkAreRead()
+    {
+        const QString game = QDir::toNativeSeparators(m_data.filePath(QStringLiteral("bom-game")));
+        QDir().mkpath(game);
+        const QByteArray bom("\xEF\xBB\xBF");
+        QVERIFY(writeFile(folders().ledgerPath,
+                          bom + QJsonDocument(QJsonObject{{QStringLiteral("applied"),
+                                                           QJsonArray{QJsonObject{{QStringLiteral("game_dir"), game},
+                                                                                  {QStringLiteral("state"), QStringLiteral("APPLIED")}}}}})
+                                    .toJson()));
+        QCOMPARE(activeLedgerRecord(game).value(QStringLiteral("state")).toString(), QStringLiteral("APPLIED"));
+        QFile::remove(folders().ledgerPath);
+        QVERIFY(writeFile(folders().settingsPath, bom + R"({"scan_roots":["D:\\Bom"],"scan_depth":4})"));
+        SettingsFile state = SettingsFile::Missing;
+        const Settings s = loadSettings(&state);
+        QCOMPARE(state, SettingsFile::Ok);
+        QCOMPARE(s.scanRoots, QStringList{QStringLiteral("D:\\Bom")});
+        QCOMPARE(s.scanDepth, 4);
+        QFile::remove(folders().settingsPath);
+    }
+
+    // A param.json far larger than any real one (a damaged or crafted dump) is
+    // not read into memory: the game is listed without its metadata, at once.
+    void aHugeParamJsonIsNotRead()
+    {
+        QTemporaryDir root;
+        const QString g = root.filePath(QStringLiteral("Some Game"));
+        QVERIFY(writeFile(g + QStringLiteral("/eboot.bin"), "x"));
+        QFile p(g + QStringLiteral("/sce_sys/param.json"));
+        QDir().mkpath(QFileInfo(p).absolutePath());
+        QVERIFY(p.open(QIODevice::WriteOnly));
+        QVERIFY(p.write(R"({"titleId":"PPSA12345",)") > 0);
+        QVERIFY(p.resize(9LL * 1024 * 1024)); // 9 MiB, the limit is 8
+        p.close();
+        QElapsedTimer t;
+        t.start();
+        const Game game = readGame(g);
+        QVERIFY(game.titleId.isEmpty());
+        QVERIFY2(t.elapsed() < 1000, qPrintable(QString::number(t.elapsed())));
+    }
+
+    // The worker refuses a Target SDK above the game's own; the page says it
+    // before the run with this rule (0.3.4 worker.py, 0.3.5 gui.sdk_ceiling).
+    void sdkCeilingRule()
+    {
+        QVERIFY(sdkCeiling(QStringLiteral("7.00"), 9) == std::optional<int>(7));
+        QVERIFY(sdkCeiling(QStringLiteral("3.00"), 5) == std::optional<int>(4));
+        QVERIFY(!sdkCeiling(QStringLiteral("7.00"), 7));
+        QVERIFY(!sdkCeiling(QStringLiteral("7.00"), 4)); // SDK 4 is always allowed
+        QVERIFY(!sdkCeiling(QStringLiteral("2.00"), 4));
+        QVERIFY(!sdkCeiling(QString(), 13)); // unknown SDK: the worker decides
+        QVERIFY(sdkCeiling(QStringLiteral("10.50"), 11) == std::optional<int>(10));
+    }
+
+    // 0.3.5's free-space rules: the backup needs 1.6x (it holds the loose
+    // originals and their ZIP), and output and backup on one drive are
+    // checked together.
+    void preflightSpaceRules()
+    {
+        const SpaceNeed n = spaceNeed(1000LL * 1000 * 1000);
+        QCOMPARE(n.output, qint64(2200LL * 1000 * 1000 + 50LL * 1024 * 1024));
+        QCOMPARE(n.backup, qint64(1600LL * 1000 * 1000 + 20LL * 1024 * 1024));
+
+        QTemporaryDir root;
+        const QString game = root.filePath(QStringLiteral("game"));
+        QVERIFY(writeFile(game + QStringLiteral("/eboot.bin"), "x")); // no executables: 50 MB + 20 MB needed
+        const QString home = engineHome();
+        setFreeSpaceProbeForTests([home](const QString& p) -> qint64 {
+            if (QDir::cleanPath(p).startsWith(QDir::cleanPath(home), Qt::CaseInsensitive))
+                return 100LL * 1000 * 1000 * 1000;
+            return 60LL * 1024 * 1024; // each folder alone fits, the two together do not
+        });
+        const auto restore = qScopeGuard([] { setFreeSpaceProbeForTests({}); });
+        const Preflight p = preflight(root.filePath(QStringLiteral("out")), root.filePath(QStringLiteral("bak")), {game});
+        QVERIFY2(p.errors.join(u'|').contains(QStringLiteral("on the same drive and together need about")), qPrintable(p.errors.join(u'|')));
+        setFreeSpaceProbeForTests([](const QString&) -> qint64 { return 100LL * 1000 * 1000 * 1000; });
+        const Preflight ok = preflight(root.filePath(QStringLiteral("out")), root.filePath(QStringLiteral("bak")), {game});
+        QVERIFY2(ok.errors.isEmpty(), qPrintable(ok.errors.join(u'|')));
     }
 
     // The standalone program shares the ledger: while one runs that this app
