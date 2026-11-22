@@ -184,6 +184,7 @@ public:
     explicit CheckJob(QJsonObject p) : m_p(std::move(p)) {}
     QString kind() const override { return kCheckJob; }
     bool runsWhileHeld() const override { return true; } // never resumes the user's paused queue
+    bool persistent() const override { return false; }  // a new check is asked for at each start
     QString title() const override { return QStringLiteral("Check for updates"); }
     QStringList phases() const override { return {QStringLiteral("Checking")}; }
     QJsonObject parameters() const override { return m_p; }
@@ -261,6 +262,9 @@ public:
     explicit DownloadJob(QJsonObject p) : m_p(std::move(p)), m_rel(ReleaseInfo::fromJson(m_p.value(QStringLiteral("release")).toObject())) {}
     QString kind() const override { return kDownloadJob; }
     bool runsWhileHeld() const override { return true; }
+    // Not across a restart: the parameters carry the whole release answer,
+    // and a download nobody asked for in this session would start by itself.
+    bool persistent() const override { return false; }
     QString title() const override { return QStringLiteral("Download version %1").arg(m_rel.version); }
     QStringList phases() const override { return {QStringLiteral("Checksums"), QStringLiteral("Downloading"), QStringLiteral("Verifying")}; }
     QJsonObject parameters() const override { return m_p; }
@@ -374,6 +378,16 @@ public:
             return Error(ErrorCode::VerificationFailed, QStringLiteral("The download does not match the release's checksum, so it was deleted."),
                          QStringLiteral("expected %1, got %2").arg(expected, actual));
         FW_TRY(part.commit(true));
+        // Only the newest verified download is kept: the releases fetched
+        // before would otherwise stay in the cache for good.
+        for (const QFileInfo& old : QDir(dir).entryInfoList(QDir::Files | QDir::Hidden)) {
+            if (old.fileName() == m_rel.assetName || !isAcceptedAssetName(old.fileName()))
+                continue;
+            if (QFile::remove(old.absoluteFilePath()))
+                ctx.log.info(QStringLiteral("Removed an older update download: %1").arg(old.fileName()));
+            else
+                ctx.log.warn(QStringLiteral("Could not remove an older update download: %1").arg(QDir::toNativeSeparators(old.absoluteFilePath())));
+        }
         JobOutcome o;
         o.outputs << finalPath;
         o.verification = Verification::Passed;

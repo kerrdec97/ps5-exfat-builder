@@ -41,6 +41,7 @@ public:
         QByteArray headers;    // extra header lines, each ending in \r\n
     };
     QMap<QString, Response> routes;
+    int requests = 0; // requests answered so far
 
     bool listen() { return m_server.listen(QHostAddress::LocalHost, 0); }
     QString base() const { return QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort()); }
@@ -58,6 +59,7 @@ public:
                     const QList<QByteArray> parts = buf.split(' ');
                     const QString path = parts.size() > 1 ? QString::fromLatin1(parts[1]) : QString();
                     buf.clear();
+                    ++requests;
                     const Response r = routes.value(path, Response{404, "not found"});
                     const qint64 advertised = r.truncate ? r.body.size() + 1000 : r.body.size();
                     QByteArray head = "HTTP/1.1 " + QByteArray::number(r.status) + " X\r\nContent-Length: "
@@ -426,6 +428,81 @@ private slots:
         // No warning to delete a file by hand.
         for (const LogRecord& r : ring->records())
             QVERIFY2(!(r.level == LogLevel::Warning && r.message.contains(QStringLiteral(".part"))), qPrintable(r.message));
+    }
+
+    // Audit A17: only the newest verified download stays in the cache; the
+    // program files of the releases fetched before go, other files stay.
+    void downloadKeepsOnlyTheNewestRelease()
+    {
+        clearUpdatesDir();
+        MiniHttp http;
+        QVERIFY(http.listen());
+        const QString version = QStringLiteral("9.0.4");
+        const QByteArray payload = programBytes('n');
+        http.routes[QStringLiteral("/latest")] = {200, v5Release(http.base(), version)};
+        http.routes[assetPath(version, kProgram)] = {200, payload};
+        http.routes[assetPath(version, QStringLiteral("SHA256SUMS.txt"))] = {200, sumsLine(payload)};
+        QVERIFY(fwtest::writeTextFile(QDir(updatesDir()).filePath(QStringLiteral("exFAT-Image-Builder-Farewell-5.0.0-win64-setup.exe")), "old installer"));
+        QVERIFY(fwtest::writeTextFile(QDir(updatesDir()).filePath(QStringLiteral("exFAT Image Builder.exe")), "an older program"));
+        QVERIFY(fwtest::writeTextFile(QDir(updatesDir()).filePath(QStringLiteral("notes.txt")), "other"));
+
+        Env env(m_root.filePath(QStringLiteral("e17")));
+        auto check = env.run(update::kCheckJob, {{QStringLiteral("apiUrl"), http.base() + QStringLiteral("/latest")}});
+        QVERIFY(check && check->state == JobState::Succeeded);
+        auto dl = env.run(update::kDownloadJob, {{QStringLiteral("release"), check->outcome->details}});
+        QVERIFY(dl);
+        QVERIFY2(dl->state == JobState::Succeeded, dl->error ? qPrintable(dl->error->toLogString()) : "");
+        QCOMPARE(QDir(updatesDir()).entryList(QDir::Files, QDir::Name), (QStringList{kProgram, QStringLiteral("notes.txt")}));
+    }
+
+    // Audit A3: update checks and downloads are not kept in queue.json. One
+    // saved by an older build is dropped at start: it does not hold the queue
+    // and does not contact the network (also not with FW_OFFLINE set).
+    void updateJobsAreNotKeptAcrossRestarts()
+    {
+        MiniHttp http;
+        QVERIFY(http.listen());
+        http.routes[QStringLiteral("/latest")] = {404, "none"};
+        const QString dir = m_root.filePath(QStringLiteral("e3"));
+        const QString queueFile = dir + QStringLiteral("/queue.json");
+        const auto savedJobs = [&] {
+            QFile f(queueFile);
+            return f.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("jobs")).toArray()
+                                               : QJsonArray{QStringLiteral("unreadable")};
+        };
+        {
+            Env env(dir);
+            env.queue->setPersistencePath(queueFile);
+            env.queue->holdQueue(true);
+            auto id = env.queue->enqueue(update::kCheckJob, {{QStringLiteral("apiUrl"), http.base() + QStringLiteral("/latest")}});
+            QVERIFY(id.ok());
+            QCOMPARE(savedJobs(), QJsonArray());
+            (void)QTest::qWaitFor([&] { auto r = env.queue->record(id.value()); return r && isTerminal(r->state); }, 60000);
+        }
+        const int before = http.requests;
+        QVERIFY(fwtest::writeTextFile(queueFile, QJsonDocument(QJsonObject{
+            {QStringLiteral("version"), 1},
+            {QStringLiteral("jobs"), QJsonArray{QJsonObject{{QStringLiteral("kind"), update::kCheckJob},
+                                                            {QStringLiteral("title"), QStringLiteral("Check for updates")},
+                                                            {QStringLiteral("state"), jobStateName(JobState::Queued)},
+                                                            {QStringLiteral("params"), QJsonObject{{QStringLiteral("apiUrl"), http.base() + QStringLiteral("/latest")}}}}}}})
+                                                     .toJson()));
+        const QByteArray offline = qgetenv("FW_OFFLINE");
+        qputenv("FW_OFFLINE", "1");
+        const auto restoreEnv = qScopeGuard([&] {
+            if (offline.isNull())
+                qunsetenv("FW_OFFLINE");
+            else
+                qputenv("FW_OFFLINE", offline);
+        });
+        Env env(dir);
+        env.queue->setPersistencePath(queueFile);
+        QVERIFY(env.queue->restoreQueue().ok());
+        QVERIFY(env.queue->records().empty());
+        QVERIFY(!env.queue->isHeld());
+        QTest::qWait(500);
+        QCOMPARE(http.requests, before);
+        QCOMPARE(savedJobs(), QJsonArray());
     }
 
     void checkReportsNewerReleaseWithoutDownload()
