@@ -555,41 +555,7 @@ void HomePage::refresh()
     refreshChecklist();
     refreshConsoleTile();
     refreshQueueTile();
-
-    QString folder = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
-    const bool nextToSource = folder.isEmpty();
-    if (nextToSource)
-        folder = QDir::homePath();
-    // Off the UI thread (a network drive answers slowly), and only while the
-    // page is on screen: refresh() runs on every queue change, onShown() asks again.
-    const quint64 gen = ++m_spaceGen;
-    const auto show = [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
-        if (gen != m_spaceGen)
-            return;
-        m_spaceKnown = true;
-        if (ready) {
-            m_spaceTile->setValue(formatBytes(available));
-            m_spaceTile->setCaption((nextToSource ? FW_TR("on %1 · home drive") : FW_TR("on %1 · output folder")).arg(label));
-        } else {
-            m_spaceTile->setValue(QStringLiteral("—"));
-            m_spaceTile->setCaption(FW_TR("Output drive not available"));
-        }
-        // Too little for almost any game image, or no drive at all: a warning mark.
-        m_spaceTile->setIconTone(!ready || available < kLowSpaceBytes ? Tone::Warn : Tone::Neutral);
-    };
-    if (qApp->property("fwScreenshotMode").toBool()) {
-        // A screenshot run renders the page at once: the answer of a worker
-        // would come after the picture, so the drive is asked here.
-        const DriveSpace d = driveSpaceOf(folder);
-        show(d.ready, d.available, d.label);
-    } else {
-        if (!m_spaceKnown) { // the tile is never empty while the first answer is on its way
-            m_spaceTile->setValue(FW_TR("Checking…"));
-            m_spaceTile->setIconTone(Tone::Neutral);
-            m_spaceTile->setCaption(nextToSource ? FW_TR("home drive") : FW_TR("output folder"));
-        }
-        probeFreeSpace(isVisible() ? this : nullptr, folder, show);
-    }
+    refreshSpaceTile();
 
     // Pick up where you left off: the most recent failed / interrupted / cancelled job.
     m_continueId.clear();
@@ -612,6 +578,62 @@ void HomePage::refresh()
     m_continue->setVisible(!m_continueId.isEmpty() && m_continueId != m_continueDismissed);
 
     refreshRecent();
+}
+
+void HomePage::refreshSpaceTile()
+{
+    QString folder = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
+    const bool nextToSource = folder.isEmpty();
+    if (nextToSource)
+        folder = QDir::homePath();
+    const bool screenshot = qApp->property("fwScreenshotMode").toBool();
+    // Off the UI thread (a network drive answers slowly), and only while the
+    // page is on screen: refresh() runs on every queue change, onShown() asks
+    // again. One probe at a time: a refresh while one has not answered asks
+    // again once it has (a drive that does not answer would block a thread
+    // per refresh).
+    if (!screenshot && !m_spaceKnown) { // the tile is never empty while the first answer is on its way
+        m_spaceTile->setValue(FW_TR("Checking…"));
+        m_spaceTile->setIconTone(Tone::Neutral);
+        m_spaceTile->setCaption(nextToSource ? FW_TR("home drive") : FW_TR("output folder"));
+    }
+    if (!screenshot && !isVisible())
+        return;
+    if (!screenshot && m_spaceInFlight) {
+        m_spaceAgain = true;
+        return;
+    }
+    const quint64 gen = ++m_spaceGen;
+    const auto show = [this, gen, nextToSource](bool ready, qint64 available, const QString& label) {
+        if (gen != m_spaceGen)
+            return;
+        m_spaceKnown = true;
+        if (ready) {
+            m_spaceTile->setValue(formatBytes(available));
+            m_spaceTile->setCaption((nextToSource ? FW_TR("on %1 · home drive") : FW_TR("on %1 · output folder")).arg(label));
+        } else {
+            m_spaceTile->setValue(QStringLiteral("—"));
+            m_spaceTile->setCaption(FW_TR("Output drive not available"));
+        }
+        // Too little for almost any game image, or no drive at all: a warning mark.
+        m_spaceTile->setIconTone(!ready || available < kLowSpaceBytes ? Tone::Warn : Tone::Neutral);
+    };
+    if (screenshot) {
+        // A screenshot run renders the page at once: the answer of a worker
+        // would come after the picture, so the drive is asked here.
+        const DriveSpace d = driveSpaceOf(folder);
+        show(d.ready, d.available, d.label);
+        return;
+    }
+    m_spaceInFlight = true;
+    probeFreeSpace(this, folder, [this, show](bool ready, qint64 available, const QString& label) {
+        m_spaceInFlight = false;
+        show(ready, available, label);
+        if (m_spaceAgain) {
+            m_spaceAgain = false;
+            refreshSpaceTile(); // the folder may have changed meanwhile
+        }
+    });
 }
 
 } // namespace fw::pages
