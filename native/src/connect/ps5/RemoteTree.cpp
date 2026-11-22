@@ -11,6 +11,7 @@ namespace {
 struct Pending {
     QString abs;
     QString rel;
+    int depth = 0; // the root is 0
 };
 
 } // namespace
@@ -42,12 +43,19 @@ Result<RemoteTree> walkRemoteTree(FtpClient& c, const QString& rootIn, const Rem
         return c.list(path, FtpListMode::List, token);
     };
 
-    std::vector<Pending> stack{{tree.root, QString()}};
+    std::vector<Pending> stack{{tree.root, QString(), 0}};
+    qint64 seen = 0; // files and folders
     while (!stack.empty()) {
         if (!token.checkpoint())
             return Error::cancelled();
         const Pending cur = stack.back();
         stack.pop_back();
+        // No real folder tree is this deep; a server that lists a mount of an ancestor folder as a plain
+        // folder is (the walk would go round it until cancelled). The folder is reported, not listed.
+        if (cur.depth > kMaxRemoteWalkDepth) {
+            tree.unreadableDirs << cur.rel;
+            continue;
+        }
         bool exact = false;
         auto listed = listDir(cur.abs, exact);
         if (!listed.ok()) {
@@ -61,6 +69,12 @@ Result<RemoteTree> walkRemoteTree(FtpClient& c, const QString& rootIn, const Rem
         std::stable_sort(entries.begin(), entries.end(), [](const FtpEntry& a, const FtpEntry& b) {
             return a.name.toLower() < b.name.toLower();
         });
+        seen += qint64(entries.size());
+        if (seen > kMaxRemoteWalkEntries)
+            return Error(ErrorCode::CorruptData,
+                         QStringLiteral("%1 holds more than 2,000,000 files and folders; the app does not walk trees that large.")
+                             .arg(tree.root),
+                         QStringLiteral("stopped in %1").arg(cur.abs));
         std::vector<Pending> children;
         for (const FtpEntry& e : entries) {
             const QString rel = cur.rel.isEmpty() ? e.name : cur.rel + u'/' + e.name;
@@ -75,7 +89,7 @@ Result<RemoteTree> walkRemoteTree(FtpClient& c, const QString& rootIn, const Rem
             }
             if (e.isDir) {
                 tree.dirs << rel;
-                children.push_back({*abs, rel});
+                children.push_back({*abs, rel, cur.depth + 1});
                 continue;
             }
             RemoteFile f;

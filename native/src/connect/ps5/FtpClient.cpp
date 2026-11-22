@@ -859,6 +859,22 @@ Result<QByteArray> transferText(FtpClient& c, QTcpSocket& ctrl, bool& useEpsv, c
     return data;
 }
 
+Error tooManyEntries()
+{
+    return Error(ErrorCode::CorruptData,
+                 QStringLiteral("The folder lists more than 200,000 entries; the app does not open folders that large."),
+                 QStringLiteral("more than %1 entries").arg(kMaxListingEntries));
+}
+
+Result<std::vector<FtpEntry>> entriesOf(const QByteArray& data, bool mlsd)
+{
+    bool tooMany = false;
+    std::vector<FtpEntry> entries = parseListing(data, mlsd, &tooMany);
+    if (tooMany)
+        return tooManyEntries();
+    return entries;
+}
+
 } // namespace
 
 Result<std::vector<FtpEntry>> FtpClient::list(const QString& path, FtpListMode mode, const CancellationToken& token)
@@ -877,7 +893,7 @@ Result<std::vector<FtpEntry>> FtpClient::list(const QString& path, FtpListMode m
     if (mlsd) {
         auto data = transferText(*this, *d->ctrl, d->useEpsv, d->type, QStringLiteral("MLSD"), m_opt, token, m_last);
         if (data.ok())
-            return parseListing(data.value(), true);
+            return entriesOf(data.value(), true);
         // Legacy: MLSD was refused, try LIST. Never after a stall or a cancel
         // (the connection was dropped) nor on a connection error.
         if (mode == FtpListMode::Mlsd || !isConnected() || data.error().isCancelled() || data.error().code == ErrorCode::Timeout
@@ -887,7 +903,7 @@ Result<std::vector<FtpEntry>> FtpClient::list(const QString& path, FtpListMode m
     auto data = transferText(*this, *d->ctrl, d->useEpsv, d->type, QStringLiteral("LIST"), m_opt, token, m_last);
     if (!data.ok())
         return data.takeError(); // transferText dropped the connection where a reply was still owed
-    return parseListing(data.value(), false);
+    return entriesOf(data.value(), false);
 }
 
 Result<QStringList> FtpClient::nameList(const QString& path)
@@ -897,21 +913,90 @@ Result<QStringList> FtpClient::nameList(const QString& path)
     const QString cmd = path.isEmpty() ? QStringLiteral("NLST") : QStringLiteral("NLST ") + path;
     FW_TRY_ASSIGN(QByteArray data, transferText(*this, *d->ctrl, d->useEpsv, d->type, cmd, m_opt, {}, m_last));
     QStringList out;
-    for (const QByteArray& l : data.split('\n')) {
-        const QString s = QString::fromUtf8(l).trimmed();
-        if (!s.isEmpty())
-            out << s;
+    qsizetype pos = 0;
+    while (pos < data.size()) {
+        qsizetype nl = data.indexOf('\n', pos);
+        if (nl < 0)
+            nl = data.size();
+        const QString s = QString::fromUtf8(data.constData() + pos, nl - pos).trimmed();
+        pos = nl + 1;
+        if (s.isEmpty())
+            continue;
+        if (out.size() >= kMaxListingEntries)
+            return tooManyEntries();
+        out << s;
     }
     return out;
 }
 
-Result<QByteArray> FtpClient::download(const QString& remote, const CancellationToken& token)
+namespace {
+
+// Write-only memory sinks for download() and downloadTail().
+class MemorySink : public QIODevice {
+public:
+    // cap > 0: writes past `cap` bytes fail (overflowed() then says so).
+    // tail > 0: only the last `tail` bytes are kept.
+    MemorySink(qint64 cap, qint64 tail) : m_cap(cap), m_tail(tail) { open(QIODevice::WriteOnly); }
+    bool isSequential() const override { return true; }
+    bool overflowed() const { return m_overflow; }
+    QByteArray bytes() const { return m_tail > 0 && m_buf.size() > m_tail ? m_buf.right(m_tail) : m_buf; }
+
+protected:
+    qint64 readData(char*, qint64) override { return -1; }
+    qint64 writeData(const char* data, qint64 len) override
+    {
+        if (m_cap > 0 && m_buf.size() + len > m_cap) {
+            m_overflow = true;
+            return -1;
+        }
+        m_buf.append(data, len);
+        if (m_tail > 0 && m_buf.size() > 2 * m_tail) // drop the front now and then, not on every write
+            m_buf.remove(0, m_buf.size() - m_tail);
+        return len;
+    }
+
+private:
+    QByteArray m_buf;
+    qint64 m_cap = 0;
+    qint64 m_tail = 0;
+    bool m_overflow = false;
+};
+
+} // namespace
+
+Result<QByteArray> FtpClient::download(const QString& remote, const CancellationToken& token, qint64 maxBytes)
 {
-    QByteArray bytes;
-    QBuffer buf(&bytes);
-    buf.open(QIODevice::WriteOnly);
-    FW_TRY(retrieve(remote, buf, 0, {}, token));
-    return bytes;
+    MemorySink sink(maxBytes, 0);
+    if (auto st = retrieve(remote, sink, 0, {}, token); !st.ok()) {
+        if (sink.overflowed())
+            return Error(ErrorCode::CorruptData, QStringLiteral("The file on the PS5 is larger than this app reads into memory."),
+                         QStringLiteral("%1: more than %2 bytes").arg(remote).arg(maxBytes));
+        return st.takeError();
+    }
+    return sink.bytes();
+}
+
+Result<QByteArray> FtpClient::downloadTail(const QString& remote, qint64 maxBytes, const CancellationToken& token)
+{
+    if (maxBytes <= 0)
+        return QByteArray();
+    qint64 offset = 0;
+    if (auto sz = size(remote); sz.ok() && sz.value() > maxBytes)
+        offset = sz.value() - maxBytes;
+    else if (!sz.ok() && !isConnected())
+        return sz.takeError();
+    {
+        MemorySink sink(0, maxBytes);
+        Status st = retrieve(remote, sink, offset, {}, token);
+        if (st.ok())
+            return sink.bytes();
+        // REST refused before RETR was sent: read the whole file, keeping its end.
+        if (offset == 0 || st.error().code != ErrorCode::Unsupported || m_transferStarted || !isConnected())
+            return st.takeError();
+    }
+    MemorySink sink(0, maxBytes);
+    FW_TRY(retrieve(remote, sink, 0, {}, token));
+    return sink.bytes();
 }
 
 Status FtpClient::upload(const QString& remote, const QByteArray& data, const CancellationToken& token)

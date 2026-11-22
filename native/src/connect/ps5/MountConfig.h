@@ -161,6 +161,8 @@ QByteArray encodeConfigText(const QString& text);
 // RETR of config.ini; NotFound when the tool has never written one (normal
 // on first use).
 Result<QString> loadMountConfig(FtpClient& client, MountTool tool, const CancellationToken& token = {});
+// The last kMountDebugLogTailBytes of the tool's debug.log (all of it when smaller).
+constexpr qint64 kMountDebugLogTailBytes = 1024 * 1024;
 Result<QString> fetchMountDebugLog(FtpClient& client, MountTool tool, const CancellationToken& token = {});
 
 // Everything the ShadowMount+ editor reads in one go.

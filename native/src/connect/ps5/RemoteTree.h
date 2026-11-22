@@ -52,6 +52,12 @@ struct RemoteWalkOptions {
 
 using RemoteWalkProgress = std::function<void(int folders, int files)>;
 
+// Limits of one walk: a folder more than kMaxRemoteWalkDepth levels below the
+// root is not listed but reported in unreadableDirs; more than
+// kMaxRemoteWalkEntries files and folders in all ends the walk (CorruptData).
+constexpr int kMaxRemoteWalkDepth = 64;
+constexpr qint64 kMaxRemoteWalkEntries = 2000000;
+
 Result<RemoteTree> walkRemoteTree(FtpClient& client, const QString& root, const RemoteWalkOptions& options = {},
                                   const CancellationToken& token = {}, const RemoteWalkProgress& progress = {});
 

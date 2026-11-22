@@ -1303,7 +1303,8 @@ Result<QString> loadMountConfig(FtpClient& c, MountTool tool, const Cancellation
 
 Result<QString> fetchMountDebugLog(FtpClient& c, MountTool tool, const CancellationToken& token)
 {
-    FW_TRY_ASSIGN(QByteArray bytes, c.download(mountDebugLogRemotePath(tool), token));
+    // The end of the log only: after weeks of debug=1 it can be gigabytes.
+    FW_TRY_ASSIGN(QByteArray bytes, c.downloadTail(mountDebugLogRemotePath(tool), kMountDebugLogTailBytes, token));
     return QString::fromUtf8(bytes);
 }
 
