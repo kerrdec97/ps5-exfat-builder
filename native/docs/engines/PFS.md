@@ -8,7 +8,9 @@ GPL-3.0; their terms still apply to the ported parts (see
 it was ported from.
 
 For the same input and options the engine writes **byte-identical** images to
-Lazy_MkPFS (see [Compatibility](#compatibility)); it is multithreaded,
+Lazy_MkPFS (see [Compatibility](#compatibility)), except that no directory
+entry crosses a block (see [Directory entry](#directory-entry)), which changes
+the bytes only of folders with more than one block of entries; it is multithreaded,
 streaming (no file is held in memory, the nested image of a folder build is
 never written to disk), deterministic for any number of threads, and it
 verifies what it wrote before the image gets its final name.
@@ -37,7 +39,7 @@ verifies what it wrote before the image gets its final name.
 | **.ffpfsc** (container) | game folder | legacy PFS tab: `mkpfs pack folder --no-compress … pfs_image.dat` then `mkpfs pack file pfs_image.dat out.ffpfsc` | The nested uncompressed folder image `pfs_image.dat` (the name ShadowMount+ requires) is generated on the fly from the source files and compressed directly — never written to disk. |
 | **.ffpfsc** (container) | image file (`.exfat`, `.ffpkg`, …) | Lazy `main_file.py SRC OUT` (the path the legacy app drives Lazy through), MkPFS `pack file` | The file keeps its name inside the container. |
 | **.ffpfs** (folder image) | game folder | MkPFS `pack folder --no-compress` | Default: files stored raw. |
-| **.ffpfs** with per-file compression | game folder | Lazy `main_folder.py --no-exfat` | Off by default (`pfs.compressFiles`): compressed files grow to whole blocks (see below). |
+| **.ffpfs** with per-file compression | game folder | Lazy `main_folder.py --no-exfat` | Off by default (`pfs.compressFiles`): compressed files grow to whole blocks (see below), and MkPFS 1.1.0 reports that the console reads such files incorrectly although the image verifies. |
 | .ffpfs (single file, raw) | image file | Lazy `main_file.py --no-compress` | Rarely useful; supported because Lazy offers it. |
 
 Lazy's default `main_folder.py` mode (folder → temporary exFAT image via
@@ -118,6 +120,25 @@ collision_resolver becomes inode 2 and everything from uroot on moves up by one.
 Every folder starts with "." and ".." (uroot's ".." is itself), then
 subfolders, then files, each group in case-insensitive name order. Names are
 ASCII only. A folder's inode size is its block count × bs.
+
+No entry crosses a block (`appendDirentInBlock`, since the 5.2 cycle): when
+the next entry would not fit in what is left of the current block, the last
+entry of that block is padded to the block's end (its `ent_size` grows by the
+gap, the gap is zero bytes) and the next entry starts the next block. Readers
+that parse each directory block from its start need this: UltraPack 2.7.0
+reports that the LibProsperoPkg-based package builders (and so "build a
+`.pkg` from an `.ffpfsc`" in PSVIETHOA and UltraPack) find half an entry at
+the start of a block and stop. Lazy_MkPFS and MkPFS 1.1.0 join the entries
+with no alignment, so this departs from them for folders over one block of
+entries (about 1,500–3,000 files in one folder at 64 KiB); every smaller
+folder gets the same bytes as before. Our reader accepts both layouts (it
+parses a folder's whole payload and allows an `ent_size` larger than
+`align8(name_len + 17)`), so images made by 5.0.3 and earlier still read and
+verify. Whether the console's own PFS driver needs the alignment is
+**UNVERIFIED, HARDWARE REQUIRED**. The super root, the uroot of a container
+and the collision_resolver (entries reached by offset) keep the plain layout.
+`LayoutOptions::lazyDirents` writes the Lazy_MkPFS layout; only the golden
+test sets it, to show that nothing else differs from Lazy_MkPFS.
 
 ### flat_path_table and collision_resolver
 
@@ -535,8 +556,8 @@ threaded (30 vs 6 MB/s); level 9 is the legacy default.
 
 | Test | Covers |
 |---|---|
-| `tst_pfs_golden` | 20 byte-identical golden cases against Lazy_MkPFS |
-| `tst_pfs_roundtrip` | build → read → compare for all four modes; verify finds changed / missing / extra / resized files; exclusions do not fail verification (H2); damaged compressed block, inode, dirent, PFSC and PFS headers, truncation → `CorruptData`; short (RAM-mode) images; extract (plain, deep, nested file, overwrite); cancelled extract leaves nothing; 1/4/7 threads → identical bytes; ASCII rule, empty source, AMPR modes |
+| `tst_pfs_golden` | 20 golden cases against Lazy_MkPFS: with `lazyDirents` all 20 byte-identical; with the default layout byte-identical for every case whose directory entries stay inside their blocks, and for any other case different, parsed block by block and verified |
+| `tst_pfs_roundtrip` | build → read → compare for all four modes; verify finds changed / missing / extra / resized files; exclusions do not fail verification (H2); damaged compressed block, inode, dirent, PFSC and PFS headers, truncation → `CorruptData`; short (RAM-mode) images; extract (plain, deep, nested file, overwrite); cancelled extract leaves nothing; 1/4/7 threads → identical bytes; ASCII rule, empty source, AMPR modes; a folder of 3,000 files at 16 and 64 KiB blocks: every directory block parses from its start, every name once (the Lazy layout fails that parse and still reads and verifies) |
 | `tst_pfs_jobs` | settings declared and read, legacy import, the three jobs, queue integration, validation, cancellation while writing leaves no output or `.part`, cancellation while verifying saves the image unverified (the source image kept), a finished image is kept when the old one is in use, `ampr.index.local` checks the folder again and reads its index back before it replaces the old one, failed verification removes the image and keeps the source (C1), delete-source rules, standalone verify with the build's exclusions (H2), game-root detection in a wrapper folder, extract job |
 | `tst_pfs_ampr_index` | `ampr_emu.index` as the runtime sees it: a port of the ampr-emu-ng 0.3.3 loader accepts every index the builder writes (case-only variants, deep and 255-byte names, 5,000 rows) and sets damaged ones aside; version 4.0.2's script output (bytes kept in the test) equals ours for ASCII names and is set aside for others; `decideAmprIndex` in all four modes for a missing, current, stale (file added, removed, renamed, case-renamed, resized, changed in place, copied with other times), unusable and equivalent-but-other-bytes index, asset packs and no library; the verification's times-only tolerance |
 | `tst_pfs_hostile` | crafted images: separator / NUL / dot entry names → `CorruptData` and nothing extracted; names a drive cannot store renamed on extraction and reported, nothing written outside the folder; size without blocks and size beyond the blocks → `CorruptData` (verification and extraction fail); a PFSC header declaring a 16 GiB block table in a small file is refused without allocating it; the path-safety helpers |

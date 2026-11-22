@@ -26,52 +26,6 @@ Error damaged(const QString& what, const QString& image, const QStringList& all 
                  all.isEmpty() ? what : all.mid(0, kMaxProblems).join(QStringLiteral("; ")));
 }
 
-struct ParsedDirent {
-    quint32 inode = 0;
-    qint32 type = 0;
-    QByteArray name;
-};
-
-// parse_image_dirents(strict=True)
-std::vector<ParsedDirent> parseDirents(const QByteArray& blob, QStringList& errors, const QString& where)
-{
-    std::vector<ParsedDirent> out;
-    qint64 off = 0;
-    const char* b = blob.constData();
-    while (off + 16 <= blob.size()) {
-        const quint32 ino = getU32(b + off);
-        const qint32 type = getI32(b + off + 4);
-        const qint32 nameLen = getI32(b + off + 8);
-        const qint32 entSize = getI32(b + off + 12);
-        if (ino == 0 && type == 0 && nameLen == 0 && entSize == 0)
-            break;
-        if (entSize < 17 || entSize % 8 != 0) {
-            errors << QStringLiteral("%1: invalid entry size %2 at offset %3").arg(where).arg(entSize).arg(off);
-            break;
-        }
-        if (nameLen < 0 || nameLen > entSize - 16) {
-            errors << QStringLiteral("%1: invalid name length %2 at offset %3").arg(where).arg(nameLen).arg(off);
-            break;
-        }
-        if (off + entSize > blob.size()) {
-            errors << QStringLiteral("%1: entry at offset %2 runs past its block").arg(where).arg(off);
-            break;
-        }
-        ParsedDirent d;
-        d.inode = ino;
-        d.type = type;
-        d.name = blob.mid(off + 16, nameLen);
-        for (char c : d.name)
-            if (quint8(c) > 0x7F) {
-                errors << QStringLiteral("%1: non-ASCII name at offset %2").arg(where).arg(off);
-                break;
-            }
-        out.push_back(std::move(d));
-        off += entSize;
-    }
-    return out;
-}
-
 class SubSource final : public ByteSource {
 public:
     SubSource(std::shared_ptr<ByteSource> parent, qint64 base, qint64 size, QString name)
