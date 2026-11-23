@@ -1099,6 +1099,59 @@ private slots:
         m_page->setOutputFolder({});
     }
 
+    // An archived dump (#37): exFAT and FFPKG are built straight from it; a
+    // compressed exFAT, PFS and FPKG unpack it first. The note under the
+    // source says which, and follows the tile and the Image type row.
+    void archiveNoteSaysWhetherItIsUnpacked()
+    {
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        const QString zipPath = path(QStringLiteral("stream-note/PPSA01234-app.zip"));
+        {
+            QDir().mkpath(QFileInfo(zipPath).absolutePath());
+            zip::Writer w;
+            QVERIFY(w.open(zipPath, true).ok());
+            QDirIterator it(m_asciiGame, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString p = it.next();
+                QVERIFY(w.addFile(QStringLiteral("PPSA01234-app/") + QDir(m_asciiGame).relativeFilePath(p), p, zip::Method::Deflate, {}).ok());
+            }
+            QVERIFY(w.finish(true).ok());
+        }
+        m_page->setSource(zipPath);
+        QVERIFY(QTest::qWaitFor([&] { return m_page->summary().isGame && clean(m_page->summary().folder) == clean(zipPath); }, 15000));
+        const auto note = [&] {
+            for (QLabel* l : m_page->findChildren<QLabel*>()) {
+                if (!l->isVisibleTo(m_page))
+                    continue;
+                if (l->text().startsWith(QStringLiteral("The image is built straight from the archive")))
+                    return QStringLiteral("streams");
+                if (l->text().startsWith(QStringLiteral("The archive is unpacked to a temporary folder")))
+                    return QStringLiteral("unpacks");
+            }
+            return QStringLiteral("none");
+        };
+        ui::JobOptionsPanel* panel = m_page->optionsPanel(jobs::kFormatExfat);
+        panel->clearOverrides();
+        QVERIFY(!panel->effectiveValue(ampr::keys::kZstdPack).toBool());
+        QCOMPARE(note(), QStringLiteral("streams"));
+        m_page->exfatKind()->setCurrentValue(true); // compressed: the packer reads a folder
+        QCOMPARE(note(), QStringLiteral("unpacks"));
+        m_page->exfatKind()->setCurrentValue(false);
+        QCOMPARE(note(), QStringLiteral("streams"));
+        m_page->setFormat(jobs::kFormatFfpkg);
+        QCOMPARE(note(), QStringLiteral("streams"));
+        m_page->setFormat(jobs::kFormatFfpfsc);
+        QCOMPARE(note(), QStringLiteral("unpacks"));
+        m_page->setFormat(pages::kFormatFpkg);
+        QCOMPARE(note(), QStringLiteral("unpacks"));
+        m_page->setFormat(jobs::kFormatZstdImage);
+        QCOMPARE(note(), QStringLiteral("unpacks"));
+        m_page->setFormat(jobs::kFormatExfat);
+        panel->clearOverrides();
+        m_page->setSource({});
+    }
+
     // Packed folder: pack volumes stay below 4 GiB, so the page holds no
     // single-file size against the drive; and its hidden "Compress game files"
     // switch stays on whatever the global setting or the panel does.

@@ -823,6 +823,8 @@ void BuildImagePage::buildFormatOptions(FormatOptions& fo, const QStringList& se
             updateDlcEmuNote(); // "Keep the DLC emulator" for this job
         if (tile != this->tile())
             return;
+        if (m_sourceMsg && sourceKind() == QLatin1String("zip"))
+            refreshSourceState(); // the zstd packs switch decides whether an archive is unpacked first
         updateAdvancedSummary();
         updateClusterNote();
         updatePfsRows();
@@ -1717,7 +1719,7 @@ void BuildImagePage::refreshSourceState()
                                                                 : FW_TR("Folder without a game"));
             }
         }
-        // An archived dump is unpacked first by every tile, FPKG included (#37).
+        // An archived dump: every tile takes it, FPKG included (#37).
         if (kind == QLatin1String("zip") && (!s.isGame || !s.error.isEmpty())) {
             m_stripTile->setTone(Tone::Warn);
             m_sourceMsg->set(s.error.isEmpty() ? FW_TR("This archive holds no game (no eboot.bin or sce_sys/param.json).") : s.error, Tone::Warn);
@@ -1725,8 +1727,15 @@ void BuildImagePage::refreshSourceState()
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip")) {
             m_stripTile->setTone(Tone::Ok);
-            m_sourceMsg->set(FW_TR("The archive is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
-                                 .arg(formatBytes(s.bytes)),
+            // exFAT and FFPKG are built straight from the archive (#37); a
+            // build with zstd packs, PFS and FPKG need the files on disk first.
+            const QString f = format();
+            const FormatOptions* fo = current();
+            const bool streams = (f == jobs::kFormatExfat || f == jobs::kFormatFfpkg) && fo
+                                 && !fo->panel->effectiveValue(ampr::keys::kZstdPack).toBool();
+            m_sourceMsg->set(streams ? FW_TR("The image is built straight from the archive: nothing is unpacked to disk.")
+                                     : FW_TR("The archive is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
+                                           .arg(formatBytes(s.bytes)),
                              Tone::Neutral);
             m_sourceBadge->set(FW_TR("Ready"), Tone::Ok);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Ok));
