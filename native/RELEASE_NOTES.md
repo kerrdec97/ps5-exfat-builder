@@ -1,4 +1,4 @@
-# exFAT Image Builder 5.0.3 · release notes
+# exFAT Image Builder 5.1.0 · release notes
 
 **Download `exFAT Image Builder.exe`** (GitHub lists it as
 `exFAT.Image.Builder.exe`) and run it: one file, nothing to unzip or install,
@@ -8,22 +8,23 @@ Redistributable. The first start unpacks the program once to
 next to the exe: beside the exe instead). Check it against `SHA256SUMS.txt`.
 
 Antivirus removes the exe? Download the **folder edition**
-(`exFAT-Image-Builder-5.0.3-win64-folder.zip`) instead: the same program,
+(`exFAT-Image-Builder-5.1.0-win64-folder.zip`) instead: the same program,
 already unpacked. Extract it anywhere and run the exe inside.
 
-## After 5.0.3 (testing build, not released)
+## What's new in 5.1.0
 
-Changes on the development branch since 5.0.3. Everything below was tested on
-a PC against stand-ins and synthetic games; nothing here has been run on a
-console yet.
+The big ones: images and packed folders are built straight from a ZIP, 7z or
+RAR without unpacking it first, compressed exFAT is now a clear choice on the
+exFAT tile, there is a new single-file ZSTD image, and the bundled ampr-emu-ng
+and Backport engine are newer. If something does not behave on your console,
+please open an issue: they are read and answered.
 
 * **ZSTD image (experimental), GitHub #98.** A new format tile on the Build
   page: one `.zstd` file, an exFAT image with the game in zstd packs, for
   Kraken Mount MOD. ShadowMount+ does not mount the name: rename the file to
   `.exfat` for it. `.zstd` images open everywhere images open (verify,
   extract, convert, edit, compare, Library, PS5 connect lists); a file that is
-  a plain zstd stream or not an exFAT image is refused with a clear text. Not
-  yet confirmed against ModGames44's own tool or on a console.
+  a plain zstd stream or not an exFAT image is refused with a clear text.
 * **Build straight from an archive, GitHub #37.** exFAT, FFPKG and
   uncompressed PFS (`.ffpfs`) images are built directly from a `.zip`, `.7z`
   or `.rar`, and compressed PFS (`.ffpfsc`) directly from a `.zip`: one pass
@@ -675,9 +676,9 @@ Fixed or made obsolete by the rewrite: #86, #85, #84, #82, #81, #80, #79,
 #77, #76, #74, #73, #72, #71, #69, #68, #65, #61, #60, #53, #43, #39, #36,
 #33, #27, #21, #20, #19, #67 (ZIP dumps; #37 asked to stream without
 unpacking: ZIPs are unpacked to a temporary folder) and PR #57 superseded.
-Still open: 7z/RAR archives and streaming from archives (#37), interface
-translations (#35), a dump checker (#26), antivirus false positives until the
-exe is code-signed (#78).
+Since then: 7z and RAR archives and building straight from an archive (#37,
+5.1.0), interface translations (#35, 5.0.2), a dump checker (#26). Still
+open: antivirus false positives until the exe is code-signed (#78).
 
 ## How it was tested
 * **Automated tests** (63 test programs) on Windows (MSVC 2022, Qt 6.10):
@@ -786,7 +787,7 @@ interface before this release. What changed:
 4. One FPKG with your Publishing Tools; install it.
 5. A backport update package over its base, and one DLC package; install them.
 6. One game with zstd packs (ShadowMount+, fakelib updates off); launch it and
-   check that "ampr-emu-ng: v0.3.3 (zstd) running" shows.
+   check that "ampr-emu-ng: v0.5.0 (zstd) running" shows.
 7. One game as a Packed folder on a USB drive (or sent over FTP); launch it
    the same way.
 

@@ -2,6 +2,30 @@
 
 All notable changes to exFAT Image Builder. Newest first.
 
+## [5.1.0] - 2026-11-23
+
+Images and packed folders are built straight from a ZIP, 7z or RAR: exFAT,
+FFPKG and uncompressed PFS in one pass with nothing unpacked to disk,
+compressed PFS from a ZIP, and builds with zstd packs by packing the game
+directly from the archive (#37). The results are the same, byte for byte, as
+from the unpacked folder; FPKG packages still unpack the archive first, because
+the Publishing Tools read a folder. Building from a folder is unchanged.
+
+The exFAT tile now starts with "Image type: Standard / Compressed": compressed
+is the same `.exfat`, smaller, with the game's files in zstd packs. New
+"ZSTD image" tile (experimental, #98): one `.zstd` file for Kraken Mount MOD.
+The bundled ampr-emu-ng is 0.5.0 and the bundled PS5 Backport engine is
+0.3.5-test4 (Offline mode, the 0.3.5 states and space rules, a clearer Target
+SDK caption, #92; Dump check hands a game over to the Backport tab, #26).
+
+Also: FPKG from ZIP, 7z and RAR dumps and "Title for all languages" (#94); no
+directory entry of a PFS image crosses a block; "Only after this run" for the
+action after the queue (#96); Settings › Storage lists the Backport tab's
+folders (#90, #91); closing the app stops and records running jobs first and
+asks while a PS5 tool or a backport run is at work; bounded FTP reads and
+kernel log batches in PS5 connect; interface fixes from a UI review; all new
+texts in the 42 languages.
+
 ## [5.0.3] - 2026-11-14
 
 FPKG packages built with 5.0.2 could crash on the console. The package builder now

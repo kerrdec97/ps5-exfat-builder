@@ -14,7 +14,7 @@ verify and send them to your console — from one app, in one download.**
 > writes exFAT, UFS2 and PFS images itself, so it needs **no administrator
 > rights, no OSFMount, no .NET and no Python**, and it ships as **one .exe**.
 >
-> ⬇️ **Download 5.0.3** from the
+> ⬇️ **Download 5.1.0** from the
 > [Releases page](https://github.com/kerrdec97/ps5-exfat-builder/releases):
 > one exe, nothing to install.
 
@@ -28,9 +28,9 @@ verify and send them to your console — from one app, in one download.**
 
 | | |
 |---|---|
-| **Build image** | Drop a dump folder (or a zipped dump), pick a format, done. **exFAT**, **FFPKG** (UFS2), **PFS** (compressed `.ffpfsc` or plain `.ffpfs`), installable **FPKG** `.pkg` (with your own Sony Publishing Tools; from a folder, any image or a packed game), or a **Packed folder** (no image: the game folder with its files in zstd packs, for a USB drive or FTP). Each output shows only its own options; experts get the rest under *Advanced options*. **Performance mode** (Low impact / Balanced / Maximum) on every format. Every image is read back and verified before it gets its final name, unless you turn verification off or cancel it (the job then says the image is not verified). |
-| **zstd packs** | *Compress game files*: the game's files go into zstd packs inside the image, served on the console by the bundled **ampr-emu-ng 0.3.3** runtime. Packed games (zstd or LZ4) are read through their packs everywhere: extract, convert, FPKG. Or skip the image: **Packed folder** packs the game folder itself. |
-| **Backport** | Make games run on older firmware with the built-in **PS5 Backport engine 0.3.4 by Deckerr97** — the same engine as the standalone PS5 Backport GUI, so results are identical. Target SDK 4–13, PS5 Pro fix, PS5 Pro build, AMPR / PlayGo switch, and optional apply to the game folder with a verified originals backup and one-click restore. |
+| **Build image** | Drop a dump folder, or a ZIP, 7z or RAR of one (built straight from the archive, without unpacking it first), pick a format, done. **exFAT**, **FFPKG** (UFS2), **PFS** (compressed `.ffpfsc` or plain `.ffpfs`), installable **FPKG** `.pkg` (with your own Sony Publishing Tools; from a folder, any image or a packed game), or a **Packed folder** (no image: the game folder with its files in zstd packs, for a USB drive or FTP). Each output shows only its own options; experts get the rest under *Advanced options*. **Performance mode** (Low impact / Balanced / Maximum) on every format. Every image is read back and verified before it gets its final name, unless you turn verification off or cancel it (the job then says the image is not verified). |
+| **zstd packs** | *Compress game files*: the game's files go into zstd packs inside the image, served on the console by the bundled **ampr-emu-ng 0.5.0** runtime. Packed games (zstd or LZ4) are read through their packs everywhere: extract, convert, FPKG. Or skip the image: **Packed folder** packs the game folder itself. |
+| **Backport** | Make games run on older firmware with the built-in **PS5 Backport engine 0.3.5-test4 by Deckerr97** — the same engine as the standalone PS5 Backport GUI, so results are identical. Target SDK 4–13, PS5 Pro fix, PS5 Pro build, AMPR / PlayGo switch, and optional apply to the game folder with a verified originals backup and one-click restore. |
 | **Backport updates** | Ship a backport as its own small **update package** that installs over the game's base package, so the base stays the original game: Build image › FPKG › **Backport** (4.xx and/or 5.xx+ backport files, folder or ZIP). Each update is checked against the base before it gets its name. |
 | **DLC** | Turn DLC lists (`dlc_emu.ini` and other DLC INIs) and DLC `.pkg` files into installable PS5 DLC packages, retarget them to another region's game, and save updated INIs (needs your own fpkg-cli). |
 | **Image tools** | Open an image to **extract** it (packed games come out as plain files; an image inside an .ffpfsc is read straight through), **verify** it (or compare it with a folder), **convert** between exFAT, FFPKG, FFPFSC and FFPFS, or **edit** it (add, replace, rename, delete files). |
@@ -123,8 +123,8 @@ This app stands on the work of these people and projects — thank you.
 
 | What | By | Where |
 |---|---|---|
-| PS5 Backport engine 0.3.4 (Backport tab), bundled unchanged | Deckerr97 | [kerrdec97/PS5-Backport-GUI](https://github.com/kerrdec97/PS5-Backport-GUI) |
-| ampr-emu-ng 0.3.3 runtime (zstd packs), bundled unchanged | quer3q | [quer3q/ampr-emu-ng](https://github.com/quer3q/ampr-emu-ng) |
+| PS5 Backport engine 0.3.5-test4 (Backport tab), bundled unchanged | Deckerr97 | [kerrdec97/PS5-Backport-GUI](https://github.com/kerrdec97/PS5-Backport-GUI) |
+| ampr-emu-ng 0.5.0 runtime (zstd packs), bundled unchanged | quer3q | [quer3q/ampr-emu-ng](https://github.com/quer3q/ampr-emu-ng) |
 | zstd compression library | Meta (Yann Collet and contributors) | [facebook/zstd](https://github.com/facebook/zstd) |
 | LZ4 library (reading LZ4 packs) | Yann Collet | [lz4/lz4](https://github.com/lz4/lz4) |
 | zlib | Jean-loup Gailly, Mark Adler | [madler/zlib](https://github.com/madler/zlib) |
