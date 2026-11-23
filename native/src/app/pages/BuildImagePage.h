@@ -100,6 +100,7 @@ public:
     qint64 largestOutputFileBytes() const;
     // The ZSTD image tile's note: what loads a .zstd and that it is experimental.
     QWidget* zstdImageNote() const { return m_zstdImageNote; }
+    ui::Segmented* exfatKind() const { return m_exfatKind; } // exFAT: Standard / Compressed
     // FPKG: "Title for all languages" (GitHub #94, default on).
     ui::Switch* titleAllLanguagesSwitch() const { return m_titleAll; }
     // A fresh answer from the output drive, waited for at most this long
@@ -193,6 +194,13 @@ private:
     QWidget* m_pfsKindRow = nullptr;
     QWidget* m_toolsRow = nullptr;
     QWidget* m_zstdImageNote = nullptr; // ZSTD image essentials: who mounts it, experimental
+    // exFAT essentials: "Standard" or "Compressed" (the game's files in zstd
+    // packs, still one .exfat). It is the tile's ampr.zstdPack switch, shown
+    // as the choice it is; the switch row itself is hidden on this tile.
+    ui::Segmented* m_exfatKind = nullptr;
+    QWidget* m_exfatKindRow = nullptr;
+    void syncExfatKind();
+    bool m_demoCompressed = false; // the "format-exfat-compressed" screenshot state set the switch
     ui::Badge* m_toolsBadge = nullptr;
     QLabel* m_toolsDetail = nullptr;
     ui::Link* m_toolsLink = nullptr;

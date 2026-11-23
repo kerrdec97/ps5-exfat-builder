@@ -267,10 +267,11 @@ private slots:
             {jobs::kFormatExfat, QStringLiteral("exfat."), QStringLiteral("image.exfat.build"), QStringLiteral(".exfat"),
              QStringList{kVerify, kMode, kThreads, kSpeed, kKeepTemp, kUpload} + zstd,
              {exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB, exfat::keys::kLabelPolicy, exfat::keys::kExcludePatterns,
-              exfat::keys::kAmprIndex, exfat::keys::kDeleteSourceAfterVerify, kVerify, kMode, kThreads, kKeepTemp, kUpload, kSpeed, ampr::keys::kZstdPack,
+              exfat::keys::kAmprIndex, exfat::keys::kDeleteSourceAfterVerify, kVerify, kMode, kThreads, kKeepTemp, kUpload, kSpeed,
               ampr::keys::kZstdLevel},
-             {exfat::keys::kEditStrategy, exfat::keys::kExtractParallel, exfat::keys::kExtractThreads},
-             {kSpeed, exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB, ampr::keys::kZstdPack}},
+             // The switch is the "Image type" row (exfatImageTypeIsTheCompressionSwitch), not a second row.
+             {ampr::keys::kZstdPack, exfat::keys::kEditStrategy, exfat::keys::kExtractParallel, exfat::keys::kExtractThreads},
+             {kSpeed, exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB}},
             {jobs::kFormatFfpkg, QStringLiteral("ufs2."), QStringLiteral("image.ffpkg.build"), QStringLiteral(".ffpkg"),
              QStringList{kVerify, kMode, kThreads, kSpeed, kKeepTemp, kUpload} + zstd, // threads: the zstd packer
              {ufs2::keys::kBlockSize, ufs2::keys::kBytesPerInode, ufs2::keys::kAmprIndex, ufs2::keys::kDeleteSourceAfterBuild, kVerify,
@@ -1031,6 +1032,71 @@ private slots:
         QVERIFY2(!id.isEmpty(), "a stale \"not enough space\" answer refused the job");
         QVERIFY(q.remove(id));
         q.holdQueue(false);
+    }
+
+    // exFAT: "Image type" (Standard / Compressed) is the first row under the
+    // tiles and is the tile's zstd packs switch, in both directions; the
+    // switch row itself is not shown a second time. The image stays .exfat.
+    void exfatImageTypeIsTheCompressionSwitch()
+    {
+        auto& q = m_ctx->queue();
+        auto& s = m_ctx->settings();
+        m_page->showForm();
+        m_page->setFormat(jobs::kFormatExfat);
+        QVERIFY(selectSource(m_game));
+        ui::JobOptionsPanel* panel = m_page->optionsPanel(jobs::kFormatExfat);
+        ui::Segmented* kind = m_page->exfatKind();
+        QVERIFY(panel && kind);
+        QWidget* row = m_page->findChild<QWidget*>(QStringLiteral("exfat-kind-row"));
+        QVERIFY(row && row->isVisibleTo(m_page));
+        QCOMPARE(kind->count(), 2);
+        QCOMPARE(kind->segmentText(0), QStringLiteral("Standard"));
+        QCOMPARE(kind->segmentText(1), QStringLiteral("Compressed"));
+        QVERIFY(panel->row(ampr::keys::kZstdPack)->isHidden());
+        // Above every other exFAT row.
+        for (const QString& key : m_page->essentialOptionKeys())
+            QVERIFY2(row->mapTo(m_page, QPoint(0, 0)).y() < panel->row(key)->mapTo(m_page, QPoint(0, 0)).y(), qPrintable(key));
+
+        const QVariant before = s.value(ampr::keys::kZstdPack);
+        QVERIFY(s.setValue(ampr::keys::kZstdPack, false).ok());
+        QCOMPARE(kind->currentValue().toBool(), false);
+        QVERIFY(!panel->row(ampr::keys::kZstdLevel)->editor()->widget()->isEnabledTo(panel->row(ampr::keys::kZstdLevel)));
+
+        // Compressed: the job gets the switch, the level row wakes up, the name stays .exfat.
+        kind->setCurrentValue(true);
+        QCOMPARE(panel->effectiveValue(ampr::keys::kZstdPack).toBool(), true);
+        QVERIFY(panel->row(ampr::keys::kZstdLevel)->editor()->widget()->isEnabledTo(panel->row(ampr::keys::kZstdLevel)));
+        QVERIFY2(m_page->fileName().endsWith(QStringLiteral(".exfat")), qPrintable(m_page->fileName()));
+        m_page->setOutputFolder(path(QStringLiteral("exfat-kind")));
+        q.holdQueue(true);
+        QString id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->overrides.value(ampr::keys::kZstdPack).toBool(), true);
+        QVERIFY(!m_ctx->settings().value(ampr::keys::kZstdPack).toBool()); // this job only
+        QVERIFY(q.remove(id));
+
+        // Standard again: the job says so.
+        kind->setCurrentValue(false);
+        QCOMPARE(panel->effectiveValue(ampr::keys::kZstdPack).toBool(), false);
+        id = addToQueue();
+        QVERIFY(!id.isEmpty());
+        QCOMPARE(q.record(id)->overrides.value(ampr::keys::kZstdPack, false).toBool(), false);
+        QVERIFY(q.remove(id));
+        q.holdQueue(false);
+
+        // The other direction: the global setting and a cleared panel show in the row.
+        panel->clearOverrides();
+        QVERIFY(s.setValue(ampr::keys::kZstdPack, true).ok());
+        QCOMPARE(kind->currentValue().toBool(), true);
+        QVERIFY(s.setValue(ampr::keys::kZstdPack, false).ok());
+        QCOMPARE(kind->currentValue().toBool(), false);
+        panel->setOverride(ampr::keys::kZstdPack, true);
+        QCOMPARE(kind->currentValue().toBool(), true);
+        panel->clearOverrides();
+        QCOMPARE(kind->currentValue().toBool(), false);
+
+        QVERIFY(s.setValue(ampr::keys::kZstdPack, before).ok());
+        m_page->setOutputFolder({});
     }
 
     // Packed folder: pack volumes stay below 4 GiB, so the page holds no

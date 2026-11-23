@@ -481,8 +481,10 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
         if (key == general::keys::kFreeSpaceMarginMiB || key == exfat::keys::kImageSizeGiB || key == exfat::keys::kSpareSpace
             || key == exfat::keys::kSpareSpaceMiB)
             checkSpace();
-        if (key == ampr::keys::kZstdPack)
+        if (key == ampr::keys::kZstdPack) {
             keepZstdPackOn();
+            syncExfatKind();
+        }
         if (key == kSpeed)
             updateSpeedNotes();
         if (key == fpkg::keys::kKeepDlcEmulator)
@@ -490,6 +492,7 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     });
     connect(&ctx.settings(), &SettingsStore::resetDone, this, [this] {
         keepZstdPackOn();
+        syncExfatKind();
         updateSpeedNotes();
         updateDlcEmuNote();
         checkSpace();
@@ -651,7 +654,7 @@ void BuildImagePage::buildFormatCard()
                         QStringLiteral("PS5 connection")},
                        QStringList{QStringLiteral("exfat."), zstd, kThreads, kSpeed, kAutoUpload} + shared,
                        {exfat::keys::kEditStrategy, exfat::keys::kExtractParallel, exfat::keys::kExtractThreads},
-                       {kSpeed, exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB, ampr::keys::kZstdPack});
+                       {kSpeed, exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB});
     m_formats[1].tile = jobs::kFormatFfpkg;
     buildFormatOptions(m_formats[1],
                        {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Advanced"),
@@ -711,6 +714,31 @@ void BuildImagePage::buildFormatCard()
     }
     if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[3].essentials->layout()))
         l->insertWidget(2, m_toolsRow);
+    // exFAT leads with the choice that changes the image's size most: the
+    // same .exfat, with the game's files in zstd packs or as they are.
+    if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[0].essentials->layout())) {
+        const QString more = FW_TR("Compressed keeps the .exfat name and the way you mount it, and is smaller: the game's files go "
+                                   "into zstd packs that the bundled ampr-emu-ng reads on the console. How much smaller depends on "
+                                   "the game. Not every game works compressed yet: keep your original dump.");
+        m_exfatKind = new Segmented(m_formats[0].essentials);
+        m_exfatKind->addSegment(FW_TR("Standard"), {}, false);
+        m_exfatKind->addSegment(FW_TR("Compressed"), {}, true);
+        m_exfatKind->setAccessibleName(FW_TR("exFAT image type"));
+        m_exfatKind->setToolTip(more);
+        m_exfatKindRow = plainRow(FW_TR("Image type"),
+                                  FW_TR("Compressed is a smaller .exfat: the game's files go into zstd packs."),
+                                  m_exfatKind, m_formats[0].essentials, nullptr, more);
+        m_exfatKindRow->setObjectName(QStringLiteral("exfat-kind-row"));
+        l->insertWidget(2, m_exfatKindRow);
+        connect(m_exfatKind, &Segmented::currentChanged, this, [this](int) {
+            JobOptionsPanel* panel = m_formats[0].panel;
+            const bool on = m_exfatKind->currentValue().toBool();
+            if (panel->effectiveValue(ampr::keys::kZstdPack).toBool() != on)
+                panel->setOverride(ampr::keys::kZstdPack, on);
+        });
+        connect(m_formats[0].panel, &JobOptionsPanel::overridesChanged, this, &BuildImagePage::syncExfatKind);
+        syncExfatKind();
+    }
     // The ZSTD image leads with what loads it (report 03, ZSTD-3): never more
     // than the investigation proved.
     if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[5].essentials->layout())) {
@@ -1299,6 +1327,8 @@ void BuildImagePage::applyRowVisibility()
                 hide = (f == jobs::kFormatFfpfsc && fileOnly.contains(key)) || (f == jobs::kFormatFfpfs && containerOnly.contains(key));
             if ((fo.tile == kFormatZstdFolder || fo.tile == jobs::kFormatZstdImage) && key == ampr::keys::kZstdPack)
                 hide = true; // always on for this output
+            if (fo.tile == jobs::kFormatExfat && key == ampr::keys::kZstdPack)
+                hide = true; // the "Image type" row is this switch
             row->setHidden(hide);
         }
         // Dividers between visible rows; a heading only above a bucket with rows.
@@ -1332,6 +1362,17 @@ void BuildImagePage::keepZstdPackOn()
         if (panel && !panel->effectiveValue(ampr::keys::kZstdPack).toBool())
             panel->setOverride(ampr::keys::kZstdPack, true);
     }
+}
+
+// The exFAT "Image type" row shows what the tile's zstd packs switch is,
+// wherever the value came from (the row, the global setting, a restored job).
+void BuildImagePage::syncExfatKind()
+{
+    if (!m_exfatKind)
+        return;
+    const bool on = m_formats[0].panel->effectiveValue(ampr::keys::kZstdPack).toBool();
+    if (m_exfatKind->currentValue().toBool() != on)
+        m_exfatKind->setCurrentValue(on);
 }
 
 void BuildImagePage::updateAdvancedSummary()
@@ -2532,7 +2573,7 @@ QString BuildImagePage::statusContext() const
 
 QStringList BuildImagePage::demoStates() const
 {
-    return {QStringLiteral("space-error"), QStringLiteral("format-exfat"), QStringLiteral("format-ffpkg"), QStringLiteral("format-pfs"),
+    return {QStringLiteral("space-error"), QStringLiteral("format-exfat"), QStringLiteral("format-exfat-compressed"), QStringLiteral("format-ffpkg"), QStringLiteral("format-pfs"),
             QStringLiteral("format-fpkg"), QStringLiteral("format-zstd"), QStringLiteral("format-zstdimage"), QStringLiteral("advanced-exfat"), QStringLiteral("advanced-zstd"), QStringLiteral("advanced-zstdimage"), QStringLiteral("advanced-fpkg"), QStringLiteral("several-games"),
             QStringLiteral("fpkg-backport"), QStringLiteral("building"), QStringLiteral("built"), QStringLiteral("build-failed")};
 }
@@ -2593,6 +2634,10 @@ void BuildImagePage::applyDemoState(const QString& name)
     else if (name.endsWith(QLatin1String("zstd")))
         fmt = kFormatZstdFolder;
     setFormat(fmt);
+    if (name == QLatin1String("format-exfat-compressed")) {
+        m_formats[0].panel->setOverride(ampr::keys::kZstdPack, true);
+        m_demoCompressed = true;
+    }
     if (name == QLatin1String("several-games")) {
         s.folder = QStringLiteral("D:/PS5/Dumps");
         s.title = QStringLiteral("Dumps");
@@ -2642,6 +2687,10 @@ void BuildImagePage::clearDemoState()
     m_spaceState = SpaceCheck::Unknown;
     if (m_demo) {
         m_demo = false;
+        if (m_demoCompressed) {
+            m_demoCompressed = false;
+            m_formats[0].panel->clearOverrides();
+        }
         m_advanced->setExpanded(false);
         setFormat(jobs::kFormatExfat);
         m_pfsKind->setCurrentValue(jobs::kFormatFfpfsc);
