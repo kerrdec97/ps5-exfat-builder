@@ -1,6 +1,7 @@
 #include "app/pages/SettingsPage.h"
 
 #include "app/AppContext.h"
+#include "app/backport/BackportHost.h"
 #include "app/services/Language.h"
 #include "app/services/PortableMode.h"
 #include "app/ui/Components.h"
@@ -778,6 +779,9 @@ struct StorageLocations {
     QString launcherExe; // "" when the program was started directly
     QString folderExe;   // the folder edition's exe when started directly from a release layout (GitHub #78)
     QString program, data, logs, temp, cache;
+    // The Backport tab's folders (GitHub #90/#91): shared with the standalone
+    // PS5 Backport GUI, so portable mode leaves them where they are.
+    QString backportConfig, backportData, backportEngine;
     QString marker;      // portable.txt, whether it exists or not
     bool portable = false;
     bool markerExists = false;
@@ -795,6 +799,9 @@ StorageLocations storageLocations(const AppContext& ctx, const QString& temp)
         l.logs = local + QStringLiteral("exFAT Image Builder Farewell/logs");
         l.temp = local + QStringLiteral("exFAT Image Builder Farewell/temp");
         l.cache = local + QStringLiteral("exFAT Image Builder Farewell/cache");
+        l.backportConfig = QStringLiteral("C:/Users/you/AppData/Roaming/Deckerr97BackportGuiBeta");
+        l.backportData = QStringLiteral("C:/Users/you/AppData/Local/Deckerr97BackportGuiBeta");
+        l.backportEngine = QStringLiteral("C:/D97B");
         l.marker = QStringLiteral("C:/Users/you/Downloads/portable.txt");
         return l;
     }
@@ -807,6 +814,10 @@ StorageLocations storageLocations(const AppContext& ctx, const QString& temp)
     l.logs = logFile.isEmpty() ? Paths::logsDir() : QFileInfo(logFile).absolutePath();
     l.temp = temp;
     l.cache = Paths::cacheDir();
+    const bp::Folders backport = bp::folders(); // only names them: nothing is created here
+    l.backportConfig = backport.configDir;
+    l.backportData = backport.dataDir;
+    l.backportEngine = bp::engineHome();
     l.marker = Paths::portableMarkerFile();
     l.portable = Paths::isPortable();
     l.markerExists = !l.marker.isEmpty() && QFileInfo::exists(l.marker);
@@ -875,6 +886,9 @@ void SettingsPage::addLocationsCard()
     addLocation(QStringLiteral("logs"), FW_TR("Logs"), at.logs);
     m_tempLocation = addLocation(QStringLiteral("temp"), FW_TR("Temporary files"), at.temp);
     addLocation(QStringLiteral("cache"), FW_TR("Covers and downloaded updates"), at.cache);
+    addLocation(QStringLiteral("backport-config"), FW_TR("Backport tab: settings and applied list"), at.backportConfig);
+    addLocation(QStringLiteral("backport-data"), FW_TR("Backport tab: logs"), at.backportData);
+    addLocation(QStringLiteral("backport-engine"), FW_TR("Backport engine"), at.backportEngine);
 
     // Portable mode: how to move all of the above next to the exe.
     auto* prow = new QWidget(card);
@@ -921,6 +935,12 @@ void SettingsPage::addLocationsCard()
         connect(make, &QPushButton::clicked, this, &SettingsPage::makePortable);
         ph->addWidget(make, 0, Qt::AlignTop);
     }
+    {
+        auto* l = caption(FW_TR("The Backport tab's folders stay where they are; they are shared with the standalone PS5 Backport GUI."), prow);
+        l->setObjectName(QStringLiteral("portable-backport-note"));
+        l->setWordWrap(true);
+        col->addWidget(l);
+    }
     if (at.overridden && !qEnvironmentVariable("FW_DATA_DIR").isEmpty())
         note(FW_TR("FW_DATA_DIR names the data folder for this run and wins over portable mode while it is set."));
     card->body()->addWidget(prow);
@@ -962,7 +982,13 @@ void SettingsPage::makePortable()
     if (s->exec() != 1)
         return;
     const bool copyData = copy->isChecked(); // the sheet's widgets live until the event loop runs again
-    (void)m_ctx.settings().save(); // what is copied is what is on disk
+    // What is copied is what is on disk: when the settings cannot be saved
+    // the copy would get an older file without a word, so nothing is done.
+    if (const Status saved = m_ctx.settings().save(); !saved.ok() && copyData) {
+        Log(QStringLiteral("app")).warn(QStringLiteral("Portable mode was not set up, the settings could not be saved: %1").arg(saved.error().toLogString()));
+        Sheet::message(window(), FW_TR("This copy was not made portable"), saved.error().message, Sheet::Icon::Error);
+        return;
+    }
     const auto done = portable::makePortable(plan, copyData);
     if (!done.ok()) {
         Log(QStringLiteral("app")).warn(QStringLiteral("Portable mode was not set up: %1").arg(done.error().toLogString()));

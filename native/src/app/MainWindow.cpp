@@ -697,7 +697,9 @@ void MainWindow::onActionDue(power::Action action, int delaySeconds, int succeed
         // After the sheet has gone: Windows may suspend the computer inside perform().
         QTimer::singleShot(0, this, [this, action, texts] {
             // Changed meanwhile, or the queue is at work again: not now.
-            if (power::actionFromName(m_ctx.settings().value(general::keys::kAfterQueueAction).toString()) != action) {
+            // (dueAction(): with "Only after this run" the setting already
+            // reads "Do nothing" while this run's countdown is still due.)
+            if (m_watcher->dueAction() != action) {
                 Log(QStringLiteral("power")).info(QStringLiteral("After-queue action not run: the setting changed during the countdown"));
                 return;
             }

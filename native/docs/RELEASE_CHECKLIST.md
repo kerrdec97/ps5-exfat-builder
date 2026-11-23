@@ -112,6 +112,13 @@ REQUIRED).
   the release by hand with the files from step 3 (exe, folder zip,
   `SHA256SUMS.txt`), and promotes a pre-release after testing on a real PC
   and console.
+* After publishing (GitHub #78): submits the exe and the folder zip to
+  Microsoft's false-positive form,
+  <https://www.microsoft.com/en-us/wdsi/filesubmission>, as a software
+  developer from the owner's own Microsoft account, and records the
+  submission IDs and Microsoft's answers in `_PC_TEST_EVIDENCE` (for example
+  `_PC_TEST_EVIDENCE/defender-x.y.z.md`). Until the exe is code-signed this is
+  the only way to lower Defender's cloud verdicts for a new build.
 * Makes a private build if wanted (`-Private...` switches) and keeps it
   private.
 * Answers and closes GitHub issues.

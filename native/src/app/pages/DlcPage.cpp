@@ -89,7 +89,15 @@ QString regionLabel(const QString& code)
     return code;
 }
 
+DlcPage::RegionLookupForTests& regionLookupForTests()
+{
+    static DlcPage::RegionLookupForTests fn;
+    return fn;
+}
+
 } // namespace
+
+void DlcPage::setRegionLookupForTests(RegionLookupForTests fn) { regionLookupForTests() = std::move(fn); }
 
 // ---- construction -------------------------------------------------------------------------------
 
@@ -1089,7 +1097,7 @@ void DlcPage::changeRegion()
         }
     };
     const auto runLookup = [=, this](bool edited) {
-        if (!onlineLookupAllowed())
+        if (!onlineLookupAllowed() && !regionLookupForTests())
             return;
         find->setEnabled(false);
         status->setText(FW_TR("Finding game and regional releases\u2026"));
@@ -1123,11 +1131,16 @@ void DlcPage::changeRegion()
             status->setToolTip(st->result->warnings.join(u'\n'));
             filter();
         });
-        w->setFuture(QtConcurrent::run([=, this] {
-            CancellationSource cancel;
+        // The page's token (A18): closing the page or clearing the list stops
+        // the lookup at its next check, so the app does not wait at exit for
+        // the network time-outs.
+        w->setFuture(QtConcurrent::run([edited, q, cacheDir, sourceTid, sourceCid, title, cancel = m_work.token(),
+                                        hook = regionLookupForTests()] {
+            if (hook)
+                return std::make_shared<dlc::DlcLookupResult>(hook(cancel));
             dlc::DlcLookupService svc(cacheDir);
-            return std::make_shared<dlc::DlcLookupResult>(edited ? svc.lookup(q, cancel.token())
-                                                                 : svc.resolveRegions(sourceTid, sourceCid, title, cancel.token()));
+            return std::make_shared<dlc::DlcLookupResult>(edited ? svc.lookup(q, cancel)
+                                                                 : svc.resolveRegions(sourceTid, sourceCid, title, cancel));
         }));
     };
     connect(find, &QPushButton::clicked, s, [=, this] { runLookup(query->text().trimmed() != sourceTid); });

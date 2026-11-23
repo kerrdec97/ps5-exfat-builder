@@ -33,6 +33,7 @@
 #include "engines/general/Module.h"
 #include "support/TestSupport.h"
 
+#include <QAbstractButton>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDialog>
@@ -499,6 +500,48 @@ private slots:
         QTRY_VERIFY(!openCountdown());
         QTest::qWait(500);
         QCOMPARE(m_performed.size(), 1);
+    }
+
+    // GitHub #96, "Only after this run": the countdown of that run still acts
+    // although the choice already reads "Do nothing", and the next run does
+    // nothing. The Queue page shows the switch, on while an action is chosen.
+    void onlyAfterThisRunActsOnceThenDoesNothing()
+    {
+        const auto back = qScopeGuard([this] {
+            (void)m_ctx->settings().setValue(general::keys::kAfterQueueThisRunOnly, false);
+            (void)m_ctx->settings().setValue(general::keys::kAfterQueueAction, QStringLiteral("sleep"));
+        });
+        pages::QueuePage* page = queuePage();
+        QVERIFY(page);
+        m_window->navigate(QStringLiteral("queue"));
+        auto* once = page->findChild<QAbstractButton*>(QStringLiteral("queue-after-this-run"));
+        QVERIFY2(once, "the Queue page has an \"Only after this run\" switch");
+        QVERIFY(once->isVisible());
+        QVERIFY(once->isEnabled());
+        QVERIFY(!once->isChecked());
+        once->click(); // the user turns it on
+        QCOMPARE(m_ctx->settings().value(general::keys::kAfterQueueThisRunOnly).toBool(), true);
+
+        onCountdown([&](ui::Sheet* s) { clickAt(buttonIn(s, QStringLiteral("Sleep now"))); });
+        const QString id = runFakeJob(QStringLiteral("Once"));
+        QVERIFY(waitTerminal(id));
+        QTRY_COMPARE(m_performed.size(), 1);
+        QCOMPARE(m_performed.first(), power::Action::Sleep);
+        QTRY_VERIFY(!openCountdown());
+        QCOMPARE(m_ctx->settings().value(general::keys::kAfterQueueAction).toString(), QStringLiteral("none"));
+        QCOMPARE(m_ctx->settings().value(general::keys::kAfterQueueThisRunOnly).toBool(), false);
+        QVERIFY(!once->isChecked());
+        QVERIFY(!once->isEnabled()); // nothing to limit to one run now
+
+        // The next run: no countdown.
+        m_expectCountdown = false;
+        m_countdownsSeen = 0;
+        const QString next = runFakeJob(QStringLiteral("After once"));
+        QVERIFY(waitTerminal(next));
+        QTest::qWait(300);
+        QCOMPARE(m_countdownsSeen, 0);
+        QCOMPARE(m_performed.size(), 1);
+        m_window->navigate(QStringLiteral("home"));
     }
 
     // What happens is decided again when the countdown ends: an action
