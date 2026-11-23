@@ -1176,7 +1176,7 @@ private slots:
                 if (l->text().startsWith(QStringLiteral("The archive is unpacked to a temporary folder")))
                     return QStringLiteral("unpacks");
                 if (l->text().startsWith(QStringLiteral("Nothing is unpacked: the game is packed straight from the archive")))
-                    return l->text().contains(QStringLiteral("temporary folder")) ? QStringLiteral("packs, waits") : QStringLiteral("packs");
+                    return l->text().contains(QStringLiteral("as much again")) ? QStringLiteral("packs, waits") : QStringLiteral("packs");
                 if (l->text().startsWith(QStringLiteral("The packed folder is made straight from the archive")))
                     return l->text().contains(QStringLiteral("temporary folder")) ? QStringLiteral("packed folder, waits")
                                                                                    : QStringLiteral("packed folder");
