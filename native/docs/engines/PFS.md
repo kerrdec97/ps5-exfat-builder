@@ -206,7 +206,7 @@ the lower-cased path, 0 → 1; linear probing; 2ⁿ ≥ 2 × rows slots; `u64 ha
 u32 row + 1, u32 flags`, bit 0 set on the earlier slot when a later row has
 the same 64-bit hash).
 
-What the bundled runtime (ampr-emu-ng 0.3.3) reads, from its loader in
+What the bundled runtime (ampr-emu-ng 0.5.0; these checks were read from the 0.3.3 loader, and upstream documents the index format as unchanged up to 0.5.0) reads, from its loader in
 `libSceAmpr.sprx` (`AmprIndex.h` has the details; `tst_pfs_ampr_index` holds a
 port of its checks):
 

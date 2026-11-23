@@ -16,7 +16,7 @@
 //           (open addressing, linear probing, 2^n >= 2 * rows slots; bit 0
 //           marks a slot whose 64-bit hash is shared by a later row)
 //
-// What the bundled runtime (ampr-emu-ng 0.3.3, read from its loader) does
+// What the bundled runtime (ampr-emu-ng 0.5.0; read from the 0.3.3 loader, format unchanged since per upstream docs) does
 // with it. It checks the header (magic, version, record and slot sizes, 1 to
 // 2,000,000 rows, a power-of-two slot count >= rows, a path blob of at most
 // 256 MiB, the hash table at an 8-byte boundary after the blob and inside the

@@ -13,8 +13,8 @@
 
 namespace fw::ampr {
 
-inline constexpr const char* kBundledRuntimeVersion = "0.3.3";
-inline constexpr const char* kBundledRuntimeSha256 = "1c1051f91bc7cba19b15362b2b832114b53a4c3d6193f50c90fdf1ae5d78d268";
+inline constexpr const char* kBundledRuntimeVersion = "0.5.0";
+inline constexpr const char* kBundledRuntimeSha256 = "7379e49953d8f14f26b45ff06a863ecea56aa90a60ba3d5a375f61c52618a174";
 inline const QString kRuntimeRelPath = QStringLiteral("fakelib/libSceAmpr.sprx");
 
 // FW_AMPR_RUNTIME (tests, development), else <app>/engines/ampr-emu-ng/libSceAmpr.sprx.

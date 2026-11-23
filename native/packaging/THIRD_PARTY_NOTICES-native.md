@@ -52,11 +52,11 @@ copyright notices and full licence text as the Qt sources give them, is in
 ## Bundled: the ampr-emu-ng runtime
 
 `engines/ampr-emu-ng/libSceAmpr.sprx` is the unmodified release build of
-**ampr-emu-ng 0.3.3** by quer3q (https://github.com/quer3q/ampr-emu-ng,
+**ampr-emu-ng 0.5.0** by quer3q (https://github.com/quer3q/ampr-emu-ng,
 SHA-256 `1c1051f91bc7cba19b15362b2b832114b53a4c3d6193f50c90fdf1ae5d78d268`),
 GPL-3.0-or-later. Its complete corresponding source is the tagged release:
-https://github.com/quer3q/ampr-emu-ng/tree/v0.3.3 (also downloadable as
-https://github.com/quer3q/ampr-emu-ng/archive/refs/tags/v0.3.3.tar.gz). It is a
+https://github.com/quer3q/ampr-emu-ng/tree/v0.5.0 (also downloadable as
+https://github.com/quer3q/ampr-emu-ng/archive/refs/tags/v0.5.0.tar.gz). It is a
 PS5 module that the app copies, unchanged, to `fakelib/libSceAmpr.sprx` of a
 game built with zstd packs; it runs on the console, not on the PC.
 

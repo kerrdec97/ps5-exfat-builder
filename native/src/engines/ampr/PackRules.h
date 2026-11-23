@@ -48,7 +48,7 @@ enum class ExecutableKind { Self, PlainElf, Unknown };
 ExecutableKind executableKind(const QByteArray& head);
 
 // Titles reported not to work packed (issue trackers of ampr-emu-ng and
-// ps5-dump-forge; bundled runtime 0.3.3, checked on 22 Nov 2026 against
+// ps5-dump-forge; bundled runtime 0.5.0, checked on 22 Nov 2026 against
 // upstream up to 0.5.0). Shown as a caution, never enforced. A title leaves
 // the list only when its issue is closed with the game working: Sonic X
 // Shadow Generations went (ampr-emu-ng #8: the runtime works with a complete

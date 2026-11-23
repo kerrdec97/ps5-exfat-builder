@@ -301,7 +301,7 @@ private slots:
         const RuntimeInfo info = identifyRuntime(*rt);
         QCOMPARE(info.kind, RuntimeKind::AmprEmuNg);
         QVERIFY(info.bundled);
-        QCOMPARE(info.version, QStringLiteral("0.3.3"));
+        QCOMPARE(info.version, QStringLiteral("0.5.0"));
         QCOMPARE(identifyRuntime(QByteArray("....ampr-emu-ng 0.3.2....")).version, QStringLiteral("0.3.2"));
         // The notice 0.4.x and 0.5.x write at launch (synthetic banners).
         for (const char* v : {"0.4.0", "0.4.1", "0.5.0"}) {

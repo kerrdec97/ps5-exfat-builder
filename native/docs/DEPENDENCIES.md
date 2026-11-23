@@ -50,7 +50,7 @@ the decision to the owner.
 
 | File in a build | Version | Licence | Pin and switches |
 |---|---|---|---|
-| `engines/ampr-emu-ng/libSceAmpr.sprx` | ampr-emu-ng 0.3.3 release build (runs on the console; copied unchanged to `fakelib/` of a packed game) | GPL-3.0-or-later; source is the tagged release, named in the notices | `cmake/AmprRuntime.cmake`: `FW_AMPR_RUNTIME_SHA256`. `FW_AMPR_RUNTIME_SPRX=<file>`, or `FW_FETCH_AMPR_RUNTIME=ON` (default) downloads it once into `<build>/_deps`. Without it the app builds and the zstd option says the runtime is missing |
+| `engines/ampr-emu-ng/libSceAmpr.sprx` | ampr-emu-ng 0.5.0 release build (runs on the console; copied unchanged to `fakelib/` of a packed game) | GPL-3.0-or-later; source is the tagged release, named in the notices | `cmake/AmprRuntime.cmake`: `FW_AMPR_RUNTIME_SHA256`. `FW_AMPR_RUNTIME_SPRX=<file>`, or `FW_FETCH_AMPR_RUNTIME=ON` (default) downloads it once into `<build>/_deps`. Without it the app builds and the zstd option says the runtime is missing |
 | `engines/backport/PS5BackportGUI.exe` | PS5 Backport GUI 0.3.4 (the owner's, closed source), run as a child process, no code linked | Its own terms | `cmake/BackportEngine.cmake`: `FW_BACKPORT_ENGINE_SHA256`. `FW_BACKPORT_ENGINE_EXE=<file>` (preferred), or `FW_FETCH_BACKPORT_ENGINE=ON` (default OFF; the Windows workflow and `make-release.ps1` without `-BackportEngine` turn it on). Without it the Backport tab shows "Engine missing" |
 
 `make-release.ps1` checks both files in the build tree against these pins
@@ -95,7 +95,7 @@ cmake -S native -B <build> -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_P
   "-DFETCHCONTENT_SOURCE_DIR_FW_LZ4_SRC=<deps>\fw_lz4_src-src" `
   "-DFETCHCONTENT_SOURCE_DIR_FW_XZ_SRC=<deps>\fw_xz_src-src" `
   "-DFETCHCONTENT_SOURCE_DIR_FW_LIBARCHIVE_SRC=<deps>\fw_libarchive_src-src" `
-  "-DFW_AMPR_RUNTIME_SPRX=<deps>\ampr-emu-ng\libSceAmpr-0.3.3.sprx" -DFW_FETCH_AMPR_RUNTIME=OFF `
+  "-DFW_AMPR_RUNTIME_SPRX=<deps>\ampr-emu-ng\libSceAmpr-0.5.0.sprx" -DFW_FETCH_AMPR_RUNTIME=OFF `
   "-DFW_BACKPORT_ENGINE_EXE=<folder>\PS5BackportGUI-0.3.4.exe" -DFW_FETCH_BACKPORT_ENGINE=OFF
 ```
 

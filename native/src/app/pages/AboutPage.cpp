@@ -268,7 +268,7 @@ QList<QStringList> AboutPage::thirdPartyComponents()
         {QStringLiteral("libarchive 3.8.11 (Tim Kientzle and contributors)"), FW_TR("Reading 7z and RAR build sources"), QStringLiteral("BSD-2-Clause")},
         {QStringLiteral("liblzma from XZ Utils 5.8.4 (Lasse Collin and contributors)"), FW_TR("LZMA decompression for 7z"), QStringLiteral("0BSD")},
         {QStringLiteral("ps5-dump-forge (quer3q)"), FW_TR("zstd pack writer and rules, LZ4 pack reader follow its code"), QStringLiteral("GPL-3.0-or-later")},
-        {QStringLiteral("ampr-emu-ng 0.3.3 (quer3q)"), FW_TR("Format of the zstd packs; its PS5 runtime is bundled unchanged; source: github.com/quer3q/ampr-emu-ng"), QStringLiteral("GPL-3.0-or-later")},
+        {QStringLiteral("ampr-emu-ng 0.5.0 (quer3q)"), FW_TR("Format of the zstd packs; its PS5 runtime is bundled unchanged; source: github.com/quer3q/ampr-emu-ng"), QStringLiteral("GPL-3.0-or-later")},
         {QStringLiteral("Lucide icons"), FW_TR("Interface icons"), QStringLiteral("ISC")},
         {QStringLiteral("Microsoft Visual C++ runtime"), FW_TR("Runtime libraries shipped with the program"), FW_TR("Microsoft redistributable")},
         {QStringLiteral("PS5 Backport engine 0.3.4 (Deckerr97)"), FW_TR("Bundled separate program run by the Backport tab"), FW_TR("Its own terms")},
