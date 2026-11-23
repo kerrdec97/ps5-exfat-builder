@@ -19,6 +19,7 @@
 
 #include "app/backport/BackportCore.h"
 #include "app/backport/BackportHost.h"
+#include "core/FileUtil.h"
 #include "core/FsLinks.h"
 #include "support/TestSupport.h"
 
@@ -684,6 +685,31 @@ private slots:
             QFile::remove(p);
     }
 
+    // H1 (settled, fake engine): a worker that outlives the app (orphaned
+    // during its export or apply step) has lost the reader of its standard
+    // output, and its next progress line fails at once. The engine's own emit()
+    // (worker.py, 0.3.4 and 0.3.5-test4 alike) does not catch that error, so
+    // the job raises in whatever step it was in: the host cannot prevent it
+    // once it is gone, only wait for the worker (MainWindow's close).
+    void anOrphanedWorkersNextLineFails()
+    {
+        QTemporaryDir root;
+        const QString record = root.filePath(QStringLiteral("writer.txt"));
+        QProcess host; // stands in for the app: reads one line, then exits without closing its end
+        host.start(fwtest::helperPath(), {QStringLiteral("orphan"), QStringLiteral("500"), QDir::toNativeSeparators(record)});
+        QVERIFY(host.waitForFinished(30000));
+        QCOMPARE(host.exitCode(), 0);
+        QVERIFY2(host.readAllStandardOutput().startsWith("read {\"event\":\"progress\""), "the writer's first line reached its reader");
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(record), 20000); // the writer ended (500 lines take 10 s)
+        QTest::qWait(100);
+        QFile f(record);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QByteArray said = f.readAll();
+        qInfo().noquote() << "orphaned writer:" << said.trimmed();
+        QVERIFY2(said.startsWith("write failed at "), said.constData());
+        QVERIFY(said.mid(16).split(' ').first().toInt() < 100); // at once, not after the pipe's buffer filled
+    }
+
     void missingEngine()
     {
         if (!m_engine.isEmpty())
@@ -711,6 +737,69 @@ private slots:
             QVERIFY2(it.value().toBool(), qPrintable(it.key()));
         QDir jobs(folders().jobsDir);
         QVERIFY(jobs.entryList(QDir::Files).isEmpty()); // the job file was removed
+        qInfo() << "engine revision" << r.result.value(QStringLiteral("revision")).toString() << "pinned" << kEngineVersion << kEngineRevision;
+    }
+
+    // The worker protocol of the bundled engine on a synthetic game (no game
+    // data): every key this host sends is accepted, including the optional
+    // offline_mode of 0.3.5, progress lines carry stage / pct / phase, one
+    // result line ends the job, and the game folder is left as it was (Apply
+    // off). Whether the engine builds or refuses the stand-in is its own call.
+    void engineProtocolOnASyntheticGame()
+    {
+        if (m_engine.isEmpty())
+            QSKIP("set FW_BACKPORT_ENGINE");
+        QTemporaryDir root;
+        const QString game = QDir::toNativeSeparators(root.filePath(QStringLiteral("games/PPSA99999 Synthetic Game")));
+        QByteArray elf("\x7f" "ELF\x02\x01\x01", 7);
+        elf += QByteArray(4096 - elf.size(), '\0');
+        QVERIFY(writeFile(game + QStringLiteral("/eboot.bin"), elf));
+        QVERIFY(writeFile(game + QStringLiteral("/sce_sys/param.json"),
+                          R"({"titleId":"PPSA99999","contentVersion":"01.000.000","sdkVersion":"0x0700000000000000",)"
+                          R"("requiredSystemSoftwareVersion":"0x0700000000000000",)"
+                          R"("localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Synthetic Game"}}})"));
+        auto snapshot = [&] {
+            QStringList s;
+            QDirIterator it(game, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QFileInfo fi = it.nextFileInfo();
+                auto h = fw::sha256File(fi.absoluteFilePath(), {});
+                s << QStringLiteral("%1 %2").arg(QDir(game).relativeFilePath(fi.absoluteFilePath()), h.ok() ? h.value() : QStringLiteral("?"));
+            }
+            s.sort();
+            return s;
+        };
+        const QStringList before = snapshot();
+        const Game g = readGame(game);
+        QCOMPARE(g.sdk, QStringLiteral("7.00"));
+        const Run r = runJob({{QStringLiteral("cmd"), QStringLiteral("backport")},
+                              {QStringLiteral("game"), QJsonObject{{QStringLiteral("path"), g.path}, {QStringLiteral("title_id"), g.titleId},
+                                                                    {QStringLiteral("title"), g.title}, {QStringLiteral("version"), g.version},
+                                                                    {QStringLiteral("sdk"), g.sdk}, {QStringLiteral("fw"), g.fw}}},
+                              {QStringLiteral("output_root"), QDir::toNativeSeparators(root.filePath(QStringLiteral("out")))},
+                              {QStringLiteral("backup_root"), QDir::toNativeSeparators(root.filePath(QStringLiteral("bak")))},
+                              {QStringLiteral("options"), QJsonObject{{QStringLiteral("apply"), false}, {QStringLiteral("zip"), true},
+                                                                      {QStringLiteral("target_sdk"), 4}, {QStringLiteral("pro_fix"), false},
+                                                                      {QStringLiteral("pssr2"), false}, {QStringLiteral("offline_mode"), true}}}},
+                             600000);
+        QVERIFY(r.finished);
+        const QString status = r.result.value(QStringLiteral("status")).toString();
+        qInfo().noquote() << "synthetic game:" << status << r.result.value(QStringLiteral("headline")).toString() << "|" << r.progress.size()
+                          << "progress lines | result keys:" << r.result.keys().join(u',');
+        for (const QJsonObject& ev : r.progress) {
+            QVERIFY2(ev.value(QStringLiteral("stage")).isString(), qPrintable(QJsonDocument(ev).toJson(QJsonDocument::Compact)));
+            QVERIFY2(ev.value(QStringLiteral("pct")).isDouble(), qPrintable(QJsonDocument(ev).toJson(QJsonDocument::Compact)));
+        }
+        const QStringList known{QStringLiteral("DONE"), QStringLiteral("PARTIAL"), QStringLiteral("FAILED"), QStringLiteral("CANCELLED"),
+                                QStringLiteral("NO_CHANGE")};
+        QVERIFY2(known.contains(status), qPrintable(status));
+        QVERIFY(!r.result.value(QStringLiteral("headline")).toString().isEmpty());
+        QVERIFY2(!r.result.value(QStringLiteral("headline")).toString().contains(QStringLiteral("unknown job")), "a key was refused");
+        qInfo().noquote() << "options the engine recorded:" << QJsonDocument(r.result.value(QStringLiteral("options")).toObject()).toJson(QJsonDocument::Compact);
+        if (r.result.contains(QStringLiteral("options")))
+            QVERIFY(r.result.value(QStringLiteral("options")).toObject().value(QStringLiteral("offline_mode")).toBool());
+        QCOMPARE(snapshot(), before); // Apply off: the game folder is untouched
+        QVERIFY(QDir(folders().jobsDir).entryList(QDir::Files).isEmpty());
     }
 
     void engineRefusesNonGame()
