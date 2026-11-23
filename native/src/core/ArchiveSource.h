@@ -4,18 +4,29 @@
 // dumps packed. The image build jobs accept "<dump>.zip", "<dump>.7z" or
 // "<dump>.rar" as `source` and check it here first (validate). Then:
 //
-//  * exFAT and FFPKG builds STREAM it: listArchiveGame() gives the game from
-//    the archive's list alone, the image is planned from that, and one pass
-//    through the archive writes every file into the image
-//    (ArchiveStream.h). Nothing of the game is written to disk outside the
-//    image, and the image is byte for byte the one the unpacked folder gives.
-//  * PFS (.ffpfs, .ffpfsc), zstd-pack and packed-folder builds and FPKG
-//    UNPACK it first (unpackArchiveSource) into the job's private temporary
-//    folder and build from the game inside exactly as from a folder: PFS is
-//    written front to back (an .ffpfsc compressed as it goes) and needs the
-//    files in the image's order; the zstd packer and Sony's publishing tool
-//    read a folder. Their logs say so (unpackFirstLogLine). The temporary copy
-//    is removed with the job's temp folder.
+//  * exFAT, FFPKG and uncompressed PFS (.ffpfs, files stored raw) builds
+//    STREAM it: listArchiveGame() gives the game from the archive's list
+//    alone, the image is planned from that, and one pass through the archive
+//    writes every file into the image (ArchiveStream.h). Nothing of the game
+//    is written to disk outside the image, and the image is byte for byte the
+//    one the unpacked folder gives. An .ffpfsc streams from a ZIP: its nested
+//    image is compressed front to back, and a ZIP's files are read out of it
+//    in that order (zip::EntryReader).
+//  * zstd-pack builds (compressed exFAT, the ZSTD image, FFPKG and PFS with
+//    packs) and the packed folder stream it too: the packer is fed in one
+//    pass (ampr::packGameFromArchive, visitGameFiles) and its packs are byte
+//    for byte the unpacked folder's. Only the packs and the loose files are
+//    written (the work folder an image is then built from, as from a folder);
+//    from a 7z or RAR, which give their files out of the packs' order, the
+//    packs' compressed chunks also wait in a spool in the job's temporary
+//    folder until the volumes are written in order.
+//  * An .ffpfsc from a 7z or RAR, an .ffpfs with per-file compression, a game
+//    that is itself packed inside the archive, and FPKG UNPACK it first
+//    (unpackArchiveSource) into the job's private temporary folder and build
+//    from the game inside exactly as from a folder: those need the files in
+//    the image's order, or read the files at random, or (Sony's publishing
+//    tool) read a folder. Their logs say so (unpackFirstLogLine). The
+//    temporary copy is removed with the job's temp folder.
 //
 // Either way every entry's checksum is verified while it is decoded, and the
 // same names are refused (ones that would leave the folder, that Windows

@@ -173,6 +173,38 @@ The image is byte for byte the image of the same archive unpacked to a folder
 PPMd, RAR 4 and RAR 5 samples, archive order unlike image order). The source
 archive is never deleted.
 
+### Every build from an archive
+
+What each build does with a `.zip`, `.7z` or `.rar` (5.2 cycle, "extend it";
+`tst_archive_stream`, `tst_archive_stream_more`). "Temp" is the job's
+temporary folder (Settings › Storage), "work folder" the `.fw-zstd-…` folder
+next to the output that every zstd build uses, from a folder as well.
+
+| Output | ZIP | 7z, RAR | Why |
+|---|---|---|---|
+| exFAT, FFPKG | streams, nothing on disk | streams, nothing on disk | the layout comes from the list; one pass writes the files' data at planned offsets |
+| uncompressed PFS (`.ffpfs`, files stored raw) | streams, nothing on disk | streams, nothing on disk | the same (`PFS.md`, "Building from an archive") |
+| `.ffpfs` with per-file compression (`pfs.compressFiles`) | unpacks first | unpacks first | a file's place depends on how the files before it compressed |
+| compressed PFS (`.ffpfsc`) | streams, nothing on disk | unpacks first | the nested image is compressed front to back: a ZIP gives its files in that order, a solid 7z or RAR only in its own |
+| zstd packs: compressed exFAT, ZSTD image, FFPKG and PFS with packs | streams; the work folder holds the packs and loose files (at most the game's size, as from a folder, where the loose files are hard links instead of copies) | streams; as for ZIP, plus up to the packs' stored size in temp while the pass runs | the packer is fed in one pass (`packGameFromArchive`); the image is then built from the work folder exactly as from a folder |
+| packed folder (`ampr.pack`) | streams, nothing but the output | streams; up to the packs' stored size in temp while the pass runs | the same packer |
+| a game that is itself zstd- or LZ4-packed inside the archive (any zstd build) | unpacks first | unpacks first | its packs are read file by file, in no fixed order |
+| FPKG | unpacks first | unpacks first | Sony's tool reads a folder |
+
+The packs of a zstd build from an archive are byte for byte those of the same
+build from the unpacked folder (given the same archive id, which is random
+for every build): records, chunks, volumes and index. From a ZIP the files
+are read in the packs' own order and their chunks go straight into the
+volumes; a 7z or RAR gives them in its own order, so each chunk is compressed
+as it comes and kept in a spool file in temp (`ZstdPackStream`), and the
+volumes are written from it in the packs' order once the pass is done; the
+spool is removed. Nothing else in the packed folder differs either: the
+loose files are written from the archive with the times it lists (from a
+folder they are hard links or copies), the runtime is the bundled one, and
+`ampr_emu.index` lists the same rows (the runtime's row carries the time
+the build wrote it, as from a folder). The Build page says which of the four
+cases applies under the source.
+
 ## Editing images
 
 The legacy Edit › exFAT "File Manager" mounted the image read-write with

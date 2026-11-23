@@ -24,14 +24,22 @@ console yet.
   extract, convert, edit, compare, Library, PS5 connect lists); a file that is
   a plain zstd stream or not an exFAT image is refused with a clear text. Not
   yet confirmed against ModGames44's own tool or on a console.
-* **Build straight from an archive, GitHub #37.** exFAT and FFPKG images are
-  built directly from a `.zip`, `.7z` or `.rar`: one pass through the archive,
-  nothing is unpacked to disk, so the temporary drive no longer needs room for
-  the game. Every entry's checksum is verified while it is read, and the
-  finished image is read back and checked before it gets its name. Builds
-  with zstd packs (compressed exFAT, ZSTD image, packed folder), PFS images
-  and FPKG packages still unpack the archive first; the job log says which
-  way a build went and why.
+* **Build straight from an archive, GitHub #37.** exFAT, FFPKG and
+  uncompressed PFS (`.ffpfs`) images are built directly from a `.zip`, `.7z`
+  or `.rar`, and compressed PFS (`.ffpfsc`) directly from a `.zip`: one pass
+  through the archive, nothing is unpacked to disk, so the temporary drive no
+  longer needs room for the game. Builds with zstd packs (compressed exFAT,
+  ZSTD image, FFPKG and PFS with packs, packed folder) pack the game straight
+  from the archive too: only the packs and the loose files are written, as
+  from a folder, and from a `.7z` or `.rar` the packs' data also waits in the
+  temporary folder (up to the packs' size) until the packs are written in
+  order. The images and packs are the same, byte for byte, as when the
+  archive was unpacked first. Every entry's checksum is verified while it is
+  read, and the result is read back and checked before it gets its name.
+  FPKG packages, an `.ffpfsc` from a `.7z` or `.rar`, PFS with per-file
+  compression and an archive of an already packed game still unpack the
+  archive first; the Build page and the job log say which way a build goes
+  and why.
 * **Compressed exFAT is a visible choice.** The exFAT tile starts with
   **Image type: Standard / Compressed**. Compressed is the same `.exfat`,
   smaller, with the game's files in zstd packs (it replaces the "Compress
