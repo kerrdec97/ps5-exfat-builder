@@ -785,7 +785,11 @@ DumpCheckSheet* LibraryPage::showDumpCheck(const QString& folder)
         return nullptr;
     auto* s = new DumpCheckSheet(window(), it->details, it->summary, it->title, folder, it->checkedAt);
     // Repairing is the Backport tab's: restore the originals there, or backport again.
-    connect(s, &DumpCheckSheet::backportRequested, this, [this, folder] { emit navigateRequested({QStringLiteral("backport"), {{QStringLiteral("folder"), folder}}}); });
+    // The game is selected there (#26), and its restore offered when the sheet said so.
+    connect(s, &DumpCheckSheet::backportRequested, this,
+            [this, folder] { emit navigateRequested({QStringLiteral("backport"), DumpCheckSheet::backportArgs(folder, false)}); });
+    connect(s, &DumpCheckSheet::restoreRequested, this,
+            [this, folder] { emit navigateRequested({QStringLiteral("backport"), DumpCheckSheet::backportArgs(folder, true)}); });
     s->open();
     return s;
 }

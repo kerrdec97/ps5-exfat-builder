@@ -12,6 +12,7 @@
 #include <QDateTime>
 #include <QJsonObject>
 #include <QTreeWidget>
+#include <QVariantMap>
 
 namespace fw::pages {
 
@@ -36,12 +37,24 @@ public:
                               const QDateTime& checkedAt = {});
     // Sample details for screenshots.
     static QJsonObject demoDetails();
+    // The button says "Restore originals…" (restoreRequested) instead of
+    // "Backport…" (backportRequested): the folder carries a backport (or a
+    // half-finished apply / restore) recorded in the PS5 Backport ledger with
+    // its backup.
+    bool offersRestore() const { return m_offersRestore; }
+    static bool backportBackupFor(const QString& folder, const QString& backportState);
+    // What the Backport tab is opened with for this folder (navigateWith):
+    // the folder is listed, the game ticked and selected, and with `restore`
+    // its restore is offered (the tab asks first).
+    static QVariantMap backportArgs(const QString& folder, bool restore);
 
 signals:
     void backportRequested();
+    void restoreRequested();
 
 private:
     void updateSelection();
+    bool m_offersRestore = false;
     QString m_folder;
     QTreeWidget* m_list = nullptr;
     QLabel* m_detail = nullptr;
