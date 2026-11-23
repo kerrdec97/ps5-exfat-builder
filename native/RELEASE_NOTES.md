@@ -11,6 +11,56 @@ Antivirus removes the exe? Download the **folder edition**
 (`exFAT-Image-Builder-5.0.3-win64-folder.zip`) instead: the same program,
 already unpacked. Extract it anywhere and run the exe inside.
 
+## After 5.0.3 (testing build, not released)
+
+Changes on the development branch since 5.0.3. Everything below was tested on
+a PC against stand-ins and synthetic games; nothing here has been run on a
+console yet.
+
+* **ZSTD image (experimental), GitHub #98.** A new format tile on the Build
+  page: one `.zstd` file, an exFAT image with the game in zstd packs, for
+  Kraken Mount MOD. ShadowMount+ does not mount the name: rename the file to
+  `.exfat` for it. `.zstd` images open everywhere images open (verify,
+  extract, convert, edit, compare, Library, PS5 connect lists); a file that is
+  a plain zstd stream or not an exFAT image is refused with a clear text. Not
+  yet confirmed against ModGames44's own tool or on a console.
+* **ampr-emu-ng 0.5.0** is the bundled runtime for zstd packs (was 0.3.3).
+  The pack format is unchanged. `.ini` files are never packed; a game that
+  already carries a newer runtime gets a warning; the mounter notes name
+  ShadowMount+'s `[emulators]` keys and Kraken Mount.
+* **PFS images:** no directory entry crosses a block any more, so `.ffpfs` /
+  `.ffpfsc` images with very large folders can be read by the package builders
+  that parse a directory block by block. Images of games without such folders
+  are byte for byte as before.
+* **Backport tab:** the bundled engine is the testing build
+  **PS5 Backport GUI 0.3.5-test4** (0.3.4 can still be bundled with
+  `-DFW_BACKPORT_ENGINE_VERSION=0.3.4`). New: Offline mode, "Restore needed"
+  and "Needs SDK ≤ N" states, the 0.3.5 space rules, no job while the
+  standalone program runs, Dump check hands a game over to the Backport tab
+  (#26), a clearer Target SDK caption (#92).
+* **FPKG:** the FPKG tile takes ZIP, 7z and RAR dumps like the other tiles
+  (#37); "Title for all languages" writes a changed title for every language
+  of `param.json` (#94, on by default). An FPKG made from a PFS image leaves
+  out the `.pfskeep` markers.
+* **Queue:** "Only after this run" for the action after the queue (#96).
+* **Closing the app:** running jobs are stopped and recorded before the window
+  goes; a job that ends while the app closes keeps its result; closing asks
+  when a PS5 tool or a backport run is still at work; Windows is told the app
+  is busy at log-off; update checks and downloads are not kept across
+  restarts; a queue that cannot be saved is reported.
+* **PS5 connect:** bounded FTP reads (log tail, download ceiling, listing
+  limits), kernel log lines handed over in batches, the ShadowMount+ editor
+  warns when `auto_update_ampr` would replace ampr-emu-ng, "Send" instead of
+  "Push", "Start log" / "Stop log".
+* **Settings:** Storage lists the Backport tab's folders (#90, #91); a copy is
+  not made portable when its settings cannot be saved.
+* **Interface:** the status bar says when a backport run is on, one table
+  header style, the percent sign in right-to-left languages, screen readers
+  read the format tiles as a choice.
+* **Tests:** a new end-to-end format matrix (`tst_format_matrix`): every
+  source kind into every format, extract, compare by SHA-256, conversions,
+  edits, difficult names, cancellation.
+
 ## What's new in 5.0.3
 
 **FPKG packages built with 5.0.2 could crash on the console** ("Game or App
