@@ -11,6 +11,7 @@
 #include "connect/ps5/Fakelib.h"
 #include "connect/ps5/FtpClient.h"
 #include "connect/ps5/Module.h"
+#include "connect/ps5/MountConfig.h"
 #include "connect/ps5/RemoteTree.h"
 #include "support/TestSupport.h"
 
@@ -517,6 +518,96 @@ private slots:
         QCOMPARE(srv.sawCommand(QStringLiteral("MDTM")), !mlsd);
         // The root must exist.
         QVERIFY(!walkRemoteTree(c, QStringLiteral("/nope")).ok());
+    }
+
+    // A10: a folder chain deeper than 64 levels (a server listing a mount of an ancestor folder
+    // looks like this) is walked to 64 levels; the next folder is reported, not followed.
+    void remoteTreeWalkStopsSixtyFourLevelsDown()
+    {
+        const QString root = fresh(QStringLiteral("deep"));
+        QString p = root + QStringLiteral("/d");
+        for (int i = 0; i < 70; ++i)
+            p += QStringLiteral("/a");
+        QVERIFY(QDir().mkpath(p));
+        QVERIFY(writeBytes(root + QStringLiteral("/d/top.bin"), "x"));
+        QVERIFY(writeBytes(p + QStringLiteral("/bottom.bin"), "y"));
+        FakeFtpServer::Options o;
+        o.root = root;
+        o.mlsd = true;
+        FakeFtpServer srv(o);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto tree = walkRemoteTree(c, QStringLiteral("/d"));
+        QVERIFY2(tree.ok(), tree.ok() ? "" : qPrintable(tree.error().toLogString()));
+        QCOMPARE(tree->folders, kMaxRemoteWalkDepth + 1); // the root and 64 levels below it
+        QCOMPARE(tree->unreadableDirs.size(), 1);
+        QCOMPARE(tree->unreadableDirs.front().count(u'/') + 1, kMaxRemoteWalkDepth + 1);
+        QCOMPARE(int(tree->files.size()), 1); // top.bin; bottom.bin is below the limit
+        QCOMPARE(tree->files.front().relPath, QStringLiteral("top.bin"));
+    }
+
+    // A7: the end of a large debug.log is read with REST, so only the tail crosses the network
+    // and sits in memory; a whole-file download has a ceiling.
+    void debugLogTailIsAllThatIsRead()
+    {
+        const QString root = fresh(QStringLiteral("dl-tail"));
+        QByteArray log;
+        for (int i = 0; log.size() < 5 * 1024 * 1024; ++i)
+            log += "[SMP] line " + QByteArray::number(i).rightJustified(8, '0') + " mounted something\n";
+        const QString remote = mountDebugLogRemotePath(MountTool::ShadowMountPlus);
+        QVERIFY(writeBytes(root + remote, log));
+        QVERIFY(writeBytes(root + QStringLiteral("/data/small.log"), "short\n"));
+        FakeFtpServer::Options o;
+        o.root = root;
+        FakeFtpServer srv(o);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        constexpr qint64 kTail = 256 * 1024;
+        qint64 before = srv.bytesSent();
+        auto tail = c.downloadTail(remote, kTail);
+        QVERIFY2(tail.ok(), tail.ok() ? "" : qPrintable(tail.error().toLogString()));
+        QCOMPARE(tail.value(), log.right(kTail));
+        QVERIFY2(srv.bytesSent() - before <= kTail + 256 * 1024, qPrintable(QString::number(srv.bytesSent() - before)));
+        QVERIFY(srv.sawCommand(QStringLiteral("REST %1").arg(log.size() - kTail)));
+        // fetchMountDebugLog keeps the last MiB.
+        before = srv.bytesSent();
+        auto text = fetchMountDebugLog(c, MountTool::ShadowMountPlus);
+        QVERIFY(text.ok());
+        QCOMPARE(text.value().toUtf8(), log.right(kMountDebugLogTailBytes));
+        QVERIFY(srv.bytesSent() - before <= kMountDebugLogTailBytes + 256 * 1024);
+        // A file smaller than the tail comes whole; a missing one says so.
+        COMPARE_VALUE(c.downloadTail(QStringLiteral("/data/small.log"), kTail), QByteArray("short\n"));
+        QVERIFY(!c.downloadTail(QStringLiteral("/data/none.log"), kTail).ok());
+        // download() stops at its ceiling with CorruptData.
+        auto capped = c.download(remote, {}, 1024 * 1024);
+        QVERIFY(!capped.ok());
+        QCOMPARE(capped.error().code, ErrorCode::CorruptData);
+        QCOMPARE(FtpClient::kMaxDownloadBytes, qint64(64) * 1024 * 1024);
+        QVERIFY(writeBytes(root + QStringLiteral("/data/huge.bin"), QByteArray(70 * 1024 * 1024, 'h')));
+        FtpClient c2(quick());
+        QVERIFY(c2.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto huge = c2.download(QStringLiteral("/data/huge.bin"));
+        QVERIFY(!huge.ok());
+        QCOMPARE(huge.error().code, ErrorCode::CorruptData);
+    }
+
+    // A7: a server that refuses REST sends the whole file; only its end is kept.
+    void debugLogTailWithoutRest()
+    {
+        const QString root = fresh(QStringLiteral("dl-norest"));
+        QByteArray log;
+        for (int i = 0; log.size() < 1024 * 1024; ++i)
+            log += "line " + QByteArray::number(i) + "\n";
+        QVERIFY(writeBytes(root + QStringLiteral("/data/debug.log"), log));
+        FakeFtpServer::Options o;
+        o.root = root;
+        o.supportRest = false;
+        FakeFtpServer srv(o);
+        FtpClient c(quick());
+        QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+        auto tail = c.downloadTail(QStringLiteral("/data/debug.log"), 1000);
+        QVERIFY2(tail.ok(), tail.ok() ? "" : qPrintable(tail.error().toLogString()));
+        QCOMPARE(tail.value(), log.right(1000));
     }
 
     // ---- PS5 Manager -------------------------------------------------------------------

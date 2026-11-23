@@ -29,9 +29,14 @@
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
+#include <atomic>
+#include <new>
+#include <optional>
+#include <stdexcept>
 
 using namespace fw;
 using fake::FakeFtpServer;
@@ -79,6 +84,17 @@ QString badgeText(QTableWidget* t, int row, int col)
     return t->item(row, col) ? t->item(row, col)->data(Qt::UserRole).toString() : QString();
 }
 
+// A bare tool tab whose runLocal() the test can call.
+class BareTool : public pages::ConsoleToolTab {
+public:
+    using ConsoleToolTab::ConsoleToolTab;
+    template <typename T>
+    bool run(LocalWork<T> work, Done<T> done)
+    {
+        return runLocal<T>(std::move(work), std::move(done));
+    }
+};
+
 } // namespace
 
 class TstAppPs5Tools : public QObject {
@@ -109,6 +125,54 @@ private slots:
     }
 
     void cleanupTestCase() { m_ctx.reset(); }
+
+    // A9: work that throws ends the step with an Internal error instead of
+    // leaving the tab busy for the rest of the session.
+    void toolWorkThatThrowsEndsTheStep()
+    {
+        BareTool tab(*m_ctx, fakeConsole(fwtest::refusedPort()), QStringLiteral("bare"));
+        std::optional<Error> got;
+        QVERIFY(tab.run<int>([](const CancellationToken&) -> Result<int> { throw std::runtime_error("parser blew up"); },
+                             [&](const Result<int>& r) { got = r.ok() ? Error(ErrorCode::InvalidArgument, QStringLiteral("ok")) : r.error(); }));
+        QTRY_VERIFY_WITH_TIMEOUT(got.has_value(), 5000);
+        QVERIFY(!tab.isBusy());
+        QCOMPARE(got->code, ErrorCode::Internal);
+        QCOMPARE(got->message, QStringLiteral("The job stopped because of an internal error."));
+        QVERIFY2(got->detail.contains(QStringLiteral("parser blew up")), qPrintable(got->detail));
+        // The next step starts as usual.
+        bool second = false;
+        QVERIFY(tab.run<int>([](const CancellationToken&) -> Result<int> { return 1; },
+                             [&](const Result<int>& r) { second = r.ok() && r.value() == 1; }));
+        QTRY_VERIFY_WITH_TIMEOUT(second, 5000);
+        QVERIFY(!tab.isBusy());
+        // Something that is not a std::exception is caught too.
+        got.reset();
+        QVERIFY(tab.run<int>([](const CancellationToken&) -> Result<int> { throw 42; },
+                             [&](const Result<int>& r) { got = r.ok() ? Error(ErrorCode::InvalidArgument, QStringLiteral("ok")) : r.error(); }));
+        QTRY_VERIFY_WITH_TIMEOUT(got.has_value(), 5000);
+        QCOMPARE(got->code, ErrorCode::Internal);
+        QVERIFY(!tab.isBusy());
+    }
+
+    // H3: a tab closed while (or right after) its work threw goes quietly
+    // (the destructor's wait must not rethrow into a noexcept destructor).
+    void toolTabClosedWhileWorkThrowsGoesQuietly()
+    {
+        std::atomic<bool> entered{false};
+        {
+            BareTool tab(*m_ctx, fakeConsole(fwtest::refusedPort()), QStringLiteral("bare"));
+            QVERIFY(tab.run<int>(
+                [&entered](const CancellationToken&) -> Result<int> {
+                    entered = true;
+                    QThread::msleep(100);
+                    throw std::bad_alloc();
+                },
+                [](const Result<int>&) {}));
+            QTRY_VERIFY_WITH_TIMEOUT(entered.load(), 5000);
+        } // ~ConsoleToolTab waits for the throwing work
+        QVERIFY(entered.load());
+        QCoreApplication::processEvents(); // the posted result finds the tab gone
+    }
 
     void autoloaderTabEditsALocalFolder()
     {

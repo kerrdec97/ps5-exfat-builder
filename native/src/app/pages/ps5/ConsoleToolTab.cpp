@@ -23,7 +23,17 @@ ConsoleToolTab::~ConsoleToolTab()
 {
     // Every client wait has a timeout and checks the token every 25 ms.
     m_cancel->cancel(QStringLiteral("Closed"));
-    m_future.waitForFinished();
+    waitQuietly(m_future);
+}
+
+void waitQuietly(QFuture<void>& future) noexcept
+{
+    // Qt 6's waitForFinished() rethrows an exception the task stored; in a
+    // destructor (noexcept) that would end the program.
+    try {
+        future.waitForFinished();
+    } catch (...) {
+    }
 }
 
 void ConsoleToolTab::cancelWork()

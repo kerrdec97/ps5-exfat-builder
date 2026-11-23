@@ -80,8 +80,12 @@ public:
 private:
     std::deque<ps5::KlogLine> m_lines;
     int m_warnings = 0, m_errors = 0;
-    size_t m_max = 20000;
+    size_t m_max = 20000; // kKlogMaxLines
 };
+
+// Kernel-log lines the viewer, the paused buffer and the not yet flushed
+// lines each keep at most (the newest).
+constexpr qsizetype kKlogMaxLines = 20000;
 
 class Ps5ConnectPage : public Page {
     Q_OBJECT
@@ -190,6 +194,7 @@ private:
     void klogFilterChanged();
     void updateKlogStats();
     void flushKlog();
+    void takeKlogLines(const std::vector<ps5::KlogLine>& lines); // a batch from the reader thread
     void klogSnapshot();
     // Y2JB
     QWidget* buildY2jb(QWidget* parent);

@@ -1,6 +1,7 @@
 #include "app/pages/ps5/FindConsole.h"
 
 #include "app/AppContext.h"
+#include "app/pages/ps5/ConsoleToolTab.h"
 #include "app/ui/Icons.h"
 #include "app/ui/Sheet.h"
 #include "connect/ps5/Module.h"
@@ -110,7 +111,7 @@ FindConsolePanel::FindConsolePanel(QWidget* parent) : QWidget(parent)
 FindConsolePanel::~FindConsolePanel()
 {
     m_cancel.cancel();
-    m_future.waitForFinished();
+    waitQuietly(m_future); // never rethrows into this (noexcept) destructor
 }
 
 void FindConsolePanel::start(const ps5::DiscoveryOptions& options)
@@ -143,12 +144,21 @@ void FindConsolePanel::start(const ps5::DiscoveryOptions& options)
     // panel is looked at on the UI thread.
     QPointer<FindConsolePanel> self(this);
     m_future = QtConcurrent::run([self, options, token, gen] {
-        auto r = ps5::discoverConsoles(options, token, [self, gen](int done, int total, int found) {
-            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, done, total, found] {
-                if (self)
-                    self->onProgress(gen, done, total, found);
-            }, Qt::QueuedConnection);
-        });
+        // A search that throws still ends (else the panel would say "Looking…" for ever).
+        Result<std::vector<ps5::DiscoveredConsole>> r =
+            Error(ErrorCode::Internal, QStringLiteral("The job stopped because of an internal error."));
+        try {
+            r = ps5::discoverConsoles(options, token, [self, gen](int done, int total, int found) {
+                QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, done, total, found] {
+                    if (self)
+                        self->onProgress(gen, done, total, found);
+                }, Qt::QueuedConnection);
+            });
+        } catch (const std::exception& e) {
+            r = Error(ErrorCode::Internal, QStringLiteral("The job stopped because of an internal error."),
+                      QString::fromUtf8(e.what()));
+        } catch (...) {
+        }
         QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, r] {
             if (self)
                 self->onFinished(gen, r);

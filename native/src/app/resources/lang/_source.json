@@ -3129,6 +3129,7 @@
 {"text": "apply to game folders", "where": ["app/pages/BackportPage.cpp"]},
 {"text": "at an unknown time", "where": ["app/services/SetupChecklist.cpp"]},
 {"text": "auto, or a locale such as en-US, de-DE or fr-FR.", "where": ["connect/ps5/MountConfig.cpp"]},
+{"text": "auto_update_ampr installs drakmor's ampr_emu, which cannot read zstd packs: games packed by this app would stop starting.", "where": ["connect/ps5/MountConfig.cpp"]},
 {"text": "autoload.txt has edits that are not saved", "where": ["app/pages/Ps5ConnectPage.cpp"]},
 {"text": "autoload.txt lists no payloads yet.", "where": ["connect/ps5/Autoloader.cpp"]},
 {"text": "autoload.txt loaded", "where": ["app/pages/ps5/AutoloaderTab.cpp"]},

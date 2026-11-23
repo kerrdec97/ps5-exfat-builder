@@ -137,17 +137,17 @@ void SmpLogTab::fetch()
             FW_TRY(c.open(ep.host, ep.ftpPort, t));
             const QString path = previous ? ps5::mountPreviousDebugLogRemotePath(ps5::MountTool::ShadowMountPlus)
                                           : ps5::mountDebugLogRemotePath(ps5::MountTool::ShadowMountPlus);
-            auto bytes = c.download(path, t);
+            // Only the tail crosses the network (and sits in memory): the log can be gigabytes after weeks of debug=1.
+            const auto total = c.size(path);
+            auto bytes = c.downloadTail(path, kTail, t);
             c.quit();
             if (!bytes.ok()) {
                 if (bytes.error().code == ErrorCode::NotFound)
                     return Error(ErrorCode::NotFound, QStringLiteral("%1 is not on the console (debug=0, or ShadowMount+ has not run yet).").arg(path));
                 return bytes.takeError();
             }
-            QByteArray b = bytes.value();
-            const bool cut = b.size() > kTail;
-            if (cut)
-                b = b.right(kTail);
+            const QByteArray b = bytes.value();
+            const bool cut = total.ok() ? total.value() > kTail : b.size() >= kTail;
             return Got{QString::fromUtf8(b), cut ? FW_TR("%1 over FTP, last %2.").arg(path, formatBytes(kTail)) : FW_TR("%1 over FTP.").arg(path)};
         },
         [this, gen = ++m_fetchGen](const Result<Got>& r) {

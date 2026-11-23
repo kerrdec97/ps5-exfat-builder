@@ -5,6 +5,7 @@
 #include "app/pages/ps5/AutoloaderTab.h"
 #include "app/pages/ps5/ConsoleExtras.h"
 #include "app/pages/ps5/ConsoleHero.h"
+#include "app/pages/ps5/ConsoleToolTab.h"
 #include "app/pages/ps5/DiagnosticsTab.h"
 #include "app/pages/ps5/FakelibTab.h"
 #include "app/pages/ps5/FindConsole.h"
@@ -463,7 +464,7 @@ Ps5ConnectPage::~Ps5ConnectPage()
 {
     if (m_klogClient)
         m_klogClient->stop();
-    m_probe.waitForFinished();
+    waitQuietly(m_probe); // never rethrows into this (noexcept) destructor
 }
 
 int Ps5ConnectPage::settingPort(const QString& key, int fallback) const
@@ -1920,6 +1921,20 @@ void Ps5ConnectPage::updateKlogStats()
     emit statusContextChanged();
 }
 
+void Ps5ConnectPage::takeKlogLines(const std::vector<ps5::KlogLine>& lines)
+{
+    // The view keeps the last kKlogMaxLines: more waiting for the next flush would only be dropped there.
+    if (qsizetype(lines.size()) >= kKlogMaxLines) {
+        m_klogIncoming.assign(lines.end() - kKlogMaxLines, lines.end());
+    } else {
+        m_klogIncoming.insert(m_klogIncoming.end(), lines.begin(), lines.end());
+        if (qsizetype(m_klogIncoming.size()) > kKlogMaxLines)
+            m_klogIncoming.erase(m_klogIncoming.begin(), m_klogIncoming.end() - kKlogMaxLines);
+    }
+    if (!m_klogFlush->isActive())
+        m_klogFlush->start();
+}
+
 void Ps5ConnectPage::flushKlog()
 {
     if (m_klogIncoming.empty())
@@ -1931,7 +1946,7 @@ void Ps5ConnectPage::flushKlog()
         return;
     }
     m_klogHeld.insert(m_klogHeld.end(), lines.begin(), lines.end());
-    while (m_klogHeld.size() > 20000)
+    while (qsizetype(m_klogHeld.size()) > kKlogMaxLines)
         m_klogHeld.pop_front();
 }
 
@@ -1958,15 +1973,14 @@ void Ps5ConnectPage::klogToggle()
     // Posted to the application object: the page may be gone when a call arrives, and only the UI thread may ask.
     QPointer<Ps5ConnectPage> self(this);
     const quint64 gen = m_klogGen;
-    m_klogClient = std::make_unique<ps5::KlogClient>(
+    // One posted call per batch (at most every 100 ms), not one per line.
+    m_klogClient = ps5::KlogClient::withBatches(
         o,
-        [self, gen](const ps5::KlogLine& line) {
-            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, line] {
+        [self, gen](const std::vector<ps5::KlogLine>& lines) {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, lines] {
                 if (!self || gen != self->m_klogGen)
                     return;
-                self->m_klogIncoming.push_back(line);
-                if (!self->m_klogFlush->isActive())
-                    self->m_klogFlush->start();
+                self->takeKlogLines(lines);
             }, Qt::QueuedConnection);
         },
         [self, gen](ps5::KlogState st, const QString& detail) {

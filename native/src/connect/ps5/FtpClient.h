@@ -161,8 +161,16 @@ public:
     // `remote`. offset > 0 resumes with REST + STOR; append = APPE.
     Status store(const QString& remote, QIODevice& in, qint64 offset = 0, const FtpProgress& progress = {},
                  const CancellationToken& token = {}, bool append = false);
-    // Small helpers for whole files in memory.
-    Result<QByteArray> download(const QString& remote, const CancellationToken& token = {});
+    // Small helpers for whole files in memory. download() fails with
+    // CorruptData (and drops the connection) once the file passes `maxBytes`.
+    static constexpr qint64 kMaxDownloadBytes = 64LL * 1024 * 1024;
+    Result<QByteArray> download(const QString& remote, const CancellationToken& token = {},
+                                qint64 maxBytes = kMaxDownloadBytes);
+    // The last `maxBytes` of `remote` (all of it when smaller): SIZE, then
+    // RETR with REST from size - maxBytes, so only the tail crosses the
+    // network. A server that knows no SIZE or refuses REST sends the whole
+    // file, of which only the last `maxBytes` are kept in memory.
+    Result<QByteArray> downloadTail(const QString& remote, qint64 maxBytes, const CancellationToken& token = {});
     Status upload(const QString& remote, const QByteArray& data, const CancellationToken& token = {});
     // Legacy _ftp_upload_to safe swap: STOR to "<final><tempSuffix>", move an
     // existing final aside to "<final>.replacing.bak", rename the temp over the

@@ -31,7 +31,12 @@ struct FtpEntry {
 // `now` decides the year of "Mon DD HH:MM" timestamps (the last 12 months).
 std::optional<FtpEntry> parseListLine(const QString& line, const QDateTime& now = QDateTime::currentDateTimeUtc());
 std::optional<FtpEntry> parseMlsdLine(const QString& line);
-std::vector<FtpEntry> parseListing(const QByteArray& data, bool mlsd);
+// No console folder a person opens holds this many entries; a listing that
+// does would cost gigabytes as entries (and again in every copy of them).
+constexpr qsizetype kMaxListingEntries = 200000;
+// Parses one listing. Stops after kMaxListingEntries entries and sets
+// `*tooMany` (when given) if there were more.
+std::vector<FtpEntry> parseListing(const QByteArray& data, bool mlsd, bool* tooMany = nullptr);
 
 // "YYYYMMDDHHMMSS[.sss]" (MLSD modify=, MDTM replies) as UTC.
 QDateTime parseFtpTimestamp(const QString& text);

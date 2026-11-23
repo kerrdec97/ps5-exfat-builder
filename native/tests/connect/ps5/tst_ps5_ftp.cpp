@@ -147,6 +147,40 @@ private slots:
         QVERIFY(upper && upper->isDir);
         const auto all = parseListing("type=dir; a\r\ntype=file;size=1; b\r\n", true);
         QCOMPARE(int(all.size()), 2);
+        bool tooMany = true;
+        QCOMPARE(int(parseListing("type=file;size=1; b", true, &tooMany).size()), 1); // no final '\n'
+        QVERIFY(!tooMany);
+    }
+
+    // A10: a listing has an entry ceiling as well as a byte ceiling.
+    void listingWithTooManyEntriesIsRefused()
+    {
+        QByteArray big;
+        for (int i = 0; i < 250000; ++i)
+            big += "type=file;size=1; f" + QByteArray::number(i) + "\r\n";
+        bool tooMany = false;
+        const auto parsed = parseListing(big, true, &tooMany);
+        QVERIFY(tooMany);
+        QCOMPARE(qsizetype(parsed.size()), kMaxListingEntries);
+        tooMany = true;
+        QCOMPARE(qsizetype(parseListing(big.left(big.indexOf("f200000") - 18), true, &tooMany).size()), kMaxListingEntries);
+        QVERIFY(!tooMany); // exactly the ceiling is fine
+
+        QStringList names;
+        for (int i = 0; i < 250000; ++i)
+            names << QStringLiteral("n%1").arg(i);
+        for (const bool mlsd : {true, false}) {
+            auto o = server(fresh(QStringLiteral("many")));
+            o.mlsd = mlsd;
+            o.extraListNames = names;
+            FakeFtpServer srv(o);
+            FtpClient c(quick());
+            QVERIFY(c.open(QStringLiteral("127.0.0.1"), srv.port()).ok());
+            auto l = c.list(QStringLiteral("/"));
+            QVERIFY(!l.ok());
+            QCOMPARE(l.error().code, ErrorCode::CorruptData);
+            QVERIFY(l.error().message.contains(QStringLiteral("200,000")));
+        }
     }
 
     void remotePathRules()

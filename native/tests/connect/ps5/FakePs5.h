@@ -189,6 +189,7 @@ public:
     }
     int maxConcurrentTransfers() const { return m_maxActive.load(); }
     qint64 bytesReceived() const { return m_received.load(); }
+    qint64 bytesSent() const { return m_sent.load(); } // RETR data, all connections
     void setThrottle(qint64 bps)
     {
         m_t.run([this, bps] { m_opt.throttleBytesPerSec = bps; });
@@ -440,6 +441,7 @@ private:
             if (n > 0) {
                 d->write(bytes.constData() + *pos, n);
                 *pos += n;
+                m_sent.fetch_add(n);
             }
             if (drop && !m_dropped && *pos >= m_opt.dropAfterBytes && *pos < bytes.size()) {
                 m_dropped = true;
@@ -859,6 +861,7 @@ private:
     std::atomic<int> m_active{0};
     std::atomic<int> m_maxActive{0};
     std::atomic<qint64> m_received{0};
+    std::atomic<qint64> m_sent{0}; // RETR data written to data connections
     bool m_dropped = false;
     int m_goneLeft = 0; // connections still to refuse after a goneAfterDrop drop (-1: all)
     bool m_failedPasv = false;

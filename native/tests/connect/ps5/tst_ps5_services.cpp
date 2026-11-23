@@ -315,6 +315,83 @@ private slots:
         QCOMPARE(s.flush(), QStringLiteral("tail"));
     }
 
+    // A8: no klog line is longer than 16 KiB (+ "…"), with or without '\n'.
+    void klogSplitterCutsLongLines()
+    {
+        constexpr qsizetype kMax = KlogLineSplitter::kMaxLineBytes;
+        QCOMPARE(kMax, qsizetype(16 * 1024));
+        KlogLineSplitter s;
+        // 3 MiB without '\n', fed in 64 KiB reads.
+        QStringList lines;
+        const QByteArray chunk(64 * 1024, 'x');
+        for (int i = 0; i < 48; ++i)
+            lines << s.feed(chunk);
+        QVERIFY(!lines.isEmpty());
+        for (const QString& l : lines)
+            QVERIFY2(l.size() <= kMax + 1, qPrintable(QString::number(l.size())));
+        QCOMPARE(lines.front().size(), kMax + 1);
+        QVERIFY(lines.front().endsWith(QChar(0x2026)));
+        // The rest of that line is dropped; the next line comes through whole.
+        lines = s.feed("yyy\nnext line\n");
+        QCOMPARE(lines, QStringList{QStringLiteral("next line")});
+        // A long line with its '\n' in the same read is cut too.
+        lines = s.feed(QByteArray(100 * 1024, 'z') + "\nshort\n");
+        QCOMPARE(lines.size(), 2);
+        QCOMPARE(lines.at(0).size(), kMax + 1);
+        QCOMPARE(lines.at(1), QStringLiteral("short"));
+        // A cut never leaves half a UTF-8 character behind.
+        const QByteArray euro = QString::fromUtf8("€").toUtf8();
+        QByteArray mixed = QByteArray(kMax - 1, 'a') + euro + "\n";
+        lines = s.feed(mixed);
+        QCOMPARE(lines.size(), 1);
+        QVERIFY(!lines.front().contains(QChar(0xFFFD)));
+        QVERIFY(lines.front().endsWith(QChar(0x2026)));
+        // Exactly kMax bytes is not cut.
+        lines = s.feed(QByteArray(kMax, 'b') + "\n");
+        QCOMPARE(lines.size(), 1);
+        QCOMPARE(lines.front().size(), kMax);
+        QCOMPARE(s.flush(), QString());
+    }
+
+    // A8: a burst of lines reaches the caller in batches, at most one per 100 ms.
+    void klogClientDeliversBatches()
+    {
+        QByteArray burst;
+        for (int i = 0; i < 50000; ++i)
+            burst += "line " + QByteArray::number(i) + "\n";
+        std::vector<fake::FakeLineServer::Step> steps;
+        for (int i = 0; i < 25; ++i) // 2,000 lines every 10 ms
+            steps.push_back({i == 0 ? 0 : 10, burst.mid(qsizetype(i) * (burst.size() / 25), burst.size() / 25)});
+        steps.push_back({0, burst.mid(qsizetype(25) * (burst.size() / 25))});
+        fake::FakeLineServer srv({steps}, false);
+        std::mutex m;
+        int batches = 0;
+        qint64 lines = 0;
+        QString last;
+        KlogClient::Options o;
+        o.host = QStringLiteral("127.0.0.1");
+        o.port = srv.port();
+        o.reconnect = false;
+        QElapsedTimer clock;
+        clock.start();
+        auto client = KlogClient::withBatches(o, [&](const std::vector<KlogLine>& got) {
+            std::lock_guard g(m);
+            ++batches;
+            lines += qint64(got.size());
+            if (!got.empty())
+                last = got.back().text;
+        });
+        client->start();
+        QVERIFY(QTest::qWaitFor([&] { std::lock_guard g(m); return lines >= 50000; }, 20000));
+        const qint64 elapsed = clock.elapsed();
+        client->stop();
+        std::lock_guard g(m);
+        QCOMPARE(lines, qint64(50000));
+        QCOMPARE(last, QStringLiteral("line 49999"));
+        QVERIFY2(batches <= elapsed / 100 + 2, qPrintable(QStringLiteral("%1 batches in %2 ms").arg(batches).arg(elapsed)));
+        QCOMPARE(client->linesReceived(), qint64(50000));
+    }
+
     void klogClientReconnectsAndDeliversLines()
     {
         // Each connection sends two lines and closes; the client reconnects.
@@ -932,6 +1009,33 @@ private slots:
         const QString warn = mountConfigWarnings(MountTool::ShadowMountPlus, off).join(u'\n');
         QVERIFY(warn.contains(QStringLiteral("Safe to unplug")));
         QVERIFY(warn.contains(QStringLiteral("kstuff_delay")));
+        QVERIFY(!warn.contains(QStringLiteral("zstd")));
+    }
+
+    // F6: auto_update_ampr with drakmor's ampr_emu (the default URL) breaks zstd-packed games.
+    void mountConfigWarnsWhenAmprUpdatesReplaceTheRuntime()
+    {
+        const auto warn = [](const MountConfigValues& v) {
+            return mountConfigWarnings(MountTool::ShadowMountPlus, v).join(u'\n');
+        };
+        MountConfigValues v;
+        v.insert(QStringLiteral("debug"), QStringLiteral("1"));
+        QVERIFY(!warn(v).contains(QStringLiteral("zstd"))); // off by default
+        v.insert(QStringLiteral("auto_update_ampr"), QStringLiteral("0"));
+        QVERIFY(!warn(v).contains(QStringLiteral("zstd")));
+        v.insert(QStringLiteral("auto_update_ampr"), QStringLiteral("1")); // default URL: drakmor/ampr_emu
+        QVERIFY2(warn(v).contains(QStringLiteral("zstd")), qPrintable(warn(v)));
+        QVERIFY(warn(v).contains(QStringLiteral("auto_update_ampr")));
+        v.insert(QStringLiteral("auto_update_ampr"), QStringLiteral("on"));
+        v.insert(QStringLiteral("ampr_update_url"),
+                 QStringLiteral("https://github.com/drakmor/ampr_emu/releases/latest/download/libSceAmpr.sprx"));
+        QVERIFY(warn(v).contains(QStringLiteral("zstd")));
+        v.insert(QStringLiteral("ampr_update_url"),
+                 QStringLiteral("https://github.com/quer3q/ampr-emu-ng/releases/latest/download/libSceAmpr.sprx"));
+        QVERIFY2(!warn(v).contains(QStringLiteral("zstd")), qPrintable(warn(v)));
+        v.insert(QStringLiteral("auto_update_ampr"), QStringLiteral("off"));
+        v.remove(QStringLiteral("ampr_update_url"));
+        QVERIFY(!warn(v).contains(QStringLiteral("zstd")));
     }
 
     void mountConfigV2EditsSectionsAndProfiles()
