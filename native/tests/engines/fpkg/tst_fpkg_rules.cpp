@@ -956,7 +956,43 @@ private slots:
                                        "\"localizedParameters\":{\"defaultLanguage\":\"en-US\",\"en-US\":{\"titleName\":\"Game\"},"
                                        "\"de-DE\":{\"titleName\":\"Spiel\"},\"fr-FR\":{\"titleName\":\"Renamed\"}}}")
                             .arg(kCid).toUtf8()));
+            // "Title for all languages" (default on, GitHub #94): every language takes the new title, nothing to say.
             po = {};
+            QVERIFY(po.titleAllLanguages);
+            po.title = QStringLiteral("Renamed");
+            auto everywhere = plan(e, {}, po);
+            QVERIFY(everywhere.ok());
+            for (const char* lang : {"en-US", "de-DE", "fr-FR"})
+                QCOMPARE(everywhere->param.path(QStringLiteral("localizedParameters.%1.titleName").arg(QLatin1String(lang))).toString(),
+                         QStringLiteral("Renamed"));
+            QVERIFY(!titleWarning(*everywhere));
+            po.title = QStringLiteral("Game"); // unchanged: no language is renamed
+            auto kept = plan(e, {}, po);
+            QVERIFY(kept.ok());
+            QCOMPARE(kept->param.path(QStringLiteral("localizedParameters.de-DE.titleName")).toString(), QStringLiteral("Spiel"));
+            {
+                // The default language has no title of its own: the Build page then shows (and
+                // sends) a fallback, here another language's name or the folder's. That is no
+                // rename, so the other languages keep their real names; the default language
+                // gets the title, as before "Title for all languages".
+                const QString n = dir(QStringLiteral("plan/notitle"));
+                QVERIFY(makeSimpleDump(n));
+                QVERIFY(put(n, QStringLiteral("sce_sys/param.json"),
+                            QStringLiteral("{\"contentId\":\"%1\",\"contentVersion\":\"01.000.000\",\"applicationCategoryType\":0,"
+                                           "\"localizedParameters\":{\"defaultLanguage\":\"en-US\",\"en-US\":{},"
+                                           "\"ja-JP\":{\"titleName\":\"ゲーム\"}}}")
+                                .arg(kCid).toUtf8()));
+                PlanOptions fb;
+                fb.title = QStringLiteral("PPSA01234-app"); // the folder's name
+                auto f = plan(n, {}, fb);
+                QVERIFY(f.ok());
+                QCOMPARE(f->param.path(QStringLiteral("localizedParameters.ja-JP.titleName")).toString(), QStringLiteral("ゲーム"));
+                QCOMPARE(f->param.path(QStringLiteral("localizedParameters.en-US.titleName")).toString(), QStringLiteral("PPSA01234-app"));
+            }
+
+            // Off: the default language only, as the reference toolkit does, and the log says so.
+            po = {};
+            po.titleAllLanguages = false;
             po.title = QStringLiteral("Renamed");
             auto renamed = plan(e, {}, po);
             QVERIFY(renamed.ok());
@@ -970,6 +1006,14 @@ private slots:
             auto same = plan(e, {}, po);
             QVERIFY(same.ok());
             QVERIFY(!titleWarning(*same));
+
+            // The job keeps the choice; a job saved before the option existed takes the default (on).
+            BuildRequest req;
+            req.source = e;
+            req.title = QStringLiteral("Renamed");
+            QVERIFY(BuildRequest::fromJson(req.toJson())->titleAllLanguages);
+            req.titleAllLanguages = false;
+            QVERIFY(!BuildRequest::fromJson(req.toJson())->titleAllLanguages);
         }
         {
             // DLC emulator off: dlc_emu.ini left out, but an empty addcont0 is still an empty folder.
