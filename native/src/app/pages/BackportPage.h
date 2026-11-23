@@ -1,6 +1,7 @@
 #pragma once
 
-// Backport — the owner's PS5 Backport GUI 0.3.4, built into the app.
+// Backport — the owner's PS5 Backport GUI (0.3.4; the 0.3.5-test4 testing
+// build by default, see cmake/BackportEngine.cmake), built into the app.
 //
 // The page is a native, v5-styled replacement for that program's window and
 // behaves one-to-one: the same scan rules, options, dialogs, texts, run order
@@ -49,6 +50,7 @@ struct BackportRow {
     bp::Game game;
     bool checked = true;
     QString status = QStringLiteral("Ready");
+    int statusArg = 0; // fills the %1 of a status such as "Needs SDK ≤ %1" (0: none)
     QString tone = QStringLiteral("idle"); // idle info warn muted busy good bad
     QString detail;
     QJsonObject result;
@@ -132,14 +134,35 @@ public:
     void applyDemoState(const QString& name) override;
     void clearDemoState() override;
 
-    // Close handling (MainWindow): a run or restore in progress, or a worker
-    // that is still alive whatever the page's state says.
-    bool isBusy() const { return isRunning() || (m_worker && m_worker->isRunning()); }
+    // Close handling (MainWindow): a run or restore in progress, the
+    // destination check before a run, or a worker that is still alive
+    // whatever the page's state says.
+    bool isBusy() const { return isPreflight() || isRunning() || (m_worker && m_worker->isRunning()); }
     // A restore cannot be cancelled: closing has to wait for it.
     bool isRestoring() const { return isBusy() && m_kind == Kind::Restore; }
-    // Cancels (a restore is only waited for), then pumps events until the
-    // current worker exits (at most `ms`).
+    // Cancels (a restore is only waited for; a run still checking its
+    // destinations will not start), then pumps events until the current
+    // worker exits (at most `ms`).
     void cancelAndWait(int ms);
+
+    // Tests only: replaces the destination check of Start Backport (it runs
+    // on a pool thread, as the real one); an empty function restores it.
+    using PreflightFn = std::function<bp::Preflight(const QString& out, const QString& bak, const QStringList& games)>;
+    static void setPreflightForTests(PreflightFn fn);
+
+    // The "sdk" job that rebuilds a backport ZIP with Target SDK `pair`. For
+    // the row's own ZIP from this session (`ownRow`), the job also names the
+    // game folder and what that build left unchanged, so PS5 Backport GUI
+    // 0.3.5 rebuilds those executables too (0.3.4 ignores the keys).
+    static QJsonObject sdkJob(int pair, const QString& zip, const QString& outputRoot, const BackportRow* ownRow);
+    // What a newer engine (0.3.5) adds to a result, as (label, text) pairs for
+    // the details and the Activity log: functions without a replacement,
+    // Offline mode, SDK-field and SDK-check notes, what a restore left
+    // (the result keys of 0.3.5-test4). Labels are English source texts (shown translated). None
+    // for a 0.3.4 result.
+    static QList<QPair<QString, QString>> newerEngineDetails(const QJsonObject& result);
+    // True when the bundled engine knows the Offline mode job option (0.3.5).
+    static bool engineHasOfflineMode();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -186,6 +209,15 @@ private:
     void preflightDone(const bp::Preflight& pf, const QStringList& keys, const QStringList& dirs);
     void beginRun(const QStringList& keys);
     bool idleForNewWork(); // says "wait" when a run or its check is active
+    // False, with the reason shown, while a PS5 Backport GUI that this app did
+    // not start runs: both use one engine work folder, which every job clears.
+    bool standaloneEngineIdle(bool backport = false);
+    // Marks waiting rows whose own SDK is below the Target SDK ("Needs SDK ≤ N")
+    // and gives "Ready" back to those the Target SDK allows again.
+    void markSdkLimits();
+    // Ticks, selects and shows the listed game with this folder (Dump check ›
+    // Backport…); with `restore`, offers to restore its originals.
+    void selectRequested();
     bool enterRunning(Kind kind);
     void requestCancel();
     void runNext();
@@ -259,6 +291,9 @@ private:
     bool m_settingsMissing = false; // settings.json did not exist at the last read
     bool m_offerPending = false;    // interrupted applies are offered when the page is next in front
     bool m_exporting = false;       // a support ZIP is being written
+    bool m_abortPreflight = false;  // the app is closing: the run being checked does not start
+    QString m_selectKey;            // a game to select once the list has it (navigateWith "select")
+    bool m_selectRestore = false;   // ...and to offer its restore for
     quint64 m_scanGen = 0;
     std::shared_ptr<std::atomic_bool> m_scanCancel;
     Kind m_kind = Kind::Backport;
@@ -315,6 +350,8 @@ private:
     ui::Switch* m_apply;
     ui::Switch* m_proFix;
     ui::Switch* m_proBuild;
+    ui::Switch* m_offline = nullptr; // 0.3.5 engines only (engineHasOfflineMode)
+    QWidget* m_offlineRow = nullptr;
     QSpinBox* m_depth;
     ui::Badge* m_engineBadge;
     QLabel* m_engineLine;

@@ -8,12 +8,21 @@
 //   fw_test_helper tick <n> [file]            n steps 20 ms apart: prints "tick <i>", or with a
 //                                             file appends one byte to it per step; exit 0
 //   fw_test_helper spawn-tick <n> <file>      start a child "tick <n> <file>" and print n ticks too
+//   fw_test_helper pipe-writer <n> <file>     n JSON progress lines 20 ms apart on stdout, as an engine
+//                                             worker prints them; the first write that fails is recorded
+//                                             in <file> ("write failed at <i> errno <e>"), else "all written"
+//   fw_test_helper orphan <n> <file>          start "pipe-writer <n> <file>" with its stdout on a pipe,
+//                                             read its first line, then exit without closing the pipe:
+//                                             the writer outlives the process that read its output (an app
+//                                             that exits while its engine worker still runs)
 //
 // With a pidfile the sleeping process writes its own process id there first,
 // so a test can check that a grandchild is really gone after a cancel. The
 // ticks show whether a process (and what it started) ran during a pause.
 
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -112,6 +121,51 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         return 0;
+    }
+    if (cmd == "pipe-writer") {
+        const std::string file = argc > 3 ? argv[3] : "";
+        if (file.empty())
+            return 64;
+#ifndef _WIN32
+        std::signal(SIGPIPE, SIG_IGN); // as Python does: a failed write is an error, not a signal
+#endif
+        auto record = [&file](const std::string& text) {
+            if (std::FILE* f = std::fopen(file.c_str(), "ab")) {
+                std::fputs(text.c_str(), f);
+                std::fclose(f);
+            }
+        };
+        for (long i = 1; i <= arg; ++i) {
+            errno = 0;
+            const bool ok = std::printf("{\"event\":\"progress\",\"stage\":\"APPLY\",\"pct\":%ld,\"phase\":\"apply\"}\n", i) > 0
+                && std::fflush(stdout) == 0;
+            if (!ok) {
+                record("write failed at " + std::to_string(i) + " errno " + std::to_string(errno) + "\n");
+                return 0;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        record("all written\n");
+        return 0;
+    }
+    if (cmd == "orphan") {
+        const std::string file = argc > 3 ? argv[3] : "";
+        if (file.empty())
+            return 64;
+        const std::string inner = "\"" + std::string(argv[0]) + "\" pipe-writer " + std::to_string(arg) + " \"" + file + "\"";
+#ifdef _WIN32
+        std::FILE* p = _popen(("\"" + inner + "\"").c_str(), "r"); // cmd /c "<inner>": the outer quotes are cmd's
+#else
+        std::FILE* p = popen(inner.c_str(), "r");
+#endif
+        if (!p)
+            return 66;
+        char line[256];
+        if (!std::fgets(line, sizeof line, p))
+            return 67;
+        std::printf("read %s", line);
+        std::fflush(stdout);
+        std::_Exit(0); // the read end goes with this process; the writer is not waited for
     }
     if (cmd == "stderr") {
         std::fprintf(stderr, "something failed\n");

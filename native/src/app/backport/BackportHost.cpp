@@ -98,8 +98,20 @@ void sweepStaleJobFiles(const QString& jobsDir)
 
 } // namespace
 
+namespace {
+std::function<bool()>& foreignCheckForTests()
+{
+    static std::function<bool()> f;
+    return f;
+}
+} // namespace
+
+void setForeignEngineCheckForTests(std::function<bool()> check) { foreignCheckForTests() = std::move(check); }
+
 bool foreignEngineRunning()
 {
+    if (const auto& f = foreignCheckForTests())
+        return f();
 #ifdef Q_OS_WIN
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE)

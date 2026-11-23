@@ -295,7 +295,7 @@ private slots:
         }
         const auto rows = pages::AboutPage::thirdPartyComponents();
         QCOMPARE(int(rows.size()), int(tableLines.size()) + 1); // the table, then the bundled PS5 Backport engine
-        static const QRegularExpression version(QStringLiteral(" \\d[\\d.]*$"));
+        static const QRegularExpression version(QStringLiteral(" \\d[\\w.-]*$")); // "1.5.7", "0.3.5-test4"
         for (const QStringList& r : rows) {
             QCOMPARE(int(r.size()), 3);
             QString name = r[0].section(QStringLiteral(" ("), 0, 0);

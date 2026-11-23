@@ -16,6 +16,7 @@
 #include <QStringList>
 
 #include <atomic>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -57,13 +58,26 @@ qint64 executableBytes(const QString& folder, const std::atomic_bool* cancel = n
 
 // ---- ledger (applied_backports.json, written by the worker) -----------------------------
 
-QJsonArray readLedger(); // the "applied" rows
-QJsonObject activeLedgerRecord(const QString& gameDir); // {} when none
+// The states of a record or journal. PS5 Backport GUI 0.3.5 adds
+// ROLLBACK_INCOMPLETE (an undo that could not finish) and RESTORING (a restore
+// cut off half way); a folder in either still holds backport files.
+bool isActiveLedgerState(const QString& state);     // APPLIED or unfinished
+bool isUnfinishedLedgerState(const QString& state); // IN_PROGRESS, ROLLBACK_INCOMPLETE, RESTORING
+
+QJsonArray readLedger(); // the "applied" rows that are objects
+// The newest active record for this folder, {} when none. Its "state" is the
+// readable journal's (the journal has the last word); a journal that cannot
+// be read keeps the folder flagged by the record; an undo that left none of
+// the backport's files (0.3.5: backport_files_left false) does not count.
+QJsonObject activeLedgerRecord(const QString& gameDir);
 QJsonObject activeLedgerRecord(const QString& gameDir, const QJsonArray& ledger);
 
-// Ledger rows whose apply never finished (ledger and journal both IN_PROGRESS)
-// and whose journal has not been written for `quietSeconds`: a journal that is
-// still being written belongs to an apply that is running, not interrupted.
+// Ledger rows whose apply or restore never finished (an active record and a
+// readable journal in an unfinished state, for a game folder that still
+// exists) and whose journal has not been written for `quietSeconds`: a
+// journal that is still being written belongs to an apply that is running,
+// not interrupted. Each row's "state" is the journal's, and "written_by_035"
+// says the journal carries keys only PS5 Backport GUI 0.3.5 writes.
 inline constexpr int kApplyQuietSeconds = 5 * 60;
 std::vector<QJsonObject> unfinishedApplies(int quietSeconds);
 // The applies to offer a restore for: unfinishedApplies(kApplyQuietSeconds),
@@ -102,6 +116,22 @@ struct Preflight {
 };
 Preflight preflight(const QString& outputDir, const QString& backupDir, const QStringList& gameDirs,
                     const std::atomic_bool* cancel = nullptr);
+// Tests only: the free bytes preflight() sees for a folder (an empty function restores the real probe).
+void setFreeSpaceProbeForTests(std::function<qint64(const QString&)> probe);
+
+// What preflight() asks of the output and the backup folder for games whose
+// executables hold `executableBytes` (0.3.5 rules: output 2.2x + 50 MB,
+// backup 1.6x + 20 MB). On one drive the two are checked together as well.
+struct SpaceNeed {
+    qint64 output = 0, backup = 0;
+};
+SpaceNeed spaceNeed(qint64 executableBytes);
+
+// The highest Target SDK a game with its own SDK `gameSdk` ("7.00") can be
+// built for, when `target` is above it; nullopt when the build is allowed or
+// the game's SDK is not known (the worker's own refusal rule, said before the
+// run). Target SDK 4 is always allowed.
+std::optional<int> sdkCeiling(const QString& gameSdk, int target);
 
 // ---- AMPR / PlayGo ----------------------------------------------------------------------
 
