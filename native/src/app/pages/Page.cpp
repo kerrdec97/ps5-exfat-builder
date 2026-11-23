@@ -16,12 +16,14 @@
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QMutex>
 #include <QPainter>
 #include <QTextLayout>
 #include <QPointer>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QStorageInfo>
+#include <QThreadPool>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -636,8 +638,44 @@ QString driveLabel(const QString& path)
     return root.isEmpty() ? FW_TR("this drive") : root;
 }
 
+namespace {
+
+QMutex g_driveHookMutex;
+std::function<DriveSpace(const QString&)> g_driveHook; // tests: setDriveSpaceHookForTests()
+
+} // namespace
+
+void setDriveSpaceHookForTests(std::function<DriveSpace(const QString& folder)> hook)
+{
+    const QMutexLocker lock(&g_driveHookMutex);
+    g_driveHook = std::move(hook);
+}
+
+QThreadPool& drivePool()
+{
+    // Never destroyed: a probe stuck on a network share that does not answer
+    // must not hold up the end of the process (a static pool would wait for
+    // it at exit, as the global pool does).
+    static QThreadPool* pool = [] {
+        auto* p = new QThreadPool;
+        p->setMaxThreadCount(2);
+        p->setExpiryTimeout(30000);
+        return p;
+    }();
+    return *pool;
+}
+
 DriveSpace driveSpaceOf(const QString& folder)
 {
+    {
+        std::function<DriveSpace(const QString&)> hook;
+        {
+            const QMutexLocker lock(&g_driveHookMutex);
+            hook = g_driveHook;
+        }
+        if (hook)
+            return hook(folder);
+    }
     // A folder that is not created yet: the drive it will be on.
     QString path = folder.isEmpty() ? QDir::homePath() : folder;
     while (!QFileInfo::exists(path)) {
@@ -663,13 +701,17 @@ void probeFreeSpace(QObject* context, const QString& folder, std::function<void(
     if (!context)
         return; // nobody to answer
     QPointer<QObject> guard(context);
-    (void)QtConcurrent::run([guard, folder, done = std::move(done)] {
+    // On the drive pool, not the global one: a drive that does not answer
+    // blocks its probes for the network timeout, and the global pool's
+    // threads are what the pages' other background work runs on.
+    (void)QtConcurrent::run(&drivePool(), [guard, folder, done = std::move(done)] {
         const DriveSpace d = driveSpaceOf(folder);
         // The context is only touched on the UI thread, where the pointer is tested.
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [guard, d, done] {
-            if (guard)
-                done(d.ready, d.available, d.label);
-        }, Qt::QueuedConnection);
+        if (QCoreApplication* app = QCoreApplication::instance())
+            QMetaObject::invokeMethod(app, [guard, d, done] {
+                if (guard)
+                    done(d.ready, d.available, d.label);
+            }, Qt::QueuedConnection);
     });
 }
 

@@ -23,6 +23,7 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <memory>
 
 namespace {
 
@@ -111,9 +112,17 @@ int main(int argc, char* argv[])
     if (!parser.isSet(selfTestOpt) && !instanceLock.tryLock(lockWaitMs)) {
         // Only a lock another copy holds means "already running"; anything else is a data folder that cannot be used.
         if (instanceLock.error() == QLockFile::LockFailedError) {
+            // A copy whose window is gone is still closing: it waits for a job
+            // that has not stopped yet, and there is no window to switch to.
+            qint64 pid = 0;
+            QString host, appName;
+            const bool closing = instanceLock.getLockInfo(&pid, &host, &appName) && pid > 0
+                                 && pid != QCoreApplication::applicationPid() && !fw::launcher::processHasVisibleWindow(pid);
             QMessageBox::information(nullptr, QStringLiteral("exFAT Image Builder"),
-                                     FW_TR("exFAT Image Builder is already running. Switch to its window "
-                                           "(two copies would share the same queue and output files)."));
+                                     closing ? FW_TR("A copy of exFAT Image Builder is still closing: it is waiting for a job to stop. Try "
+                                                     "again in a minute. If it does not end, end \"exFAT Image Builder\" in Task Manager.")
+                                             : FW_TR("exFAT Image Builder is already running. Switch to its window "
+                                                     "(two copies would share the same queue and output files)."));
             return 0;
         }
         QMessageBox::critical(nullptr, QStringLiteral("exFAT Image Builder"),
@@ -156,19 +165,25 @@ int main(int argc, char* argv[])
 
     if (parser.isSet(screenshotOpt))
         app.setProperty("fwScreenshotMode", true); // pages show demo data and touch no user files
-    fw::MainWindow window(context);
-    window.show();
-    fw::launcher::applyTaskbarIdentity(&window); // pin the single-file launcher, not its unpacked copy
+    auto window = std::make_unique<fw::MainWindow>(context);
+    window->show();
+    fw::launcher::applyTaskbarIdentity(window.get()); // pin the single-file launcher, not its unpacked copy
 
     if (parser.isSet(screenshotOpt)) {
         const QString dir = parser.value(screenshotOpt);
-        QTimer::singleShot(500, &window, [&window, dir] {
-            const int written = window.screenshotAllPages(dir);
+        QTimer::singleShot(500, window.get(), [w = window.get(), dir] {
+            const int written = w->screenshotAllPages(dir);
             std::fprintf(stdout, "wrote %d page screenshots to %s\n", written, qPrintable(QDir::toNativeSeparators(dir)));
             QApplication::exit(written > 0 ? 0 : 2);
         });
     } else if (quitAfterMs >= 0) {
         QTimer::singleShot(quitAfterMs, &app, &QApplication::quit);
     }
-    return app.exec();
+    const int rc = app.exec();
+    // The queue first, while the window still exists: running jobs are told
+    // to stop at once (not only after the pages' own waits below), and what
+    // they report meanwhile is recorded. Then the window and its pages.
+    context.shutdownQueue();
+    window.reset();
+    return rc;
 }

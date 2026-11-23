@@ -68,4 +68,46 @@ void applyTaskbarIdentity(QWidget* window)
 #endif
 }
 
+bool processHasVisibleWindow(qint64 pid)
+{
+#ifdef Q_OS_WIN
+    struct Search {
+        DWORD pid;
+        bool found;
+    } search{DWORD(pid), false};
+    EnumWindows(
+        [](HWND hwnd, LPARAM param) -> BOOL {
+            auto* s = reinterpret_cast<Search*>(param);
+            DWORD owner = 0;
+            GetWindowThreadProcessId(hwnd, &owner);
+            if (owner == s->pid && IsWindowVisible(hwnd)) {
+                s->found = true;
+                return FALSE; // stop
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&search));
+    return search.found;
+#else
+    Q_UNUSED(pid);
+    return true;
+#endif
+}
+
+void setShutdownBlockReason(QWidget* window, const QString& reason)
+{
+#ifdef Q_OS_WIN
+    if (!window || !window->windowHandle())
+        return;
+    const auto hwnd = reinterpret_cast<HWND>(window->winId());
+    if (reason.isEmpty())
+        ShutdownBlockReasonDestroy(hwnd);
+    else
+        ShutdownBlockReasonCreate(hwnd, reinterpret_cast<LPCWSTR>(reason.utf16()));
+#else
+    Q_UNUSED(window);
+    Q_UNUSED(reason);
+#endif
+}
+
 } // namespace fw::launcher

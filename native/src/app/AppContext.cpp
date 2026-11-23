@@ -14,6 +14,8 @@
 #include <QPointer>
 #include <QSettings>
 #include <QThreadPool>
+
+#include <exception>
 #include <QtConcurrent/QtConcurrentRun>
 
 namespace fw {
@@ -51,11 +53,20 @@ AppContext::AppContext(QObject* parent) : QObject(parent), m_schema(std::make_sh
 
 AppContext::~AppContext()
 {
-    // A dependency check still running uses m_deps: wait for it first.
-    for (QFuture<void>& f : m_depChecks)
-        f.waitForFinished();
-    if (m_queue)
-        m_queue->shutdown(15000);
+    // A dependency check still running uses m_deps: wait for it first. A
+    // destructor must not throw: QFuture::waitForFinished() rethrows what a
+    // task threw, and that would end the app with std::terminate.
+    for (QFuture<void>& f : m_depChecks) {
+        try {
+            f.waitForFinished();
+        } catch (const std::exception& e) {
+            Log(QStringLiteral("app")).warn(QStringLiteral("A dependency check ended with an error: %1").arg(QString::fromUtf8(e.what())));
+        } catch (...) {
+            Log(QStringLiteral("app")).warn(QStringLiteral("A dependency check ended with an error."));
+        }
+    }
+    shutdownQueue();
+    flushSettingsSave();
     // The logger is process-wide and outlives this object: none of its sinks
     // stays registered (the file sink would keep the log file open).
     Logger::instance().flush();
@@ -64,6 +75,43 @@ AppContext::~AppContext()
             Logger::instance().removeSink(sink);
     if (g_instance == this)
         g_instance = nullptr;
+}
+
+void AppContext::shutdownQueue(int waitMs)
+{
+    if (m_queueShutDown || !m_queue)
+        return;
+    m_queueShutDown = true;
+    if (!m_queue->shutdown(waitMs)) {
+        // A worker that does not reach a checkpoint keeps the closed app in
+        // memory: the log (its sinks are still here) says which jobs were running.
+        Log(QStringLiteral("queue")).warn(QStringLiteral("Still waiting for a job to stop after %1 s. Running when the app closed: %2")
+                                              .arg(waitMs / 1000)
+                                              .arg(m_queue->activeTitles().join(QStringLiteral("; "))));
+    }
+    flushSettingsSave();
+    Logger::instance().flush();
+}
+
+void AppContext::flushSettingsSave()
+{
+    if (!m_savePending)
+        return;
+    m_saveTimer.stop();
+    saveSettingsNow();
+}
+
+void AppContext::saveSettingsNow()
+{
+    m_savePending = false;
+    ++m_settingsSaves;
+    const Status saved = m_settings->save();
+    if (!saved.ok() && !m_saveFailureLogged) {
+        m_saveFailureLogged = true; // once: every further change would say the same
+        Log(QStringLiteral("app")).warn(QStringLiteral("Settings could not be saved: %1").arg(saved.error().toLogString()));
+    } else if (saved.ok()) {
+        m_saveFailureLogged = false;
+    }
 }
 
 LogModel& AppContext::logModel()
@@ -80,25 +128,36 @@ Status AppContext::initialize(Mode mode)
     m_ring = std::make_shared<RingBufferSink>(20000);
     Logger::instance().addSink(m_ring);
 
-    FW_TRY(m_settings->load());
+    // Read-only: a damaged settings file of the running app stays where it is.
+    FW_TRY(m_settings->load(/*setAsideDamaged=*/mode != Mode::ReadOnly));
     const auto snap = m_settings->snapshot();
-    const QString customLogs = snap.string(general::keys::kLogFolder).trimmed();
-    const QString logsDir = (!customLogs.isEmpty() && QFileInfo(customLogs).isDir()) ? customLogs : Paths::logsDir();
-    m_file = std::make_shared<FileLogSink>(logsDir, QStringLiteral("farewell"),
-                                           snap.integer(general::keys::kLogMaxMiB) * 1024 * 1024,
-                                           int(snap.integer(general::keys::kLogKeepFiles)));
-    Logger::instance().addSink(m_file);
+    // Read-only: the log stays in memory. The running app's log files are
+    // neither appended to nor rotated by a second process.
+    if (mode != Mode::ReadOnly) {
+        const QString customLogs = snap.string(general::keys::kLogFolder).trimmed();
+        const QString logsDir = (!customLogs.isEmpty() && QFileInfo(customLogs).isDir()) ? customLogs : Paths::logsDir();
+        m_file = std::make_shared<FileLogSink>(logsDir, QStringLiteral("farewell"),
+                                               snap.integer(general::keys::kLogMaxMiB) * 1024 * 1024,
+                                               int(snap.integer(general::keys::kLogKeepFiles)));
+        Logger::instance().addSink(m_file);
+    }
     applyLogLevel();
-    connect(m_settings.get(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
+    // One save for all the changes of one turn of the event loop: Reset all
+    // and the v4 import change dozens of keys, and each save is a synced
+    // rewrite of the file. Closing the app saves what is still pending.
+    m_saveTimer.setSingleShot(true);
+    m_saveTimer.setInterval(0);
+    connect(&m_saveTimer, &QTimer::timeout, this, [this] {
+        if (m_savePending)
+            saveSettingsNow();
+    });
+    connect(m_settings.get(), &SettingsStore::changed, this, [this, mode](const QString& key, const QVariant&) {
         if (key == general::keys::kLogLevel)
             applyLogLevel();
-        const Status saved = m_settings->save();
-        if (!saved.ok() && !m_saveFailureLogged) {
-            m_saveFailureLogged = true; // once: every further change would say the same
-            Log(QStringLiteral("app")).warn(QStringLiteral("Settings could not be saved: %1").arg(saved.error().toLogString()));
-        } else if (saved.ok()) {
-            m_saveFailureLogged = false;
-        }
+        if (mode == Mode::ReadOnly)
+            return; // never writes the running app's settings file
+        m_savePending = true;
+        m_saveTimer.start();
     });
 
     // Called on whichever thread logs: the record is posted to the application

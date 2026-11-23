@@ -18,6 +18,8 @@
 #include <QSystemTrayIcon>
 #include <QTimer>
 
+#include <functional>
+
 namespace fw {
 
 class AppContext;
@@ -65,6 +67,23 @@ public:
     // The "When the queue finishes" countdown while it is open (else null).
     ui::Sheet* afterQueueCountdown() const { return m_countdown; }
 
+    // Tests: what closeEvent() asks the Backport page (busy, restoring,
+    // cancel-and-wait) instead of the page itself (an empty function: the
+    // page), and how long one close wait for the engine lasts (default 120 s).
+    struct BackportHooks {
+        std::function<bool()> busy;
+        std::function<bool()> restoring;
+        std::function<void(int ms)> cancelAndWait;
+    };
+    void setBackportHooksForTests(BackportHooks hooks, int closeWaitMs = 0);
+    // Tests: how long "Close when it is done" waits for a busy PS5 tool.
+    void setPs5CloseWaitForTests(int ms) { m_ps5CloseWaitMs = ms; }
+
+    // Windows ends the session (commitDataRequest): true while a job, a
+    // backport run or a PS5 tool is at work, with the reason Windows shows
+    // set on the window (false clears it). The caller cancels the session end.
+    bool sessionEndMustWait();
+
 protected:
     void closeEvent(QCloseEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
@@ -82,6 +101,12 @@ private:
     void onQueueFinished(int succeeded, int failed, int cancelled);
     void onActionDue(power::Action action, int delaySeconds, int succeeded, int failed);
     QString workOutsideTheQueue() const;
+    bool workBlocksSessionEnd() const;
+    bool stopBackportForClose();    // closeEvent(): false keeps the window open
+    bool finishPs5ToolsForClose();  // the same for a busy PS5 connect tool
+    bool backportBusy() const;
+    bool backportRestoring() const;
+    void backportCancelAndWait(int ms);
     void updateStatus();
     void updateChips();
     void refreshFreeSpace();
@@ -92,6 +117,8 @@ private:
     void setUpdateBanner(ui::InfoBar* bar);
     void showUpdateAvailable();
     void showUpdateDownloaded();
+    void rememberDownloadedUpdate(const QString& version, const QString& path);
+    QString rememberedDownloadedUpdate(const QString& version) const; // empty: none, or it changed
     void runUpdateAction();
     void restoreWindowState();
     void saveWindowState();
@@ -122,6 +149,8 @@ private:
     pages::Ps5ConnectPage* m_ps5Page = nullptr;
     QSet<QString> m_openFolderWhenDone;
     quint64 m_freeSpaceGen = 0; // refreshFreeSpace(): the newest probe wins
+    bool m_freeSpaceInFlight = false; // a probe has not answered yet
+    bool m_freeSpaceAgain = false;    // a refresh came meanwhile: probe again when it answers
     // The app-update lifecycle (one owner: the update slots):
     //   Idle ─▶ Checking ─▶ UpToDate | Available ─▶ Downloading ─▶ Downloaded
     //                                      ▲              │ failed, refused or cancelled
@@ -143,7 +172,14 @@ private:
     QTimer m_freeSpaceTimer;
     bool m_userCompact = false; // the sidebar is collapsed (the header's menu button; remembered)
     bool m_narrow = false;      // the window is narrower than size::sidebarFoldBelow: the sidebar shows its rail
-    bool m_closeInProgress = false; // closeEvent() is waiting for the backport engine to stop
+    bool m_closeInProgress = false; // closeEvent() is waiting for the backport engine or a PS5 tool to stop
+    bool m_closeAccepted = false;   // closeEvent() let the window close: results that arrive now are not shown
+    bool m_backportCutOff = false;  // this close: the user chose to cut a backport run off
+    BackportHooks m_backportHooks;
+    int m_backportCloseWaitMs = 120000; // one wait for a cancelled backport run to stop
+    int m_ps5CloseWaitMs = 120000;      // how long "Close when it is done" waits for a PS5 tool
+    bool m_shutdownBlocked = false;     // a shutdown block reason is set on the window
+    bool m_queueSaveWarned = false;     // "The queue could not be saved" shown (once a session)
 };
 
 } // namespace fw

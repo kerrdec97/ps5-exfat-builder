@@ -103,8 +103,15 @@ public:
     Status saveQueue() const;
     Status restoreQueue();
 
-    // Cancels everything and waits up to `msecs` for workers to stop.
+    // Cancels everything and waits up to `msecs` for workers to stop. What the
+    // workers that ended meanwhile report is recorded before it returns (the
+    // event loop has stopped by then): a job that finished is kept as
+    // finished, one that stopped for the close comes back as Interrupted.
+    // Refuses new jobs from then on ("The app is closing.").
     bool shutdown(int msecs = 15000);
+    bool isShuttingDown() const { return m_shuttingDown; }
+    // The titles of the jobs a worker still holds (running, paused, cancelling).
+    QStringList activeTitles() const;
 
 signals:
     void jobAdded(const QString& id);
@@ -114,9 +121,17 @@ signals:
     void orderChanged();
     void heldChanged(bool held); // holdQueue(), restoreQueue()
     void idle();
+    // The queue file could not be written (first failure of a streak; the
+    // log has the details). `message` is English, for the log.
+    void persistenceFailed(const QString& message);
 
 private:
     struct Entry;
+    // saveQueue(), and a failure logged once per streak (persistenceFailed).
+    void persist();
+    void appendHistory(const JobRecord& rec);
+    // Delivers the results the workers posted (shutdown(): no event loop runs any more).
+    void deliverFinishedWorkers();
     void schedule();
     void startEntry(const std::shared_ptr<Entry>& e);
     void onWorkerProgress(const QString& id);
@@ -136,6 +151,8 @@ private:
     bool m_restoring = false;     // restoreQueue() is running: saveQueue() waits for its end
     bool m_held = false;
     bool m_shuttingDown = false;
+    bool m_saveFailed = false;    // the last queue save failed (logged once per streak)
+    bool m_historyFailed = false; // the same for the history file
     quint64 m_counter = 0;
 };
 

@@ -98,6 +98,11 @@ public:
     // has paused the queue; everything else waits for Resume.
     virtual bool runsWhileHeld() const { return false; }
 
+    // Saved in queue.json and restored at the next start. The update check
+    // and the update download are not: after a restart they would hold the
+    // queue for a job nobody sees, or contact the network on their own.
+    virtual bool persistent() const { return true; }
+
     // Cheap pre-flight check before the job is accepted into the queue.
     virtual Status validate(const SettingsValues& settings) const
     {

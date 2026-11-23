@@ -26,6 +26,7 @@
 #include "core/Result.h"
 
 #include <QScrollArea>
+#include <QThreadPool>
 #include <QUrl>
 #include <QVariantMap>
 #include <QWidget>
@@ -240,8 +241,16 @@ DriveSpace driveSpaceOf(const QString& folder);
 // Asks the drive of `folder` for its free space on a worker thread (a mapped
 // network drive or an unplugged letter can block for seconds) and calls
 // `done(ready, bytesAvailable, driveLabel)` on the UI thread while `context`
-// still exists. Callers keep a generation counter to drop stale answers.
+// still exists. Callers keep a generation counter to drop stale answers, and
+// start a new probe only once the last one has answered (a drive that does
+// not answer would otherwise collect one blocked probe per refresh).
 void probeFreeSpace(QObject* context, const QString& folder, std::function<void(bool ready, qint64 available, const QString& label)> done);
+// The pool drive probes run on (two threads; never the global pool, whose
+// threads the pages' other background work needs).
+QThreadPool& drivePool();
+// Tests: driveSpaceOf() answers with `hook` (called on the probing thread)
+// instead of asking the drive; an empty function restores the real check.
+void setDriveSpaceHookForTests(std::function<DriveSpace(const QString& folder)> hook);
 
 // An icon button that sits among labelled buttons (Refresh next to Change…,
 // a tool row): the same plate, outline and states as they have, so it does

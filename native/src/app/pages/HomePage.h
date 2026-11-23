@@ -43,6 +43,7 @@ private:
     void refreshQueueTile();
     void refreshConsoleTile();
     void refreshRecent();
+    void refreshSpaceTile(); // the Free space tile, one drive probe at a time
     void setSetupShown(bool shown);
 
     JobQueueModel& m_model;
@@ -69,6 +70,8 @@ private:
     QString m_continueId;
     bool m_spaceKnown = false; // the Free space tile has shown an answer
     quint64 m_spaceGen = 0; // the free-space probe in flight; older answers are dropped
+    bool m_spaceInFlight = false; // a probe has not answered yet
+    bool m_spaceAgain = false;    // a refresh came meanwhile: probe again when it answers
     QString m_continueDismissed;
     // Recent jobs
     ui::Card* m_recentCard;
