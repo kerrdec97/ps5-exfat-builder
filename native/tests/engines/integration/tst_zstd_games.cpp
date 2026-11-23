@@ -25,6 +25,7 @@
 #include "engines/integration/ImageCompare.h"
 #include "engines/integration/Module.h"
 #include "engines/integration/ZstdImage.h"
+#include "engines/pfs/AmprIndex.h"
 #include "engines/pfs/Module.h"
 #include "engines/ufs2/Module.h"
 #include "jobs/JobQueue.h"
@@ -329,6 +330,14 @@ private slots:
         // engines/ampr/ZstdPack.h).
         QCOMPARE(cmp->missingCount + cmp->extraCount + cmp->sizeCount + cmp->unreadableCount, qint64(0));
         for (const auto& d : cmp->contentDifferent) {
+            if (d.path == QLatin1String("ampr_emu.index")) {
+                // It lists the new pack files with their times in whole seconds:
+                // two builds a second apart differ there and nowhere else.
+                auto a = integration::readSlice(**zt, d.path, 0, 1 << 26), b = integration::readSlice(**et, d.path, 0, 1 << 26);
+                QVERIFY(a.ok() && b.ok());
+                QVERIFY(pfs::amprIndexesDifferOnlyInTimes(a->data, b->data));
+                continue;
+            }
             QVERIFY2(d.path.startsWith(QLatin1String("ampr_zstd")) && d.offset >= 24 && d.offset < 40, qPrintable(d.path));
             auto a = integration::readSlice(**zt, d.path, 0, 1 << 26), b = integration::readSlice(**et, d.path, 0, 1 << 26);
             QVERIFY(a.ok() && b.ok());
