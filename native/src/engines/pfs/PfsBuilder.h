@@ -25,8 +25,10 @@
 //   * the source folder is never written to (ampr_emu.index and .pfskeep
 //     markers are added to the image only).
 
+#include "core/ArchiveSource.h"
 #include "core/Cancellation.h"
 #include "core/Log.h"
+#include "core/Progress.h"
 #include "core/Result.h"
 #include "engines/pfs/PfsLayout.h"
 #include "engines/pfs/PfsSource.h"
@@ -102,5 +104,21 @@ qint64 progressTotal(const BuildInput& input);
 Result<BuildStats> writeImage(const BuildInput& input, OutputFormat format, const BuildOptions& options,
                               const QString& path, const CancellationToken& token, const BuildHooks& hooks = {},
                               const Log& log = Log(QStringLiteral("pfs")));
+
+// An uncompressed folder image (.ffpfs, files stored raw) of an archived dump
+// (GitHub #37), with no copy of the game on disk: `plan` comes from
+// planArchive(). The layout is the one writeImage() gives the same plan, so
+// the image is byte for byte the one built from the game unpacked to a folder.
+// Everything but the files' data (header, inode table, directories, FPT,
+// generated files) is written first; then one pass through the archive
+// (archive::streamGameInto) writes each file at its blocks. Unwritten bytes
+// of the new file read as zeros, which is what the format pads with. Every
+// streamed file's digest goes into `plan` (SourceFile::hasDigest) for the
+// read-back verification. Refused with per-file compression on (a file's
+// place then depends on how its predecessors compressed). Progress: bytes and
+// files of the pass.
+Result<BuildStats> writeFolderImageFromArchive(SourcePlan& plan, const archive::GameListing& game, const BuildOptions& options,
+                                               const QString& path, const CancellationToken& token,
+                                               ProgressReporter* progress = nullptr, const Log& log = Log(QStringLiteral("pfs")));
 
 } // namespace fw::pfs

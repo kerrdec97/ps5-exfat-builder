@@ -4,6 +4,7 @@
 
 #include "engines/pfs/PfsVerify.h"
 
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 #include "core/PathSafety.h"
 #include "engines/pfs/AmprIndex.h"
@@ -96,6 +97,38 @@ Status compareFile(const PfsImage& img, const PfsEntry& e, const SourceFile& src
         ++rep.paddedFiles;
     if (!content)
         return success();
+
+    if (src.hasDigest) {
+        // Streamed from an archive (no folder to compare with): the file's
+        // bytes in the image against the digest taken while it was written.
+        if (hooks.item)
+            hooks.item(rel(e.path));
+        archive::ContentDigest digest;
+        qint64 pos = 0;
+        bool dirtyPadding = false;
+        const Status st = img.readFile(ino, [&](const char* d, qint64 len) -> Status {
+            const qint64 inSrc = std::clamp<qint64>(src.size - pos, 0, len);
+            digest.add(d, inSrc);
+            for (qint64 i = inSrc; i < len; ++i)
+                if (d[i] != 0) {
+                    dirtyPadding = true;
+                    return Error(ErrorCode::VerificationFailed, QStringLiteral("padding"));
+                }
+            pos += len;
+            if (hooks.advance && inSrc > 0)
+                hooks.advance(inSrc);
+            return success();
+        }, token);
+        if (!st.ok() && st.error().code != ErrorCode::VerificationFailed)
+            return st;
+        if (dirtyPadding)
+            rep.fail(QStringLiteral("Different content: %1 (bytes after the end of the file are not zero)").arg(rel(e.path)));
+        else if (digest.value() != src.digest)
+            rep.fail(QStringLiteral("Different content: %1 (not what was read from the archive)").arg(rel(e.path)));
+        else
+            rep.bytesChecked += std::min(pos, src.size);
+        return success();
+    }
 
     std::unique_ptr<SeqSource> in;
     if (src.generated) {

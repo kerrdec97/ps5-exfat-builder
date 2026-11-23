@@ -25,6 +25,11 @@ namespace fw::pfs {
 
 void registerJobs(ModuleContext& ctx);
 
+// An archived dump as the source (GitHub #37): "" when the build streams it
+// (an uncompressed .ffpfs, files stored raw), else why it is unpacked to the
+// job's temporary folder first (unpackFirstLogLine).
+QString archiveStreamProblem(OutputFormat format, const BuildOptions& options);
+
 class PfsBuildJob final : public Job {
 public:
     explicit PfsBuildJob(QJsonObject params);

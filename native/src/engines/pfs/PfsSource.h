@@ -10,6 +10,7 @@
 // lazy_mkpfs/build.py scan_source_tree (GPL-3.0-or-later): files sorted by the
 // lower-cased relative path; directories exist only as parents of files.
 
+#include "core/ArchiveSource.h"
 #include "core/Cancellation.h"
 #include "core/Result.h"
 #include "engines/pfs/AmprIndex.h"
@@ -29,6 +30,13 @@ struct SourceFile {
     qint64 size = 0;
     qint64 mtime = 0;     // whole seconds since the epoch
     bool generated = false;
+    // A plan of an archived dump (planArchive): the file's item in
+    // GameListing::items (absPath is empty), and once the build has streamed
+    // it, the digest of its bytes (archive::ContentDigest), which verification
+    // compares the image with in place of the file.
+    int archiveItem = -1;
+    bool hasDigest = false;
+    quint64 digest = 0;
 
     QByteArray name() const;
 };
@@ -58,6 +66,15 @@ struct SourcePlan {
 };
 
 Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, const CancellationToken& token);
+
+// The plan of an archived dump from the archive's list alone (GitHub #37):
+// exactly the plan planFolder() makes of the game unpacked to a folder
+// (unpackArchiveSource), with the same rules, order, markers and AMPR index
+// decision; a file the archive lists no time for gets options.time (unpacking
+// would give it the time it was unpacked). The dump's own ampr_emu.index is
+// read out of the archive only when the decision needs it. `root` of the plan
+// is the archive.
+Result<SourcePlan> planArchive(const archive::GameListing& game, const PlanOptions& options, const CancellationToken& token);
 
 // Lazy_MkPFS should_skip_executable_compression().
 bool skipExecutableCompression(const QByteArray& name, const QByteArray& relPath);

@@ -22,6 +22,8 @@
 #include <QFileInfo>
 #include <QJsonArray>
 
+#include <optional>
+
 namespace fw::pfs {
 
 namespace {
@@ -87,6 +89,21 @@ QString findGameRoot(const QString& dir, int depth = 0)
     }
     return {};
 }
+
+} // namespace
+
+QString archiveStreamProblem(OutputFormat format, const BuildOptions& options)
+{
+    if (format == OutputFormat::Container)
+        return QStringLiteral("an .ffpfsc is compressed block by block, front to back, as it is written, so it needs the "
+                              "game's files in the image's order, not the archive's");
+    if (options.files.compress)
+        return QStringLiteral("with per-file compression (Settings > PFS) a file's place in the image depends on how the "
+                              "files before it compressed, so the files are needed in the image's order, not the archive's");
+    return {};
+}
+
+namespace {
 
 ProgressHooks hooksFor(ProgressReporter* p)
 {
@@ -194,25 +211,38 @@ QString PfsBuildJob::innerName() const
 Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
 {
     FW_TRY(validate(ctx.settings));
-    if (archive::isZipSource(m_source)) {
-        const QString zip = m_source;
-        ctx.log.info(archive::unpackFirstLogLine(
-            zip, QStringLiteral("a PFS image is written front to back (an .ffpfsc compressed block by block as it goes), so "
-                                "it needs the game's files in the image's order, not the archive's")));
-        FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, freeSpaceMarginFrom(ctx.settings)));
-        ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
-        FW_TRY(validate(ctx.settings));
-        // The unpack was a step of the first stage, which goes on (the stages
-        // and their weights are declared again, as they were).
-        if (ctx.progress)
-            ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
-    }
-    ProgressReporter* pr = ctx.progress;
     const qint64 ts = m_params.value(QStringLiteral("timestamp")).toInteger(0);
     const qint64 now = ts > 0 ? ts : QDateTime::currentSecsSinceEpoch();
     const OutputFormat fmt = format();
     const BuildOptions opts = buildOptionsFrom(ctx.settings, now);
-    const bool isFolder = QFileInfo(m_source).isDir();
+    // An archived dump (#37): an uncompressed folder image is built straight
+    // from it (the layout comes from the archive's list, one pass writes the
+    // files' data). An .ffpfsc and per-file compression need the files in the
+    // image's order and unpack it first.
+    std::optional<archive::GameListing> game;
+    if (archive::isZipSource(m_source)) {
+        const QString why = archiveStreamProblem(fmt, opts);
+        if (why.isEmpty()) {
+            ctx.log.info(archive::streamingLogLine(m_source));
+            if (ctx.progress)
+                ctx.progress->beginPhase(0, 0, 0, false);
+            FW_TRY_ASSIGN(game, archive::listArchiveGame(m_source, ctx.token));
+        } else {
+            const QString zip = m_source;
+            ctx.log.info(archive::unpackFirstLogLine(zip, why));
+            FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, freeSpaceMarginFrom(ctx.settings)));
+            ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
+            FW_TRY(validate(ctx.settings));
+            // The unpack was a step of the first stage, which goes on (the stages
+            // and their weights are declared again, as they were).
+            if (ctx.progress)
+                ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
+        }
+    }
+    ProgressReporter* pr = ctx.progress;
+    // A streamed archive is built as its game's folder would be (and is never
+    // deleted: only an image source is, after a conversion).
+    const bool isFolder = game || QFileInfo(m_source).isDir();
     QStringList outcomeWarnings;
 
     // ---- Scanning ----
@@ -220,7 +250,26 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
         pr->beginPhase(0, 0, 0, false);
     BuildInput in;
     in.isFolder = isFolder;
-    if (isFolder) {
+    if (game) {
+        FW_TRY_ASSIGN(in.plan, planArchive(*game, planOptionsFrom(ctx.settings, now), ctx.token));
+        const SourcePlan& p = in.plan;
+        ctx.log.info(QStringLiteral("Packing %1 files (%2) from %3").arg(formatCount(qint64(p.files.size())),
+                                                                          formatBytes(p.totalBytes), native(m_source)));
+        if (game->links > 0)
+            ctx.log.info(QStringLiteral("%1 symbolic or hard links in the archive are left out, as unpacking leaves them out.")
+                             .arg(formatCount(game->links)));
+        if (p.excludedFiles || p.excludedFolders)
+            ctx.log.info(QStringLiteral("Left out %1 file(s) and %2 folder(s): %3")
+                             .arg(p.excludedFiles)
+                             .arg(p.excludedFolders)
+                             .arg(p.excludedSamples.join(QStringLiteral(", "))));
+        if (p.emptyFolderMarkers)
+            ctx.log.info(QStringLiteral("Kept %1 empty folder(s) with .pfskeep markers").arg(p.emptyFolderMarkers));
+        if (const QString line = amprActionLogLine(p.amprAction); !line.isEmpty())
+            ctx.log.info(line);
+        if (const QString line = amprLeftOutLogLine(p.amprLeftOut); !line.isEmpty())
+            ctx.log.warn(line);
+    } else if (isFolder) {
         QString root = m_source;
         if (m_params.value(QStringLiteral("findGameRoot")).toBool(true)) {
             const QString found = findGameRoot(m_source);
@@ -279,8 +328,14 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
         hooks.advance = [pr](qint64 n) { pr->advance(n); };
         hooks.item = [pr](const QString& s) { pr->setCurrentItem(s); };
     }
-    // writeImage() flushes the image to the drive before it closes it.
-    FW_TRY_ASSIGN(const BuildStats st, writeImage(in, fmt, opts, part.partPath(), ctx.token, hooks, ctx.log));
+    // writeImage() flushes the image to the drive before it closes it, and so
+    // does the archive's (which also notes each file's digest in the plan).
+    BuildStats st;
+    if (game) {
+        FW_TRY_ASSIGN(st, writeFolderImageFromArchive(in.plan, *game, opts, part.partPath(), ctx.token, pr, ctx.log));
+    } else {
+        FW_TRY_ASSIGN(st, writeImage(in, fmt, opts, part.partPath(), ctx.token, hooks, ctx.log));
+    }
     ctx.log.info(QStringLiteral("Image written: %1 in %2 s (%3)")
                      .arg(formatBytes(st.imageBytes))
                      .arg(st.seconds, 0, 'f', 1)
