@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.24)
 # under native/.
 
 project(FarewellEdition
-    VERSION 5.0.3
+    VERSION 5.1.0
     DESCRIPTION "PS5 exFAT Image Builder v5 (native)"
     LANGUAGES CXX)
 
@@ -43,10 +43,14 @@ find_package(ZLIB QUIET)
 if(NOT ZLIB_FOUND)
     include(FetchContent)
     FetchContent_Declare(zlib
-        URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
-        URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+        URL https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz
+        URL_HASH SHA256=02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    # zlib 1.4: only the static library (its ZLIB::ZLIB would be the DLL), no tests, no install rules.
+    set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(zlib)
     if(NOT TARGET ZLIB::ZLIB)
         add_library(ZLIB::ZLIB ALIAS zlibstatic)
@@ -67,8 +71,8 @@ FetchContent_Declare(fw_zstd_src
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR fw-no-cmake)
 FetchContent_Declare(fw_lz4_src
-    URL https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz
-    URL_HASH SHA256=537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b
+    URL https://github.com/lz4/lz4/releases/download/v1.11.1/lz4-1.11.1.tar.gz
+    URL_HASH SHA256=683fed08a844ad012196381e40badf80c0bbe4962959761416d41c9e67d77ec7
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR fw-no-cmake)
 FetchContent_MakeAvailable(fw_zstd_src fw_lz4_src)

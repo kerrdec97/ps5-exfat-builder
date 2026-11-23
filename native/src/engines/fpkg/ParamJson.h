@@ -34,6 +34,11 @@ struct ParamPatchOptions {
     bool lowerRequiredFirmware = true;
     QString contentVersion; // "" = keep
     QString title;          // "" = keep
+    // The title goes into every language of localizedParameters, not only the
+    // default one (GitHub #94: a console in another language showed the old name).
+    // Only when the default language had a title of its own that differs: a
+    // title sent for a default language without one is a fallback, no rename.
+    bool titleAllLanguages = false;
 };
 
 // applicationDrmType is always set to "standard" (a "free" DRM type shows a

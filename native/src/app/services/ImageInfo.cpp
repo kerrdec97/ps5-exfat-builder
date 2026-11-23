@@ -107,6 +107,10 @@ QString imageFormatOf(const QString& path, bool withPackages)
     const QString ext = QFileInfo(path).suffix().toLower();
     if (ext == u"exfat" || ext == u"ffpkg" || ext == u"ffpfs" || ext == u"ffpfsc")
         return ext;
+    // The .zstd single file (GitHub #98) is an exFAT image; the reader checks
+    // its first sector and refuses a zstd stream or any other content.
+    if (ext == u"zstd")
+        return QStringLiteral("exfat");
     if (withPackages && ext == u"pkg")
         return ext;
     return {};
@@ -281,7 +285,8 @@ QStringList findImageFiles(const QStringList& folders, const CancellationToken& 
             out << p;
         }
     };
-    const QStringList filters = {QStringLiteral("*.exfat"), QStringLiteral("*.ffpkg"), QStringLiteral("*.ffpfs"), QStringLiteral("*.ffpfsc")};
+    const QStringList filters = {QStringLiteral("*.exfat"), QStringLiteral("*.zstd"), QStringLiteral("*.ffpkg"), QStringLiteral("*.ffpfs"),
+                                 QStringLiteral("*.ffpfsc")};
     for (const QString& folder : folders) {
         if (token.isCancelled())
             break;

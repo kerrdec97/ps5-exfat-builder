@@ -33,6 +33,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <array>
 #include <functional>
 #include <memory>
 
@@ -53,6 +54,9 @@ struct PackGameOptions {
     // Progress phases of the caller (-1 = do not change phases).
     int packPhase = -1;
     int verifyPhase = -1;
+    // The pack's archive id; all zero (the default) = random. Tests set one
+    // to compare two packs byte for byte.
+    std::array<char, 16> archiveId{};
 };
 
 struct PackGameReport {
@@ -88,6 +92,26 @@ struct PackGameReport {
 // back as written fails as always.
 Result<PackGameReport> packGame(std::shared_ptr<GameFiles> source, const QString& outFolder, const PackGameOptions& options,
                                 const CancellationToken& token, ProgressReporter* progress, const Log& log);
+
+// packGame() for an archived dump (GitHub #37), in ONE pass through the
+// archive and with no copy of the game on disk: the same rules, the same
+// loose files (written from the archive; nothing is linked), the same
+// runtime, packs and ampr_emu.index as packGame() makes of the game unpacked
+// to a folder. The packs are byte for byte that folder's (given one archive
+// id): a ZIP is read in the packs' order and its chunks go straight into the
+// volumes; a 7z or RAR gives its files in its own order, so the chunks are
+// compressed as they come into a spool file in `spoolDir` (the job's
+// temporary folder), which grows to the packs' stored size and is removed
+// once the volumes are written from it in the packs' order
+// (ZstdPackStream). Every entry's checksum is verified while it is decoded
+// (archive::visitGameFiles). The old runtime and eboot.bin are looked at when
+// the pass reaches them. Refused (Internal) for a game that is itself packed:
+// archivePackProblem() says why such an archive is unpacked first.
+Result<PackGameReport> packGameFromArchive(std::shared_ptr<ArchiveGame> source, const QString& outFolder,
+                                           const PackGameOptions& options, const QString& spoolDir,
+                                           const CancellationToken& token, ProgressReporter* progress, const Log& log);
+// "" when packGameFromArchive() takes the archive, else why it is unpacked first.
+QString archivePackProblem(const ArchiveGame& game);
 
 // Writes every file of `source` (read as plain files: packs unpacked) into
 // `outFolder`, leaving out the pack files. Used by extraction ("unpack").

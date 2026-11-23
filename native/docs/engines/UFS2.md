@@ -176,7 +176,7 @@ It accepts the NetBSD `makefs` image in the tests and UFS2Tool's own images.
 
 | Kind | Parameters | Phases | Notes |
 |---|---|---|---|
-| `image.ffpkg.build` | `source` (a folder, or a ZIP of a dump, which is unpacked into the job's temporary folder first), `output`, `replaceExisting` (false) | Scanning → Writing image → Verifying | Writes `<output>.part`. The image gets its final name only after verification passed (audit H6). Cancel during verification (GitHub #97) saves it as with verification turned off: the structure check, which runs then too, is finished (metadata only) and must pass; the outcome is Skipped, "Verification was cancelled…", and the source is kept. A difference the comparison found before the cancel fails the build (`compareImage` and `verifyExtracted` then return the partial report, `CompareReport::cancelled`). An existing image is replaced in one step (M2: its name is never empty, a failed replace leaves it as it was); the finished image is then kept as `<name> (new).ffpkg` and the error says so. Refused when the output is inside the source. A folder with more than 32,765 sub-folders is refused while planning (`di_nlink` is 16 bits). A ZIP source is never deleted. |
+| `image.ffpkg.build` | `source` (a folder, or a `.zip`, `.7z` or `.rar` of a dump, built straight from the archive, see below), `output`, `replaceExisting` (false) | Scanning → Writing image → Verifying | Writes `<output>.part`. The image gets its final name only after verification passed (audit H6). Cancel during verification (GitHub #97) saves it as with verification turned off: the structure check, which runs then too, is finished (metadata only) and must pass; the outcome is Skipped, "Verification was cancelled…", and the source is kept. A difference the comparison found before the cancel fails the build (`compareImage` and `verifyExtracted` then return the partial report, `CompareReport::cancelled`). An existing image is replaced in one step (M2: its name is never empty, a failed replace leaves it as it was); the finished image is then kept as `<name> (new).ffpkg` and the error says so. Refused when the output is inside the source. A folder with more than 32,765 sub-folders is refused while planning (`di_nlink` is 16 bits). A ZIP source is never deleted. |
 | `image.ffpkg.verify` | `image`, `source` (optional) | Checking structure → Comparing | With `source`: compares at the configured depth. Without it, in full mode: reads every file back. A damaged image is `Verification::Failed`, not a job error. |
 | `image.ffpkg.extract` | `image`, `output` (new or empty folder), `path` ("/") | Reading image → Extracting → Verifying | Extracts into `<output>.part`, marked so a leftover of ours can be replaced (an image whose top folder holds the marker's name in any case is refused), and renames it on success (also when its verification is cancelled: the files are then reported as not verified); if that rename fails the extracted folder is kept as `<output>.new`. On Windows, forbidden characters and device names are changed and collisions get " (2)". Each change is reported. File times come from the inodes. |
 | `image.ffpkg.edit` | `image`, `operations` | Reading image → Writing image → Verifying → Replacing original | Rebuilds through `<image>.part` and always compares the result with the edited tree, at least by name and size. The original is replaced only after that passes (a cancel during a full comparison still finishes the name-and-size check, then applies the edit as not verified); if it cannot be replaced (open elsewhere) the edited image is kept as `<name> (new).ffpkg`. Images containing links or special files are refused, because a rebuild would drop them. |
@@ -184,9 +184,8 @@ It accepts the NetBSD `makefs` image in the tests and UFS2Tool's own images.
 **Progress.** Build and extract share the bar 5 % (scanning, reading the
 image) · 60 % (writing) · 35 % (verifying); when verification compares names and
 sizes only, or is off and the build runs only the structure check, Verifying
-takes 5 % (an extraction with verification off: none), writing the rest. With a
-zipped dump the build gives Scanning 30 % (the unpacking is a step that takes
-its first half), writing 45 %, verifying 25 %. Where the structure check and
+takes 5 % (an extraction with verification off: none), writing the rest; an
+archived dump is not unpacked first, so it gets the same shares. Where the structure check and
 the compare share Verifying, the check is a step ("Checking structure") that
 takes the first half of the stage and the compare fills the rest. Edit: 5 % ·
 50 % · 40 % · 5 % (Replacing original is a rename; names and sizes only: 5 % ·
@@ -212,6 +211,25 @@ Every job writes outputs through `.part` names and checks free space against
 (4 MiB) and every 64 regions, and reports byte progress. An image of 4 GiB
 or more, or the extraction of a file that large, is refused up front when the
 destination drive is FAT32.
+
+**Building from an archive (GitHub #37).** A `.zip`, `.7z` or `.rar` source
+is built straight from the archive, as for exFAT (`EXFAT.md`, *Building from
+an archive*; `Ufs2Archive.*`, `core/ArchiveStream.h`): the tree comes from the
+archive's list (`treeFromArchive`: every file and folder, no links, each
+folder's entries in NTFS listing order, by their names in upper case, which is
+the order UFS2Tool and a folder build on Windows take them in), the writer
+(`WriterOptions::leaveArchiveData`) writes the metadata and leaves the
+archive's data blocks, and one pass through the archive writes every file's
+bytes at its planned extents (`Ufs2Writer::fileExtents()`: a file's blocks and
+fragments, indirect blocks between them), checksums verified while decoded.
+The structure check runs as always; the compare reads each file back and
+checks it against the digest taken while it was written (`TreeNode::hasDigest`).
+On Windows the image is byte for byte the image of the unpacked folder with
+the same times and fs_id (`tst_archive_stream`); elsewhere a folder build takes
+the file system's own listing order, so the two differ there as two folder
+builds on different file systems do. Inode times are the build's time either
+way; a file's listed time feeds only `ampr_emu.index`. Nothing of the game
+goes to the temporary folder. The archive is never deleted.
 
 ## Settings
 

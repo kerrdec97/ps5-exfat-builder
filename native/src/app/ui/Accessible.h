@@ -12,6 +12,9 @@
 //  * any widget with the dynamic property "fwRole" = "button": a button; with
 //    "fwExpanded" (bool) also expanded / collapsed (the Disclosure header,
 //    the header chips)
+//  * any widget with "fwRole" = "choice": a choice like Segmented, its value
+//    the property "fwChoiceValue" (the Build page's format tiles, the Image
+//    tools action strip: pages that paint their options themselves)
 //
 // Installed once by theme::apply().
 

@@ -7,6 +7,7 @@
 // Paths are '/'-separated, relative to the game root, case as stored. A
 // GameFiles object is used by one thread at a time.
 
+#include "core/ArchiveSource.h"
 #include "core/Cancellation.h"
 #include "core/Result.h"
 #include "engines/ampr/ZstdPack.h"
@@ -45,6 +46,32 @@ public:
 // junctions followed (one that loops back into its own folder or has no
 // target is left out with a warning). Fails when a folder cannot be listed.
 Result<std::shared_ptr<GameFiles>> openFolderGame(const QString& folder, const CancellationToken& token);
+
+// An archived dump's game (GitHub #37) from the archive's list alone: the
+// files and folders unpackArchiveSource() would make of it (links left out),
+// each file with the time the archive lists (or `noTime` when it lists none,
+// as an unpacked file would get the time it was unpacked). Its files cannot be
+// read at random: read() fails, and packGameFromArchive() reads them in one
+// pass (archive::visitGameFiles).
+class ArchiveGame final : public GameFiles {
+public:
+    ArchiveGame(archive::GameListing listing, qint64 noTime);
+    QString describe() const override;
+    const std::vector<GameItem>& items() const override { return m_items; }
+    int find(const QString& path) const override { return m_index.value(path, -1); }
+    Result<qint64> read(int index, qint64 offset, char* dst, qint64 len) override;
+    QStringList warnings() const override;
+
+    const archive::GameListing& listing() const { return m_listing; }
+    // The listing's item of each of items().
+    int listingItem(int index) const { return m_source[size_t(index)]; }
+
+private:
+    archive::GameListing m_listing;
+    std::vector<GameItem> m_items;
+    std::vector<int> m_source;
+    QHash<QString, int> m_index;
+};
 
 // Random access to one item of a GameFiles (for pack volumes inside an image).
 std::shared_ptr<RandomAccess> itemAccess(std::shared_ptr<GameFiles> files, int index);

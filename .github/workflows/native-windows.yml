@@ -1,39 +1,56 @@
 name: Native (C++) Windows build and test
 
-# Builds exFAT Image Builder v5 (native/) with MSVC 2022 + Qt 6.8 on
-# Windows, runs the automated tests, deploys the Qt runtime, packs the
-# single-file exe (the download), packages a portable zip and an installer,
-# launches the real .exe and the single-file exe (self-test, page
-# screenshots, alive checks) and uploads everything as evidence. Nothing is
-# published. The zip and the installer are build artefacts only: a release is
-# the single-file exe and SHA256SUMS.txt.
+# Builds exFAT Image Builder v5 (native/) with MSVC 2022 and Qt 6.10.3 (the Qt
+# the release is built and its notices are written with) on Windows, runs the
+# automated tests offline, packages the release files with the same script the
+# owner uses on the release PC (native/packaging/make-release.ps1: the
+# single-file exe, the folder edition and SHA256SUMS.txt), launches the real
+# programs (self-test, page screenshots, alive checks) and uploads everything as
+# build artefacts. Nothing is published: a release is made by hand
+# (native-release.yml only drafts one, and only when started by hand).
+#
+# Third-party code is pinned: every action by its commit SHA (the tag in the
+# comment), every source archive CMake fetches by SHA-256 (native/CMakeLists.txt,
+# native/cmake/*.cmake). No secrets are used, so the workflow also runs for pull
+# requests (from forks too: the token is read-only).
 
-# Started by hand (Actions > Run workflow) or by the release workflow. Builds on
-# every push are off until the workflow has been brought up to date with v5.
 on:
   workflow_dispatch:
-  workflow_call: # the release workflow builds, tests and packages through this one
+  workflow_call: # native-release.yml builds, tests and packages through this one
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'LICENSES/**'
+      - '.github/workflows/native-windows.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-windows-${{ github.ref }}
-  cancel-in-progress: false
+  group: native-windows-${{ github.event_name }}-${{ github.ref }}
+  # A newer push to a pull request replaces its running build; manual and
+  # release builds always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
-      QT_VERSION: '6.8.3'
-      # No test and no run of the app may put the runner to sleep or shut it down.
+      # The Qt the project is built and shipped with (THIRD_PARTY_NOTICES-native.md,
+      # LICENSES/Qt-third-party-code.txt). Change it only together with those files.
+      QT_VERSION: '6.10.3'
+      # No test and no run of the app may put the runner to sleep or shut it down,
+      # and none of them goes online.
       FW_NO_POWER_ACTIONS: '1'
+      FW_OFFLINE: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
           version: ${{ env.QT_VERSION }}
           host: windows
@@ -41,14 +58,47 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
+      - name: Check the Qt version
+        shell: pwsh
+        run: |
+          # The build must use exactly the Qt the notices name, not whatever is cached or on PATH.
+          # Qt keeps the number in Qt6CoreConfigVersionImpl.cmake; Qt6CoreConfigVersion.cmake only includes it.
+          $dir = Join-Path $env:QT_ROOT_DIR 'lib\cmake\Qt6Core'
+          if (-not (Test-Path $dir)) { throw "Qt6Core was not found under QT_ROOT_DIR=$env:QT_ROOT_DIR" }
+          $m = Get-ChildItem -Path $dir -Filter 'Qt6CoreConfigVersion*.cmake' |
+               Select-String -Pattern 'set\(PACKAGE_VERSION "([0-9.]+)"\)' | Select-Object -First 1
+          if (-not $m) { throw "No Qt version number was found in $dir" }
+          $found = $m.Matches[0].Groups[1].Value
+          "Qt $found at $env:QT_ROOT_DIR"
+          if ($found -ne $env:QT_VERSION) { throw "Qt $found was installed, $env:QT_VERSION is required" }
+
       - name: MSVC developer environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@7defe9254715b088f12dddd9942945a3d75cdad5 # v1.9.0
         with:
           arch: x64
 
+      - name: Cache the hash-pinned engine downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Both files are checked against their pinned SHA-256 at every configure
+          # (native/cmake/AmprRuntime.cmake, BackportEngine.cmake), so a cached copy
+          # is used only when it is exactly the pinned release.
+          path: |
+            build/_deps/ampr-emu-ng
+            build/_deps/backport-engine
+          key: engines-${{ hashFiles('native/cmake/AmprRuntime.cmake', 'native/cmake/BackportEngine.cmake') }}
+
       - name: Configure
         shell: pwsh
-        run: cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFW_WARNINGS_AS_ERRORS=OFF -DFW_FETCH_BACKPORT_ENGINE=ON
+        # CMAKE_DISABLE_FIND_PACKAGE_ZLIB: always the hash-pinned zlib of
+        # native/CMakeLists.txt, never a copy that happens to be on the runner.
+        run: >
+          cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+          -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=ON
+          -DFW_WARNINGS_AS_ERRORS=OFF
+          -DFW_FETCH_BACKPORT_ENGINE=ON
+          -DFW_FETCH_AMPR_RUNTIME=ON
 
       - name: Build
         shell: pwsh
@@ -58,7 +108,6 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-          FW_OFFLINE: '1'
           # The runner is an administrator: mount VHDs to test against the real Windows exFAT driver.
           FW_WINDOWS_MOUNT_TEST: '1'
         run: |
@@ -66,21 +115,9 @@ jobs:
           ctest --test-dir build --timeout 900 --output-junit "$PWD\ci-out\ctest-junit.xml" 2>&1 | Tee-Object ci-out\ctest.txt
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            # Show every failing test's own output (PowerShell piping hides it above).
-            $failed = Select-String -Path ci-out\ctest.txt -Pattern '\d+ - (\S+) \(' | ForEach-Object { $_.Matches[0].Groups[1].Value }
-            foreach ($t in $failed) {
-              Write-Host "===== $t ====="
-              $exe = Get-ChildItem -Recurse build\tests -Filter "$t.exe" | Select-Object -First 1
-              if ($exe) {
-                $log = Join-Path $PWD "ci-out\$t.log"
-                Push-Location $exe.DirectoryName
-                & $exe.FullName -o "$log,txt" -maxwarnings 0 | Out-Null
-                $rc = $LASTEXITCODE
-                Pop-Location
-                Get-Content $log | Where-Object { $_ -notmatch '^PASS' } | Out-Host
-                Write-Host "exit code: $rc"
-              }
-            }
+            # Show every failing test's own output, run again by CTest so it has the
+            # same environment (FW_AMPR_RUNTIME, isolated data folders) as the first run.
+            ctest --test-dir build --timeout 900 --rerun-failed --output-on-failure 2>&1 | Tee-Object ci-out\ctest-failed.txt
             throw "ctest failed ($code)"
           }
 
@@ -89,44 +126,65 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-          FW_OFFLINE: '1'
           FW_WINDOWS_MOUNT_TEST: '1'
         run: |
           # Prints every check (mount, read back, chkdsk, Windows-formatted image read natively), not just pass/fail.
           New-Item -ItemType Directory -Force ci-out | Out-Null
           $log = Join-Path $PWD 'ci-out\tst_exfat_windows.txt'
-          $exe = Get-ChildItem -Recurse build\tests -Filter 'tst_exfat_windows.exe' | Select-Object -First 1
+          $exe = Get-ChildItem -Recurse build\tests -Filter 'tst_exfat_windows.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { Write-Host 'tst_exfat_windows.exe was not built'; exit 0 }
           Push-Location $exe.DirectoryName
           & $exe.FullName -v1 -o "$log,txt" | Out-Null
           Pop-Location
           Get-Content $log
 
-      - name: Deploy Qt runtime
+      - name: Keep every later run of the app away from the runner's own folders
         shell: pwsh
         run: |
-          $dist = "dist\exFAT Image Builder"
-          New-Item -ItemType Directory -Force $dist | Out-Null
-          Copy-Item "build\bin\exFAT Image Builder.exe" $dist
-          # As make-release.ps1: no vc_redist.x64.exe; finish-deploy.ps1 puts the VC++ runtime DLLs
-          # next to the program (the folder edition starts without the Redistributable) and
-          # removes the Qt plugins the app never loads.
-          windeployqt --release --no-translations --no-system-d3d-compiler --no-system-dxc-compiler --no-opengl-sw --no-compiler-runtime "$dist\exFAT Image Builder.exe"
-          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed ($LASTEXITCODE)" }
-          Copy-Item native\packaging\README-portable.txt "$dist\README.txt"
-          Copy-Item LICENSES -Recurse "$dist\LICENSES"
-          Copy-Item native\packaging\licenses\* "$dist\LICENSES\"
-          Copy-Item native\packaging\THIRD_PARTY_NOTICES-native.md "$dist\THIRD_PARTY_NOTICES.md"
-          Copy-Item native\packaging\LICENCE.txt "$dist\LICENCE.txt"
-          Copy-Item build\bin\engines -Recurse "$dist\engines"
-          & native\packaging\finish-deploy.ps1 -DeployDir $dist
-          Get-ChildItem $dist -Recurse | Measure-Object -Property Length -Sum | Select-Object Count, Sum | Tee-Object ci-out\dist-size.txt
+          # The app's data and the PS5 Backport engine's settings, data and home
+          # (shared with the standalone program on a user's PC) go to the job's temp folder.
+          $t = $env:RUNNER_TEMP
+          "FW_DATA_DIR=$t\fw-data" >> $env:GITHUB_ENV
+          "D97BETA_CONFIG_DIR=$t\backport-config" >> $env:GITHUB_ENV
+          "D97BETA_DATA_DIR=$t\backport-data" >> $env:GITHUB_ENV
+          "D97BETA_ENGINE_HOME=$t\backport-engine-home" >> $env:GITHUB_ENV
 
-      - name: Single-file exe (the download)
+      - name: Release files (make-release.ps1)
         shell: pwsh
         run: |
-          # Packs everything under dist\exFAT Image Builder (plus app-local VC++ runtime DLLs) into one exe.
-          native\packaging\make-onefile.ps1 -DeployDir "dist\exFAT Image Builder" -Output "dist\exFAT Image Builder.exe" -BuildDir build
+          # The owner's release script, on the build above: deploys the folder edition
+          # (windeployqt, notices, licences, the two hash-checked engines,
+          # finish-deploy.ps1), refuses private files, packs the single-file exe,
+          # self-tests both, zips the folder edition and writes SHA256SUMS.txt.
+          powershell -NoProfile -ExecutionPolicy Bypass -File native\packaging\make-release.ps1 `
+            -QtDir $env:QT_ROOT_DIR -BuildDir "$PWD\build" -OutDir "$PWD\dist" -SkipBuild -SkipTests -Zip
+          if ($LASTEXITCODE -ne 0) { throw "make-release.ps1 failed ($LASTEXITCODE)" }
           build\bin\fw_onefile_pack.exe list "dist\exFAT Image Builder.exe" | Tee-Object ci-out\onefile-contents.txt
+          Get-ChildItem 'dist\exFAT Image Builder' -Recurse -File | Measure-Object -Property Length -Sum | Select-Object Count, Sum | Tee-Object ci-out\dist-size.txt
+
+      - name: Check SHA256SUMS.txt and list the folder edition's files
+        shell: pwsh
+        run: |
+          # Every line of SHA256SUMS.txt must match the file a user downloads
+          # (GitHub serves "exFAT Image Builder.exe" as "exFAT.Image.Builder.exe").
+          $lines = @(Get-Content dist\SHA256SUMS.txt | Where-Object { $_ })
+          if ($lines.Count -lt 2) { throw "SHA256SUMS.txt lists $($lines.Count) file(s); the exe and the folder edition zip are expected" }
+          foreach ($line in $lines) {
+            if ($line -notmatch '^([0-9a-f]{64})  (\S+)$') { throw "Malformed line in SHA256SUMS.txt: $line" }
+            $hash = $Matches[1]; $name = $Matches[2]
+            $file = if ($name -eq 'exFAT.Image.Builder.exe') { 'dist\exFAT Image Builder.exe' } else { Join-Path 'dist' $name }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLower()
+            if ($actual -ne $hash) { throw "SHA256SUMS.txt does not match $file" }
+            "OK  $name"
+          }
+          # The folder edition uploaded unzipped as well, with the hash of every
+          # file in it (for comparing a user's extracted copy file by file).
+          $base = (Get-Item -LiteralPath 'dist\exFAT Image Builder').FullName.TrimEnd('\')
+          $sums = foreach ($f in @(Get-ChildItem -LiteralPath $base -Recurse -File -Force | Sort-Object FullName)) {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLower() + '  ' + $f.FullName.Substring($base.Length + 1).Replace('\', '/')
+          }
+          [IO.File]::WriteAllText("$PWD\dist\SHA256SUMS-folder-edition-files.txt", (($sums -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
+          "$(@($sums).Count) files in the folder edition"
 
       - name: Self-test and launch of the single-file exe
         shell: pwsh
@@ -138,7 +196,6 @@ jobs:
           $exe = Join-Path $dir 'exFAT Image Builder.exe'
           $env:LOCALAPPDATA = Join-Path $PWD 'ci-onefile-cache'
           $env:FW_DATA_DIR = Join-Path $PWD 'ci-onefile-data'
-          $env:FW_OFFLINE = '1'
           New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
           $times = @()
           foreach ($round in 'first', 'cached') {
@@ -160,32 +217,29 @@ jobs:
           Start-Sleep -Seconds 3
           if (Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue) { throw "The program outlived its launcher" }
 
-      - name: Self-test of the deployed exe
+      - name: Self-test of the folder edition's exe
         shell: pwsh
         run: |
           $exe = Join-Path $PWD 'dist\exFAT Image Builder\exFAT Image Builder.exe'
           $env:FW_DATA_DIR = Join-Path $PWD 'ci-data'
-          $env:FW_OFFLINE = '1'
           $p = Start-Process -FilePath $exe -ArgumentList '--self-test' -RedirectStandardOutput ci-out\self-test.json -RedirectStandardError ci-out\self-test.err -PassThru -Wait -NoNewWindow
           Get-Content ci-out\self-test.json
           if ($p.ExitCode -ne 0) { throw "self-test exit code $($p.ExitCode)" }
 
-      - name: Screenshot every page with the deployed exe
+      - name: Screenshot every page with the folder edition's exe
         shell: pwsh
         run: |
           $exe = Join-Path $PWD 'dist\exFAT Image Builder\exFAT Image Builder.exe'
           $env:FW_DATA_DIR = Join-Path $PWD 'ci-data'
-          $env:FW_OFFLINE = '1'
           $p = Start-Process -FilePath $exe -ArgumentList '--screenshot-pages', (Join-Path $PWD 'ci-out\pages') -RedirectStandardOutput ci-out\screenshots.txt -PassThru -Wait -NoNewWindow
           Get-Content ci-out\screenshots.txt
           if ($p.ExitCode -ne 0) { throw "screenshot run exit code $($p.ExitCode)" }
 
-      - name: Launch the deployed exe (alive after 30 s)
+      - name: Launch the folder edition's exe (alive after 30 s)
         shell: pwsh
         run: |
           $exe = Join-Path $PWD 'dist\exFAT Image Builder\exFAT Image Builder.exe'
           $env:FW_DATA_DIR = Join-Path $PWD 'ci-data'
-          $env:FW_OFFLINE = '1'
           $p = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 30
           $alive = -not $p.HasExited
@@ -201,50 +255,53 @@ jobs:
           Copy-Item -Recurse ci-data ci-out\ci-data -ErrorAction SilentlyContinue
           if (-not $alive) { throw "The executable exited within 30 seconds" }
 
-      - name: Package portable zip and installer
+      - name: Installer (build artefact only, never part of a release)
         shell: pwsh
         run: |
           $ver = (Select-String -Path native\CMakeLists.txt -Pattern 'VERSION (\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
-          # As make-release.ps1, entry by entry with "/" in the names (Compress-Archive of
-          # Windows PowerShell 5.1 writes "\", which the zip format does not allow).
-          Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-          $dist = (Get-Item -LiteralPath (Join-Path $PWD 'dist\exFAT Image Builder')).FullName.TrimEnd('\')
-          $zipPath = Join-Path $PWD "dist\exFAT-Image-Builder-$ver-win64-portable.zip"
-          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-          $top = Split-Path $dist -Leaf
-          $archive = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
-          try {
-            foreach ($f in @(Get-ChildItem -LiteralPath $dist -Recurse -File -Force | Sort-Object FullName)) {
-              $entry = $top + '/' + $f.FullName.Substring($dist.Length + 1).Replace('\', '/')
-              [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
-            }
-          } finally { $archive.Dispose() }
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
             $inno = 'C:\Program Files (x86)\Inno Setup 6'
             if (-not (Test-Path "$inno\ISCC.exe")) { choco install innosetup --no-progress -y | Out-Null }
             $env:PATH = "$inno;$env:PATH"
           }
-          iscc /DAppVersion=$ver /DSourceDir="$PWD\dist\exFAT Image Builder" /O"$PWD\dist" native\packaging\installer.iss
-          # SHA256SUMS.txt lists the release download under the name GitHub serves it
-          # ("exFAT.Image.Builder.exe"), with LF line ends, as make-release.ps1 writes it.
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist\exFAT Image Builder.exe").Hash.ToLower()
-          [IO.File]::WriteAllText("$PWD\dist\SHA256SUMS.txt", "$hash  exFAT.Image.Builder.exe`n", (New-Object Text.UTF8Encoding($false)))
-          Get-Content dist\SHA256SUMS.txt
+          New-Item -ItemType Directory -Force dist-installer | Out-Null
+          iscc /DAppVersion=$ver /DSourceDir="$PWD\dist\exFAT Image Builder" /O"$PWD\dist-installer" native\packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "iscc failed ($LASTEXITCODE)" }
 
-      - name: Upload packages
-        if: always()
-        uses: actions/upload-artifact@v4
+      # The release workflow downloads this artefact by name: keep the name and the file names.
+      - name: Upload release files
+        if: success() || failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: native-windows-packages
           path: |
-            dist/*.zip
-            dist/*.exe
+            dist/exFAT Image Builder.exe
+            dist/*-win64-folder.zip
             dist/SHA256SUMS.txt
+          if-no-files-found: warn
+
+      - name: Upload the folder edition (unzipped)
+        if: success() || failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: native-windows-folder-edition
+          path: |
+            dist/exFAT Image Builder/
+            dist/SHA256SUMS-folder-edition-files.txt
+            dist/SHA256SUMS.txt
+          if-no-files-found: warn
+
+      - name: Upload the installer
+        if: success() || failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: native-windows-installer
+          path: dist-installer/*.exe
           if-no-files-found: warn
 
       - name: Upload debug symbols
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: native-windows-symbols
           path: |
@@ -254,7 +311,7 @@ jobs:
 
       - name: Upload test evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: native-windows-evidence
           path: ci-out/

@@ -31,6 +31,10 @@ struct LayoutOptions {
     int version = kVersionPs5;
     bool caseInsensitive = true;
     qint64 time = 0;
+    // Join directory entries as Lazy_MkPFS does, so one may cross a block.
+    // Only the golden tests set it (to show that nothing else differs from
+    // Lazy_MkPFS); images are always built with entries kept inside blocks.
+    bool lazyDirents = false;
 };
 
 struct FolderLayout {

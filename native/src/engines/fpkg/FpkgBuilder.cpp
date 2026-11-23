@@ -1,5 +1,6 @@
 #include "engines/fpkg/FpkgBuilder.h"
 
+#include "core/ArchiveSource.h"
 #include "core/FileUtil.h"
 #include "core/ProcessRunner.h"
 #include "core/Tr.h"
@@ -152,6 +153,7 @@ QJsonObject BuildRequest::toJson() const
     if (!contentId.isEmpty()) o.insert(QStringLiteral("contentId"), contentId);
     if (!contentVersion.isEmpty()) o.insert(QStringLiteral("contentVersion"), contentVersion);
     if (!title.isEmpty()) o.insert(QStringLiteral("title"), title);
+    if (!titleAllLanguages) o.insert(QStringLiteral("titleAllLanguages"), false);
     return o;
 }
 
@@ -171,6 +173,7 @@ Result<BuildRequest> BuildRequest::fromJson(const QJsonObject& o)
     r.contentId = o.value(QStringLiteral("contentId")).toString().trimmed();
     r.contentVersion = o.value(QStringLiteral("contentVersion")).toString().trimmed();
     r.title = o.value(QStringLiteral("title")).toString();
+    r.titleAllLanguages = o.value(QStringLiteral("titleAllLanguages")).toBool(true);
     if (r.source.isEmpty())
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose a game folder, image or .gp5 project to package."));
     return r;
@@ -253,6 +256,9 @@ QString defaultOutputFolder(const QString& source, const QString& defaultOutputD
         const QFileInfo dir(fi.absolutePath());
         return QDir(dir.absolutePath()).filePath(dir.fileName() + QStringLiteral("-pkg"));
     }
+    // An archived dump (#37): "Game.zip" and "Game.part1.rar" give "Game-pkg".
+    if (archive::isArchiveSource(fi.absoluteFilePath()))
+        return QDir(fi.absolutePath()).filePath(archive::sourceName(fi.absoluteFilePath()) + QStringLiteral("-pkg"));
     return QDir(fi.absolutePath()).filePath(fi.completeBaseName() + QStringLiteral("-pkg"));
 }
 
@@ -578,6 +584,7 @@ Status finalizeParam(BuildPlan& p, const PlanOptions& o, const FpkgSettings& s)
     po.lowerRequiredFirmware = s.lowerRequiredFirmware;
     po.contentVersion = o.contentVersion;
     po.title = o.title;
+    po.titleAllLanguages = o.titleAllLanguages;
     // An update keeps the versions of its own param.json.
     const QStringList sdkNotes = o.isUpdate ? QStringList() : applySdkVersionRule(p.param, p.executableSdk);
     p.paramNotes = sdkNotes + applyParamPatch(p.param, po);
@@ -946,11 +953,12 @@ Result<BuildPlan> planBuild(const PlanOptions& o, const FpkgSettings& s, const C
     p.emptyDirs = planEmptyDirs(p, s);
     FW_TRY(finalizeParam(p, o, s));
 
-    // The title field renames the default language only (as the reference
-    // does). A console set to another language shows that language's own
-    // name, which then looks as if the new title was lost. (The Build page
-    // always sends the title it read, so only a changed one counts.)
-    if (!o.title.isEmpty() && o.title != paramTitle(p.sourceParam)) {
+    // With "Title for all languages" off the title renames the default
+    // language only (as the reference does). A console set to another
+    // language shows that language's own name, which then looks as if the
+    // new title was lost. (The Build page always sends the title it read, so
+    // only a changed one counts.)
+    if (!o.title.isEmpty() && !o.titleAllLanguages && o.title != paramTitle(p.sourceParam)) {
         const json::Value& loc = p.param.value(QStringLiteral("localizedParameters"));
         const QString lang = paramDefaultLanguage(p.param);
         QStringList others;
@@ -1043,6 +1051,10 @@ Status validateBuildRequest(const BuildRequest& r, const FpkgSettings& s)
                 return Error(ErrorCode::InvalidArgument,
                              QStringLiteral("The version and title of a .gp5 project come from its param.json; they "
                                             "cannot be changed here."));
+        } else if (archive::isArchiveSource(src.absoluteFilePath())) {
+            // An archived dump (#37): unpacked into the job's temporary folder
+            // when the job runs, then built exactly as that folder.
+            FW_TRY(archive::checkArchiveSource(src.absoluteFilePath()));
         } else if (imageSourceExtensions().contains(ext)) {
             auto stager = sourceStagerFor(r.source);
             if (!stager)
@@ -1052,7 +1064,7 @@ Status validateBuildRequest(const BuildRequest& r, const FpkgSettings& s)
             FW_TRY(stager->probe(r.source));
         } else {
             return Error(ErrorCode::InvalidArgument,
-                         QStringLiteral("Choose a game folder, a .gp5 project or an .exfat, .ffpkg, .ffpfs or .ffpfsc image."));
+                         QStringLiteral("Choose a game folder, an archived dump (.zip, .7z, .rar), a .gp5 project or an .exfat, .ffpkg, .ffpfs or .ffpfsc image."));
         }
     }
     const QString output = r.output.isEmpty() ? defaultOutputFolder(r.source, s.defaultOutputDir) : r.output;
@@ -2122,6 +2134,7 @@ Result<JobOutcome> runBuild(const BuildRequest& req, const FpkgSettings& s, JobC
     po.contentId = req.contentId;
     po.contentVersion = req.contentVersion;
     po.title = req.title;
+    po.titleAllLanguages = req.titleAllLanguages;
     po.haveDds2png = !dds2png.isEmpty();
     auto planned = planBuild(po, s, ctx.token);
     if (!planned.ok())

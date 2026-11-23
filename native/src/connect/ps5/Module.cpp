@@ -916,7 +916,7 @@ std::optional<QVariant> nonEmpty(const QVariant& v)
 }
 
 void addPort(SettingsSchema& s, const QString& key, const QString& group, const QString& label, const QString& desc,
-             int def, int order)
+             int def, int order, bool advanced = false)
 {
     SettingDef d;
     d.key = key;
@@ -929,6 +929,7 @@ void addPort(SettingsSchema& s, const QString& key, const QString& group, const 
     d.minimum = 1;
     d.maximum = 65535;
     d.order = order;
+    d.advanced = advanced;
     s.add(d);
 }
 
@@ -1002,9 +1003,10 @@ void registerModule(ModuleContext& ctx)
     addPort(s, keys::kPayloadPort, QStringLiteral("Payloads"), QStringLiteral("Payload port"),
             QStringLiteral("Port of the ELF loader for the Payloads page: elfldr 9021 (9020 is the exploit's own loader). 9090 is etaHEN's package installer, not a loader."), 9021, order++);
     addPort(s, keys::kShadowMountPort, QStringLiteral("Payloads"), QStringLiteral("ShadowMount+ ELF port"),
-            QStringLiteral("Port used to send shadowmountplus.elf (the ELF loader, usually 9021)."), 9021, order++);
+            QStringLiteral("Port used to send shadowmountplus.elf (the ELF loader, usually 9021)."), 9021, order++,
+            true); // as a rule the payload port again: folded away under Advanced (V-19)
     addPort(s, keys::kMicroMountPort, QStringLiteral("Payloads"), QStringLiteral("MicroMount ELF port"),
-            QStringLiteral("Port used to send micromount.elf (the ELF loader, usually 9021)."), 9021, order++);
+            QStringLiteral("Port used to send micromount.elf (the ELF loader, usually 9021)."), 9021, order++, true);
     addPort(s, keys::kKlogPort, QStringLiteral("Services"), QStringLiteral("Kernel log port"),
             QStringLiteral("Port of the kernel log streamer: klogsrv 3232, etaHEN 9081 (turn on Klog=1). ShadowMount+ \"Safe to unplug\" "
                            "watches it."), 3232, order++);

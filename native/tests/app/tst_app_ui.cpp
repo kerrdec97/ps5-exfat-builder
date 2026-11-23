@@ -30,6 +30,7 @@
 #include "core/Paths.h"
 #include "core/Tr.h"
 #include "engines/general/Module.h"
+#include "engines/pfs/Module.h"
 #include "support/TestSupport.h"
 #include "ConsoleTestUtil.h"
 #include "connect/ps5/FakePs5.h"
@@ -333,12 +334,13 @@ private slots:
         QTest::keyClicks(edit, QStringLiteral("3"));
         QTest::keyClick(edit, Qt::Key_Return);
         QCOMPARE(m_ctx->settings().value(key).toInt(), 3);
-        // Reload from disk: the value was saved.
-        {
+        // Reload from disk: the value was saved (one save per turn of the
+        // event loop, so not before the loop has run).
+        const auto onDisk = [&] {
             SettingsStore again(m_ctx->settings().schemaPtr(), m_ctx->settings().filePath());
-            QVERIFY(again.load().ok());
-            QCOMPARE(again.value(key).toInt(), 3);
-        }
+            return again.load().ok() ? again.value(key).toInt() : -1;
+        };
+        QTRY_COMPARE(onDisk(), 3);
         // Invalid value: message shown, store unchanged.
         edit->selectAll();
         QTest::keyClicks(edit, QStringLiteral("99"));
@@ -892,6 +894,17 @@ private slots:
         QVERIFY(item);
         QCOMPARE(item->fullText(), shown);
         QVERIFY2(m.stageTexts().at(3).contains(QStringLiteral("22 Sek.")), qPrintable(m.stageTexts().at(3)));
+        // V-21: an item that only repeats the amount done (the FPKG engine's
+        // "19,9 GB written") is not a third copy of it under the bar.
+        {
+            QStringList demoLines;
+            const JobRecord written = ui::JobMonitor::demoRecord(QStringLiteral("running"), &demoLines);
+            QCOMPARE(written.progress.currentItem, FW_TR("%1 written").arg(formatBytes(written.progress.done)));
+            m.setDemoRecord(written, demoLines);
+            QVERIFY(!item->isVisibleTo(&m));
+            m.setDemoRecord(r, lines);
+            QVERIFY(item->isVisibleTo(&m));
+        }
 
         // The model's item, as a running job reports it.
         JobQueueModel model(m_ctx->queue());
@@ -1003,8 +1016,37 @@ private slots:
         if (!edit)
             edit = ip->editor()->widget()->findChild<QLineEdit*>();
         QVERIFY(edit);
-        QCOMPARE(edit->placeholderText(), QStringLiteral("192.168.1.40"));
+        QCOMPARE(edit->placeholderText(), QStringLiteral("e.g. 192.168.1.40")); // V-04: not taken for an entered address
+        // V-17: one word for checking the tools again, on Tools and on every section's tool card.
+        int checkAgain = 0;
+        for (const QString& section : SettingsSchema::sectionOrder()) {
+            page->showSection(section);
+            for (auto* b : page->findChildren<QPushButton*>()) {
+                QVERIFY2(b->text() != QLatin1String("Detect again"), qPrintable(section));
+                checkAgain += b->text() == QLatin1String("Check again") ? 1 : 0;
+            }
+        }
+        QVERIFY(checkAgain >= 1);
         m_window->navigate(QStringLiteral("home"));
+    }
+
+    // V-22 (UI review 5.2): an import that changed nothing says so in a toast;
+    // there is nothing in it to read twice, so no sheet to dismiss.
+    void settingsImportWithoutChangeIsAToast()
+    {
+        auto* page = qobject_cast<pages::SettingsPage*>(m_window->page(QStringLiteral("settings")));
+        QVERIFY(page);
+        const QString legacy = m_root.filePath(QStringLiteral("v4-same.json"));
+        QVERIFY(fwtest::writeTextFile(legacy, QByteArray(R"({"pfs_compression_level": 5})")));
+        const QString key = pfs::keys::kCompressionLevel;
+        const auto restore = qScopeGuard([this, key] { m_ctx->settings().reset(key); });
+        QVERIFY(m_ctx->settings().importLegacy(legacy).ok()); // the values are the current ones now
+        QSignalSpy toasts(page, &pages::Page::toastRequested);
+        page->importLegacyFrom(legacy);
+        QCOMPARE(toasts.count(), 1);
+        QVERIFY2(toasts.at(0).at(2).toString().contains(QStringLiteral("nothing changed")), qPrintable(toasts.at(0).at(2).toString()));
+        for (auto* s : m_window->findChildren<ui::Sheet*>())
+            QVERIFY(!s->isVisible());
     }
 
     // The monitor's result: what a successful job made sits on the

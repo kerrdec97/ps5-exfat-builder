@@ -1,0 +1,118 @@
+name: Bug report
+description: Something in exFAT Image Builder does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please fill in every field: a report with the
+        version, the steps and the problem report can usually be fixed much sooner.
+
+        **Do not attach games, game files, packages or Sony tools**, and do not post links to them.
+        A security problem? Please report it privately instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown next to the name at the top of the window, for example 5.1.0.
+      placeholder: "5.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: edition
+    attributes:
+      label: Edition
+      description: Which download are you running?
+      options:
+        - Single-file exe (exFAT Image Builder.exe)
+        - Folder edition (the zip)
+        - Built from source
+        - Other (say below)
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: "Press Win+R, type winver and press Enter: for example Windows 11 24H2 (build 26100)."
+      placeholder: "Windows 11 24H2 (26100)"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in the app
+      multiple: true
+      options:
+        - Build image
+        - Backport
+        - Backport updates (FPKG)
+        - DLC
+        - Image tools (extract, verify, convert, edit)
+        - PS5 connect (FTP, payloads, ShadowMount+, Y2JB)
+        - Library
+        - Queue
+        - Settings
+        - Start-up / installation / antivirus
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Output format (if the problem is with an image or package)
+      multiple: true
+      options:
+        - Not about an image or package
+        - exFAT
+        - FFPKG (UFS2)
+        - PFS compressed (.ffpfsc)
+        - PFS plain (.ffpfs)
+        - FPKG (.pkg)
+        - Packed folder (zstd packs)
+        - Compress game files (zstd packs inside the image)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, one step per line, from starting the app.
+      placeholder: |
+        1. Build image, drop the game folder
+        2. Pick exFAT, turn on ...
+        3. Press Build image
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What happened, and what you expected
+      description: The exact message the app showed helps a lot (copy it or add a screenshot).
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Problem report
+      description: |
+        In the app: **Help** (the ? button at the top right) > **Report a problem…** > **Create report**.
+        The report appears on your Desktop. Drag it into this box. It holds the app's logs and crash
+        reports as text, never your games; "Hide my user name in problem reports" removes your user name.
+        If the app does not start at all, say so here instead.
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Console details (only for problems on the PS5)
+      description: Firmware, jailbreak / payloads used (for example etaHEN, kstuff-lite, ShadowMount+ version).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send
+      options:
+        - label: I am using the newest release, or I have said above why not.
+          required: true
+        - label: This report contains no game files, packages, keys or Sony tools, and no links to them.
+          required: true

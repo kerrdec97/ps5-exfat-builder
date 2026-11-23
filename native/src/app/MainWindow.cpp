@@ -39,6 +39,7 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QGuiApplication>
@@ -50,6 +51,7 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QScrollBar>
+#include <QSessionManager>
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -193,6 +195,15 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     });
 
     connect(&ctx.queue(), &JobQueue::jobFinished, this, &MainWindow::onJobFinished);
+    // The queue file cannot be written (the log has the details): said once a
+    // session, and not while the window closes.
+    connect(&ctx.queue(), &JobQueue::persistenceFailed, this, [this](const QString&) {
+        if (m_queueSaveWarned || m_closeAccepted)
+            return;
+        m_queueSaveWarned = true;
+        toast(Tone::Warn, FW_TR("The queue could not be saved"),
+              FW_TR("Waiting jobs may not be listed after a restart. Check that the data folder can be written: %1").arg(nativePath(Paths::dataDir())));
+    });
     connect(m_queueModel, &JobQueueModel::countsChanged, this, [this] {
         updateChips();
         updateStatus();
@@ -212,6 +223,19 @@ MainWindow::MainWindow(AppContext& ctx, QWidget* parent) : QMainWindow(parent), 
     });
     m_freeSpaceTimer.setInterval(15000);
     connect(&m_freeSpaceTimer, &QTimer::timeout, this, &MainWindow::refreshFreeSpace);
+    connect(&m_freeSpaceTimer, &QTimer::timeout, this, [this] {
+        if (m_shutdownBlocked && !workBlocksSessionEnd())
+            (void)sessionEndMustWait(); // the work ended: Windows may end the session again
+    });
+    // Windows log-off or shut down. Qt does not close the window then (no
+    // closeEvent(), none of its questions): it asks commitDataRequest() and
+    // then quits at once, and Windows ends the process a few seconds later.
+    // While work would be cut off half-way the session end is refused, with a
+    // reason Windows shows beside the app; the user decides there.
+    connect(qApp, &QGuiApplication::commitDataRequest, this, [this](QSessionManager& manager) {
+        if (sessionEndMustWait())
+            manager.cancel();
+    });
     m_freeSpaceTimer.start();
 
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -464,7 +488,11 @@ void MainWindow::updateChips()
     const QString afterName = m_ctx.settings().value(general::keys::kAfterQueueAction).toString();
     const power::Action after = power::actionFromName(afterName);
     const QString then = after == power::Action::None ? QString() : QStringLiteral(" · ") + afterQueueText(afterName);
-    if (running == 0 && queued == 0)
+    // A backport run is not a queue job: with nothing in the queue the chip
+    // says that the app is at work all the same (V-01).
+    if (running == 0 && queued == 0 && backportBusy())
+        m_header->setQueueChip(FW_TR("Backport running") + then, after == power::Action::None ? Tone::Info : Tone::Warn, true);
+    else if (running == 0 && queued == 0)
         m_header->setQueueChip(FW_TR("Queue idle") + then, after == power::Action::None ? Tone::Neutral : Tone::Warn, true);
     else if (running == 0 && m_ctx.queue().isHeld()) // a list that waits for "Start queue"
         m_header->setQueueChip(FW_TR("Queue waiting · %1").arg(queued) + then, after == power::Action::None ? Tone::Info : Tone::Warn, true);
@@ -474,6 +502,7 @@ void MainWindow::updateChips()
 
 void MainWindow::updateStatus()
 {
+    updateChips(); // the queue chip also follows a backport run, which only this hears about
     int runningUser = 0, queuedUser = 0;
     countUserJobs(*m_queueModel, runningUser, queuedUser);
     Q_UNUSED(runningUser);
@@ -491,6 +520,10 @@ void MainWindow::updateStatus()
                                                                       : FW_TR("Running: %1%2");
         m_status->setStatus(text.arg(running->title, pct),
                             running->state == JobState::Running ? Tone::Info : Tone::Neutral);
+    } else if (backportBusy()) {
+        // Not "Ready" while the PS5 Backport engine works on a game (V-01);
+        // the Backport page's own line ("game 2 of 3") is its status context.
+        m_status->setStatus(FW_TR("Backport running"), Tone::Info);
     } else if (const int n = m_settingsPage ? m_settingsPage->attentionCount() : 0; n > 0) {
         m_status->setStatus(n == 1 ? FW_TR("%1 setting needs attention").arg(n) : FW_TR("%1 settings need attention").arg(n), Tone::Warn);
     } else if (m_ctx.queue().isHeld() && queuedUser > 0) {
@@ -508,12 +541,23 @@ void MainWindow::refreshFreeSpace()
     QString folder = m_ctx.settings().value(general::keys::kDefaultOutputDir).toString();
     if (folder.isEmpty())
         folder = QDir::homePath();
-    // Off the UI thread: a network or unplugged drive answers slowly.
+    // Off the UI thread: a network or unplugged drive answers slowly. One
+    // probe at a time: while one has not answered, a refresh asks again only
+    // once it has (a drive that does not answer would block a thread per tick).
+    if (m_freeSpaceInFlight) {
+        m_freeSpaceAgain = true;
+        return;
+    }
+    m_freeSpaceInFlight = true;
     const quint64 gen = ++m_freeSpaceGen;
     pages::probeFreeSpace(this, folder, [this, gen](bool ready, qint64 available, const QString& label) {
-        if (gen != m_freeSpaceGen)
-            return;
-        m_status->setFreeSpace(ready ? FW_TR("%1 %2 free").arg(label, formatBytes(available)) : QString());
+        m_freeSpaceInFlight = false;
+        if (gen == m_freeSpaceGen)
+            m_status->setFreeSpace(ready ? FW_TR("%1 %2 free").arg(label, formatBytes(available)) : QString());
+        if (m_freeSpaceAgain) {
+            m_freeSpaceAgain = false;
+            refreshFreeSpace(); // the folder may have changed meanwhile
+        }
     });
 }
 
@@ -617,12 +661,33 @@ void MainWindow::onQueueFinished(int succeeded, int failed, int cancelled)
 // What the toast says about it (English, for the log), or "" when none runs.
 QString MainWindow::workOutsideTheQueue() const
 {
-    if (auto* backport = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport"))); backport && backport->isBusy())
+    if (backportBusy())
         return FW_TR_NOOP("A backport run or restore is in progress.");
     const auto tools = findChildren<pages::ConsoleToolTab*>();
     if (std::any_of(tools.begin(), tools.end(), [](const pages::ConsoleToolTab* t) { return t->isBusy(); }))
         return FW_TR_NOOP("PS5 connect is still at work.");
     return {};
+}
+
+bool MainWindow::workBlocksSessionEnd() const
+{
+    return m_ctx.queue().isBusy() || !workOutsideTheQueue().isEmpty();
+}
+
+bool MainWindow::sessionEndMustWait()
+{
+    const bool busy = workBlocksSessionEnd();
+    if (busy) {
+        launcher::setShutdownBlockReason(this, FW_TR("exFAT Image Builder is still at work (a job, a backport run or a PS5 tool). "
+                                                     "Ending now can leave its output half written."));
+        if (!m_shutdownBlocked)
+            Log(QStringLiteral("app")).warn(QStringLiteral("Windows is ending the session while the app is at work: refused. %1")
+                                                .arg(m_ctx.queue().isBusy() ? QStringLiteral("Jobs are running.") : workOutsideTheQueue()));
+    } else if (m_shutdownBlocked) {
+        launcher::setShutdownBlockReason(this, {});
+    }
+    m_shutdownBlocked = busy;
+    return busy;
 }
 
 // The countdown does not block: it is shown and answered through
@@ -697,7 +762,9 @@ void MainWindow::onActionDue(power::Action action, int delaySeconds, int succeed
         // After the sheet has gone: Windows may suspend the computer inside perform().
         QTimer::singleShot(0, this, [this, action, texts] {
             // Changed meanwhile, or the queue is at work again: not now.
-            if (power::actionFromName(m_ctx.settings().value(general::keys::kAfterQueueAction).toString()) != action) {
+            // (dueAction(): with "Only after this run" the setting already
+            // reads "Do nothing" while this run's countdown is still due.)
+            if (m_watcher->dueAction() != action) {
                 Log(QStringLiteral("power")).info(QStringLiteral("After-queue action not run: the setting changed during the countdown"));
                 return;
             }
@@ -793,6 +860,13 @@ void MainWindow::onUpdateCheckFinished(const JobRecord& rec)
     }
     // The same release as the file that is already here: nothing to fetch again.
     if (downloadedVersion == m_release.value(QStringLiteral("version")).toString() && QFileInfo(m_downloadedUpdate).isFile()) {
+        m_updateState = UpdateState::Downloaded;
+        showUpdateDownloaded();
+        return;
+    }
+    // Downloaded and verified in an earlier session, and unchanged since.
+    if (const QString kept = rememberedDownloadedUpdate(m_release.value(QStringLiteral("version")).toString()); !kept.isEmpty()) {
+        m_downloadedUpdate = kept;
         m_updateState = UpdateState::Downloaded;
         showUpdateDownloaded();
         return;
@@ -920,7 +994,34 @@ void MainWindow::onUpdateDownloadFinished(const JobRecord& rec)
     }
     m_downloadedUpdate = rec.outcome->outputs.first();
     m_updateState = UpdateState::Downloaded;
+    rememberDownloadedUpdate(m_release.value(QStringLiteral("version")).toString(), m_downloadedUpdate);
     showUpdateDownloaded();
+}
+
+// The verified download is remembered across restarts (version, path, size
+// and time of the file as it was verified): the next check for the same
+// release offers it again instead of downloading it once more. A file that
+// changed since (other size or time) is not taken for the verified one.
+void MainWindow::rememberDownloadedUpdate(const QString& version, const QString& path)
+{
+    QSettings qs;
+    const QFileInfo fi(path);
+    qs.setValue(QStringLiteral("update/downloadedVersion"), version);
+    qs.setValue(QStringLiteral("update/downloadedPath"), fi.absoluteFilePath());
+    qs.setValue(QStringLiteral("update/downloadedSize"), fi.size());
+    qs.setValue(QStringLiteral("update/downloadedTime"), fi.lastModified().toMSecsSinceEpoch());
+}
+
+QString MainWindow::rememberedDownloadedUpdate(const QString& version) const
+{
+    QSettings qs;
+    if (version.isEmpty() || qs.value(QStringLiteral("update/downloadedVersion")).toString() != version)
+        return {};
+    const QFileInfo fi(qs.value(QStringLiteral("update/downloadedPath")).toString());
+    if (!fi.isFile() || fi.size() != qs.value(QStringLiteral("update/downloadedSize")).toLongLong()
+        || fi.lastModified().toMSecsSinceEpoch() != qs.value(QStringLiteral("update/downloadedTime")).toLongLong())
+        return {};
+    return fi.absoluteFilePath();
 }
 
 // ---- crash files and problem reports -------------------------------------------------------
@@ -1081,6 +1182,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         event->ignore();
         return;
     }
+    m_backportCutOff = false; // asked again on each close
     // Edits that exist only in this window.
     for (const QString& key : m_order) {
         pages::Page* page = m_pages.value(key);
@@ -1096,31 +1198,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
             return;
         }
     }
-    // A backport run or restore in progress (the PS5 Backport engine runs it).
-    // A run is cancelled at its next safe point (an apply in progress is rolled
-    // back from the verified backup first); a restore cannot be cancelled and
-    // is waited for, however long it takes.
-    if (auto* bpPage = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport"))); bpPage && bpPage->isBusy()) {
-        const bool restoring = bpPage->isRestoring();
-        const bool go = restoring
-            ? Sheet::confirm(this, FW_TR("A restore is finishing"),
-                             FW_TR("The game's original files are being put back. This cannot be stopped half-way; the app closes when it is done."),
-                             FW_TR("Keep the app open"), FW_TR("Close when done"), false, Sheet::Icon::Info)
-            : Sheet::confirm(this, FW_TR("Cancel the backport run?"),
-                             FW_TR("A backport run is in progress. Cancel it and close?\n\nAn apply in progress is rolled back from the verified backup first."),
-                             FW_TR("Keep running"), FW_TR("Cancel and close"), true, Sheet::Icon::Warning);
-        if (!go) {
-            event->ignore();
-            return;
-        }
-        // The wait runs the event loop: nothing in the window may be used meanwhile.
-        m_closeInProgress = true;
-        centralWidget()->setEnabled(false);
-        m_status->setContext(restoring ? FW_TR("A restore is finishing; the app closes when it is done…")
-                                       : FW_TR("Stopping the backport run…"));
-        bpPage->cancelAndWait(restoring ? std::numeric_limits<int>::max() : 120000);
-        centralWidget()->setEnabled(true);
-        m_closeInProgress = false;
+    if (!stopBackportForClose()) {
+        event->ignore();
+        return;
+    }
+    if (!finishPs5ToolsForClose()) {
+        event->ignore();
+        return;
     }
     if (m_ctx.queue().isBusy() && m_ctx.settings().value(general::keys::kConfirmOnClose).toBool()) {
         // Stopped jobs are listed again at the next start only when the queue is restored.
@@ -1134,8 +1218,135 @@ void MainWindow::closeEvent(QCloseEvent* event)
             return;
         }
     }
+    // The questions above run nested event loops: a backport run can have
+    // started meanwhile (its destination checks ended while a sheet was open).
+    if (!stopBackportForClose()) {
+        event->ignore();
+        return;
+    }
     saveWindowState();
+    m_closeAccepted = true;
     event->accept();
+}
+
+// ---- closing: work outside the queue ---------------------------------------------------------
+
+bool MainWindow::backportBusy() const
+{
+    if (m_backportHooks.busy)
+        return m_backportHooks.busy();
+    auto* bp = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport")));
+    return bp && bp->isBusy();
+}
+
+bool MainWindow::backportRestoring() const
+{
+    if (m_backportHooks.restoring)
+        return m_backportHooks.restoring();
+    auto* bp = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport")));
+    return bp && bp->isRestoring();
+}
+
+void MainWindow::backportCancelAndWait(int ms)
+{
+    if (m_backportHooks.cancelAndWait) {
+        m_backportHooks.cancelAndWait(ms);
+        return;
+    }
+    if (auto* bp = qobject_cast<pages::BackportPage*>(m_pages.value(QStringLiteral("backport"))))
+        bp->cancelAndWait(ms);
+}
+
+void MainWindow::setBackportHooksForTests(BackportHooks hooks, int closeWaitMs)
+{
+    m_backportHooks = std::move(hooks);
+    if (closeWaitMs > 0)
+        m_backportCloseWaitMs = closeWaitMs;
+}
+
+// A backport run or restore in progress (the PS5 Backport engine runs it).
+// A run is cancelled at its next safe point (an apply in progress is rolled
+// back from the verified backup first); a restore cannot be cancelled and is
+// waited for, however long it takes. A run that has not stopped when the wait
+// is over is not taken for stopped: the user keeps waiting or closes anyway.
+// False: the window stays open.
+bool MainWindow::stopBackportForClose()
+{
+    // The user chose "Close anyway" in this close: not asked a second time.
+    if (m_backportCutOff || !backportBusy())
+        return true;
+    const bool restoring = backportRestoring();
+    const bool go = restoring
+        ? Sheet::confirm(this, FW_TR("A restore is finishing"),
+                         FW_TR("The game's original files are being put back. This cannot be stopped half-way; the app closes when it is done."),
+                         FW_TR("Keep the app open"), FW_TR("Close when done"), false, Sheet::Icon::Info)
+        : Sheet::confirm(this, FW_TR("Cancel the backport run?"),
+                         FW_TR("A backport run is in progress. Cancel it and close?\n\nAn apply in progress is rolled back from the verified backup first."),
+                         FW_TR("Keep running"), FW_TR("Cancel and close"), true, Sheet::Icon::Warning);
+    if (!go)
+        return false;
+    for (;;) {
+        // The wait runs the event loop: nothing in the window may be used meanwhile.
+        m_closeInProgress = true;
+        centralWidget()->setEnabled(false);
+        m_status->setContext(restoring ? FW_TR("A restore is finishing; the app closes when it is done…")
+                                       : FW_TR("Stopping the backport run…"));
+        backportCancelAndWait(restoring ? std::numeric_limits<int>::max() : m_backportCloseWaitMs);
+        centralWidget()->setEnabled(true);
+        m_closeInProgress = false;
+        if (!backportBusy())
+            return true;
+        const bool cutOff = Sheet::confirm(this, FW_TR("The backport run has not stopped yet"),
+                                           FW_TR("The engine is still rolling back or finishing its current step. Closing now cuts it off "
+                                                 "and can leave the game folder half restored."),
+                                           FW_TR("Keep waiting"), FW_TR("Close anyway"), true, Sheet::Icon::Warning);
+        if (cutOff) {
+            Log(QStringLiteral("backport")).warn(QStringLiteral("Closed while the backport run had not stopped yet (the user chose Close anyway)."));
+            m_backportCutOff = true;
+            return true;
+        }
+    }
+}
+
+// A PS5 connect tool writing to the console or to this PC (a multi-file
+// change, a rename, a package install): closing stops it between two steps.
+// The user keeps the app open, or the app closes once the work is done
+// (cancelled after m_ps5CloseWaitMs). False: the window stays open.
+bool MainWindow::finishPs5ToolsForClose()
+{
+    const auto busyTools = [this] {
+        QList<pages::ConsoleToolTab*> busy;
+        for (auto* t : findChildren<pages::ConsoleToolTab*>())
+            if (t->isBusy())
+                busy << t;
+        return busy;
+    };
+    if (busyTools().isEmpty())
+        return true;
+    auto* s = new Sheet(this, FW_TR("PS5 connect is still at work"), Sheet::Icon::Warning);
+    s->setObjectName(QStringLiteral("close-ps5-busy"));
+    s->addText(FW_TR("A PS5 tool is still writing to the console or to this PC. Closing now stops it between two steps and can leave "
+                     "the change half made."));
+    s->addButton(FW_TR("Keep the app open"), Sheet::Role::Safe);
+    s->addButton(FW_TR("Close when it is done"), Sheet::Role::Primary);
+    if (s->exec() != 1)
+        return false;
+    m_closeInProgress = true;
+    centralWidget()->setEnabled(false);
+    m_status->setContext(FW_TR("Waiting for PS5 connect to finish…"));
+    QElapsedTimer waited;
+    waited.start();
+    while (!busyTools().isEmpty() && waited.elapsed() < m_ps5CloseWaitMs)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+    const auto still = busyTools();
+    for (auto* t : still)
+        t->cancelWork();
+    if (!still.isEmpty())
+        Log(QStringLiteral("ps5")).warn(QStringLiteral("Closed while a PS5 connect tool was still at work: it was stopped after %1 s.")
+                                            .arg(m_ps5CloseWaitMs / 1000));
+    centralWidget()->setEnabled(true);
+    m_closeInProgress = false;
+    return true;
 }
 
 // ---- drag and drop -------------------------------------------------------------------------

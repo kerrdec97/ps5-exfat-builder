@@ -148,15 +148,30 @@ std::optional<FtpEntry> parseMlsdLine(const QString& lineIn)
     return e;
 }
 
-std::vector<FtpEntry> parseListing(const QByteArray& data, bool mlsd)
+std::vector<FtpEntry> parseListing(const QByteArray& data, bool mlsd, bool* tooMany)
 {
+    if (tooMany)
+        *tooMany = false;
     std::vector<FtpEntry> out;
     const QDateTime now = QDateTime::currentDateTimeUtc();
-    for (const QByteArray& raw : data.split('\n')) {
-        const QString line = QString::fromUtf8(raw);
+    // Line by line in place: no copy of the whole listing split into pieces.
+    qsizetype pos = 0;
+    const qsizetype n = data.size();
+    while (pos < n) {
+        qsizetype nl = data.indexOf('\n', pos);
+        if (nl < 0)
+            nl = n;
+        const QString line = QString::fromUtf8(data.constData() + pos, nl - pos);
+        pos = nl + 1;
         auto e = mlsd ? parseMlsdLine(line) : parseListLine(line, now);
-        if (e)
-            out.push_back(std::move(*e));
+        if (!e)
+            continue;
+        if (qsizetype(out.size()) >= kMaxListingEntries) {
+            if (tooMany)
+                *tooMany = true;
+            break;
+        }
+        out.push_back(std::move(*e));
     }
     return out;
 }

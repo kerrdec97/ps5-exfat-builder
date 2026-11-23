@@ -36,6 +36,13 @@ struct TreeNode {
     QString localPath;     // content source on disk (absolute), or
     quint32 imageIno = 0;  // content source in SourceTree::image
     bool removed = false;  // dropped by an edit (kept so indices stay valid)
+    // Builds from an archive (Ufs2Archive.h): the content is this
+    // archive::GameListing item; after the build `digest` holds the
+    // archive::ContentDigest of the bytes written for it, which a
+    // verification compares the image's bytes with.
+    int archiveItem = -1;
+    bool hasDigest = false;
+    quint64 digest = 0;
 
     bool isDir() const { return kind == NodeKind::Dir; }
 };

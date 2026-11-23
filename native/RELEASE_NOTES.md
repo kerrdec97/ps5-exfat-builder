@@ -1,4 +1,4 @@
-# exFAT Image Builder 5.0.3 · release notes
+# exFAT Image Builder 5.1.0 · release notes
 
 **Download `exFAT Image Builder.exe`** (GitHub lists it as
 `exFAT.Image.Builder.exe`) and run it: one file, nothing to unzip or install,
@@ -8,8 +8,81 @@ Redistributable. The first start unpacks the program once to
 next to the exe: beside the exe instead). Check it against `SHA256SUMS.txt`.
 
 Antivirus removes the exe? Download the **folder edition**
-(`exFAT-Image-Builder-5.0.3-win64-folder.zip`) instead: the same program,
+(`exFAT-Image-Builder-5.1.0-win64-folder.zip`) instead: the same program,
 already unpacked. Extract it anywhere and run the exe inside.
+
+## What's new in 5.1.0
+
+The big ones: images and packed folders are built straight from a ZIP, 7z or
+RAR without unpacking it first, compressed exFAT is now a clear choice on the
+exFAT tile, there is a new single-file ZSTD image, and the bundled ampr-emu-ng
+and Backport engine are newer. If something does not behave on your console,
+please open an issue: they are read and answered.
+
+* **ZSTD image (experimental), GitHub #98.** A new format tile on the Build
+  page: one `.zstd` file, an exFAT image with the game in zstd packs, for
+  Kraken Mount MOD. ShadowMount+ does not mount the name: rename the file to
+  `.exfat` for it. `.zstd` images open everywhere images open (verify,
+  extract, convert, edit, compare, Library, PS5 connect lists); a file that is
+  a plain zstd stream or not an exFAT image is refused with a clear text.
+* **Build straight from an archive, GitHub #37.** exFAT, FFPKG and
+  uncompressed PFS (`.ffpfs`) images are built directly from a `.zip`, `.7z`
+  or `.rar`, and compressed PFS (`.ffpfsc`) directly from a `.zip`: one pass
+  through the archive, nothing is unpacked to disk, so the temporary drive no
+  longer needs room for the game. Builds with zstd packs (compressed exFAT,
+  ZSTD image, FFPKG and PFS with packs, packed folder) pack the game straight
+  from the archive too: only the packs and the loose files are written, as
+  from a folder, and from a `.7z` or `.rar` the packs' data also waits in the
+  temporary folder (up to the packs' size) until the packs are written in
+  order. The images and packs are the same, byte for byte, as when the
+  archive was unpacked first. Every entry's checksum is verified while it is
+  read, and the result is read back and checked before it gets its name.
+  FPKG packages, an `.ffpfsc` from a `.7z` or `.rar`, PFS with per-file
+  compression and an archive of an already packed game still unpack the
+  archive first; the Build page and the job log say which way a build goes
+  and why.
+* **Compressed exFAT is a visible choice.** The exFAT tile starts with
+  **Image type: Standard / Compressed**. Compressed is the same `.exfat`,
+  smaller, with the game's files in zstd packs (it replaces the "Compress
+  game files" switch further down the tile).
+* **ampr-emu-ng 0.5.0** is the bundled runtime for zstd packs (was 0.3.3).
+  The pack format is unchanged. `.ini` files are never packed; a game that
+  already carries a newer runtime gets a warning; the mounter notes name
+  ShadowMount+'s `[emulators]` keys and Kraken Mount.
+* **PFS images:** no directory entry crosses a block any more, so `.ffpfs` /
+  `.ffpfsc` images with very large folders can be read by the package builders
+  that parse a directory block by block. Images of games without such folders
+  are byte for byte as before.
+* **Backport tab:** the bundled engine is the testing build
+  **PS5 Backport GUI 0.3.5-test4** (0.3.4 can still be bundled with
+  `-DFW_BACKPORT_ENGINE_VERSION=0.3.4`). New: Offline mode, "Restore needed"
+  and "Needs SDK ≤ N" states, the 0.3.5 space rules, no job while the
+  standalone program runs, Dump check hands a game over to the Backport tab
+  (#26), a clearer Target SDK caption (#92).
+* **Libraries:** zlib 1.4 (was 1.3.1) and LZ4 1.11.1 (was 1.10.0), which fix
+  memory-safety and decoding bugs in the code that unpacks compressed data.
+* **FPKG:** the FPKG tile takes ZIP, 7z and RAR dumps like the other tiles
+  (#37); "Title for all languages" writes a changed title for every language
+  of `param.json` (#94, on by default). An FPKG made from a PFS image leaves
+  out the `.pfskeep` markers.
+* **Queue:** "Only after this run" for the action after the queue (#96).
+* **Closing the app:** running jobs are stopped and recorded before the window
+  goes; a job that ends while the app closes keeps its result; closing asks
+  when a PS5 tool or a backport run is still at work; Windows is told the app
+  is busy at log-off; update checks and downloads are not kept across
+  restarts; a queue that cannot be saved is reported.
+* **PS5 connect:** bounded FTP reads (log tail, download ceiling, listing
+  limits), kernel log lines handed over in batches, the ShadowMount+ editor
+  warns when `auto_update_ampr` would replace ampr-emu-ng, "Send" instead of
+  "Push", "Start log" / "Stop log".
+* **Settings:** Storage lists the Backport tab's folders (#90, #91); a copy is
+  not made portable when its settings cannot be saved.
+* **Interface:** the status bar says when a backport run is on, one table
+  header style, the percent sign in right-to-left languages, screen readers
+  read the format tiles as a choice.
+* **Tests:** a new end-to-end format matrix (`tst_format_matrix`): every
+  source kind into every format, extract, compare by SHA-256, conversions,
+  edits, difficult names, cancellation.
 
 ## What's new in 5.0.3
 
@@ -605,9 +678,9 @@ Fixed or made obsolete by the rewrite: #86, #85, #84, #82, #81, #80, #79,
 #77, #76, #74, #73, #72, #71, #69, #68, #65, #61, #60, #53, #43, #39, #36,
 #33, #27, #21, #20, #19, #67 (ZIP dumps; #37 asked to stream without
 unpacking: ZIPs are unpacked to a temporary folder) and PR #57 superseded.
-Still open: 7z/RAR archives and streaming from archives (#37), interface
-translations (#35), a dump checker (#26), antivirus false positives until the
-exe is code-signed (#78).
+Since then: 7z and RAR archives and building straight from an archive (#37,
+5.1.0), interface translations (#35, 5.0.2), a dump checker (#26). Still
+open: antivirus false positives until the exe is code-signed (#78).
 
 ## How it was tested
 * **Automated tests** (63 test programs) on Windows (MSVC 2022, Qt 6.10):
@@ -716,7 +789,7 @@ interface before this release. What changed:
 4. One FPKG with your Publishing Tools; install it.
 5. A backport update package over its base, and one DLC package; install them.
 6. One game with zstd packs (ShadowMount+, fakelib updates off); launch it and
-   check that "ampr-emu-ng: v0.3.3 (zstd) running" shows.
+   check that "ampr-emu-ng: v0.5.0 (zstd) running" shows.
 7. One game as a Packed folder on a USB drive (or sent over FTP); launch it
    the same way.
 

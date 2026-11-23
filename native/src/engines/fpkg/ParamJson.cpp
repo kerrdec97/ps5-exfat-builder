@@ -145,9 +145,26 @@ QStringList applyParamPatch(json::Value& p, const ParamPatchOptions& o)
         json::Value& entry = loc[lang];
         if (!entry.isObject())
             entry = json::Value::object();
-        if (entry.value(QStringLiteral("titleName")).toString() != o.title) {
+        // Only a changed title renames the other languages: the Build page
+        // sends the title it read even when the user left it alone, and when
+        // the default language has no title of its own that is a fallback
+        // (another language's name, the folder's), which is no rename.
+        const QString before = entry.value(QStringLiteral("titleName")).toString();
+        const bool changed = before != o.title;
+        if (changed) {
             notes << QStringLiteral("localizedParameters.%1.titleName -> \"%2\"").arg(lang, o.title);
             entry.insert(QStringLiteral("titleName"), json::Value(o.title));
+        }
+        if (changed && !before.trimmed().isEmpty() && o.titleAllLanguages) {
+            for (const QString& key : loc.keys()) {
+                if (key == lang || key == u"defaultLanguage")
+                    continue;
+                json::Value& other = loc[key];
+                if (!other.isObject() || other.value(QStringLiteral("titleName")).toString() == o.title)
+                    continue;
+                notes << QStringLiteral("localizedParameters.%1.titleName -> \"%2\"").arg(key, o.title);
+                other.insert(QStringLiteral("titleName"), json::Value(o.title));
+            }
         }
     }
     return notes;

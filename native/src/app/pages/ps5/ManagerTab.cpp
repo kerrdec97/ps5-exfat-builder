@@ -88,8 +88,9 @@ Result<std::vector<ps5::CompareFile>> localSide(const QString& source, const Can
     if (!fi.isFile())
         return Error(ErrorCode::NotFound, QStringLiteral("%1 does not exist.").arg(nativePath(source)));
     const QString ext = fi.suffix().toLower();
-    if (ext != u"exfat" && ext != u"ffpkg")
-        return Error(ErrorCode::Unsupported, QStringLiteral("Only a dump folder, an .exfat or an .ffpkg image can be compared. Extract other images first."));
+    // A .zstd single file is an exFAT image (readImageTree() checks its first sector).
+    if (ext != u"exfat" && ext != u"zstd" && ext != u"ffpkg")
+        return Error(ErrorCode::Unsupported, QStringLiteral("Only a dump folder, an .exfat, .zstd or .ffpkg image can be compared. Extract other images first."));
     const ImageTreeResult tree = readImageTree(source);
     if (!tree.error.isEmpty())
         return Error(ErrorCode::CorruptData, QStringLiteral("Could not read %1: %2").arg(fi.fileName(), tree.error));
@@ -468,7 +469,7 @@ void Ps5ManagerTab::browseConsole()
 void Ps5ManagerTab::chooseImage()
 {
     const QString image = QFileDialog::getOpenFileName(window(), FW_TR("Choose the image to compare with"), QString(),
-                                                       FW_TR("Images") + QStringLiteral(" (*.exfat *.ffpkg)"));
+                                                       FW_TR("Images") + QStringLiteral(" (*.exfat *.zstd *.ffpkg)"));
     if (!image.isEmpty())
         m_cmpLocal->setPath(image);
 }

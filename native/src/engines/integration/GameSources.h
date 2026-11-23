@@ -6,8 +6,9 @@
 // image readers and the pack engine:
 //
 //   image.build.zstd {format, source, output, ...build parameters}
-//       Packs the game (folder or ZIP) into zstd packs in a work folder next to
-//       the output, then builds the image (image.exfat.build,
+//       Packs the game (a folder, or a .zip, .7z or .rar packed in one pass
+//       through it, ampr::packGameFromArchive) into zstd packs in a work folder
+//       next to the output, then builds the image (image.exfat.build,
 //       image.ffpkg.build or image.pfs.build) from it. Phases: Preparing,
 //       Packing, Checking packs, then the image build's phases.
 //

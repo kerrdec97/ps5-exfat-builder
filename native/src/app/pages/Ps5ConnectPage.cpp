@@ -5,6 +5,7 @@
 #include "app/pages/ps5/AutoloaderTab.h"
 #include "app/pages/ps5/ConsoleExtras.h"
 #include "app/pages/ps5/ConsoleHero.h"
+#include "app/pages/ps5/ConsoleToolTab.h"
 #include "app/pages/ps5/DiagnosticsTab.h"
 #include "app/pages/ps5/FakelibTab.h"
 #include "app/pages/ps5/FindConsole.h"
@@ -18,6 +19,7 @@
 #include "app/ui/LogView.h"
 #include "app/ui/Sheet.h"
 #include "connect/ps5/ConsoleBackup.h"
+#include "connect/ps5/ConsoleGames.h"
 #include "connect/ps5/Module.h"
 #include "connect/ps5/PayloadSender.h"
 #include "connect/ps5/RemotePath.h"
@@ -271,8 +273,7 @@ QString entryIcon(const ps5::FtpEntry& e)
     if (e.isLink)
         return QStringLiteral("link");
     const QString low = e.name.toLower();
-    if (low.endsWith(QLatin1String(".exfat")) || low.endsWith(QLatin1String(".ffpkg")) || low.endsWith(QLatin1String(".ffpfs"))
-        || low.endsWith(QLatin1String(".ffpfsc")) || low.endsWith(QLatin1String(".img")))
+    if (ps5::isConsoleImageName(low) || low.endsWith(QLatin1String(".img"))) // .exfat, .zstd, .ffpkg, .ffpfs, .ffpfsc
         return QStringLiteral("hard_drive");
     if (low.endsWith(QLatin1String(".pkg")))
         return QStringLiteral("package");
@@ -463,7 +464,7 @@ Ps5ConnectPage::~Ps5ConnectPage()
 {
     if (m_klogClient)
         m_klogClient->stop();
-    m_probe.waitForFinished();
+    waitQuietly(m_probe); // never rethrows into this (noexcept) destructor
 }
 
 int Ps5ConnectPage::settingPort(const QString& key, int fallback) const
@@ -1638,7 +1639,8 @@ QWidget* Ps5ConnectPage::buildPayloads(QWidget* parent)
     m_payloadDetail->body()->addWidget(m_targetHint);
     auto* pa = new QWidget(m_payloadDetail);
     auto* pal = hbox(pa, space::sm);
-    m_pRemove = button(FW_TR("Remove"), ButtonVariant::Subtle, QStringLiteral("trash"), pa);
+    // "…": it asks first (V-16).
+    m_pRemove = button(FW_TR("Remove…"), ButtonVariant::Subtle, QStringLiteral("trash"), pa);
     m_pEdit = button(FW_TR("Edit…"), ButtonVariant::Secondary, QStringLiteral("edit"), pa);
     m_pSend = button(FW_TR("Send"), ButtonVariant::Primary, QStringLiteral("send"), pa);
     setToolPrimary(m_pSend);
@@ -1648,7 +1650,9 @@ QWidget* Ps5ConnectPage::buildPayloads(QWidget* parent)
     pal->addWidget(m_pEdit);
     pal->addWidget(m_pSend);
     m_payloadDetail->body()->addWidget(pa);
-    auto* warn = new InfoBar(Tone::Warn, m_payloadDetail);
+    // A standing tip, not a state: amber is kept for what needs the user now (V-15).
+    auto* warn = new InfoBar(Tone::Info, m_payloadDetail);
+    warn->setObjectName(QStringLiteral("payload-resident-tip"));
     warn->setMessage(FW_TR("A second resident payload can crash the kernel; reboot between unrelated ones."));
     m_payloadDetail->body()->addWidget(warn);
     pl->setRight(m_payloadDetail);
@@ -1810,11 +1814,12 @@ QWidget* Ps5ConnectPage::buildKlog(QWidget* parent)
     auto* card = new Card(tab, Card::Variant::Table);
     auto* h = card->header();
     h->setSpacing(space::md);
-    m_klogConnect = button(FW_TR("Connect"), ButtonVariant::Primary, QStringLiteral("plug"), card);
+    // "Start log": the hero's Connect is the FTP connection, this is the log stream (V-05).
+    m_klogConnect = button(FW_TR("Start log"), ButtonVariant::Primary, QStringLiteral("play"), card);
     setToolPrimary(m_klogConnect);
     m_klogPause = button(FW_TR("Pause"), ButtonVariant::Secondary, QStringLiteral("pause"), card);
     m_klogPause->setEnabled(false);
-    m_klogBadge = new Badge(FW_TR("Disconnected"), Tone::Neutral, card);
+    m_klogBadge = new Badge(FW_TR("Not started"), Tone::Neutral, card);
     m_klogBadge->setIconName({});
     h->addWidget(m_klogConnect);
     h->addWidget(m_klogPause);
@@ -1920,6 +1925,20 @@ void Ps5ConnectPage::updateKlogStats()
     emit statusContextChanged();
 }
 
+void Ps5ConnectPage::takeKlogLines(const std::vector<ps5::KlogLine>& lines)
+{
+    // The view keeps the last kKlogMaxLines: more waiting for the next flush would only be dropped there.
+    if (qsizetype(lines.size()) >= kKlogMaxLines) {
+        m_klogIncoming.assign(lines.end() - kKlogMaxLines, lines.end());
+    } else {
+        m_klogIncoming.insert(m_klogIncoming.end(), lines.begin(), lines.end());
+        if (qsizetype(m_klogIncoming.size()) > kKlogMaxLines)
+            m_klogIncoming.erase(m_klogIncoming.begin(), m_klogIncoming.end() - kKlogMaxLines);
+    }
+    if (!m_klogFlush->isActive())
+        m_klogFlush->start();
+}
+
 void Ps5ConnectPage::flushKlog()
 {
     if (m_klogIncoming.empty())
@@ -1931,7 +1950,7 @@ void Ps5ConnectPage::flushKlog()
         return;
     }
     m_klogHeld.insert(m_klogHeld.end(), lines.begin(), lines.end());
-    while (m_klogHeld.size() > 20000)
+    while (qsizetype(m_klogHeld.size()) > kKlogMaxLines)
         m_klogHeld.pop_front();
 }
 
@@ -1958,15 +1977,14 @@ void Ps5ConnectPage::klogToggle()
     // Posted to the application object: the page may be gone when a call arrives, and only the UI thread may ask.
     QPointer<Ps5ConnectPage> self(this);
     const quint64 gen = m_klogGen;
-    m_klogClient = std::make_unique<ps5::KlogClient>(
+    // One posted call per batch (at most every 100 ms), not one per line.
+    m_klogClient = ps5::KlogClient::withBatches(
         o,
-        [self, gen](const ps5::KlogLine& line) {
-            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, line] {
+        [self, gen](const std::vector<ps5::KlogLine>& lines) {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, lines] {
                 if (!self || gen != self->m_klogGen)
                     return;
-                self->m_klogIncoming.push_back(line);
-                if (!self->m_klogFlush->isActive())
-                    self->m_klogFlush->start();
+                self->takeKlogLines(lines);
             }, Qt::QueuedConnection);
         },
         [self, gen](ps5::KlogState st, const QString& detail) {
@@ -1982,9 +2000,9 @@ void Ps5ConnectPage::klogToggle()
 void Ps5ConnectPage::klogState(ps5::KlogState state, const QString& detail)
 {
     const bool running = m_klogClient != nullptr;
-    m_klogConnect->setText(running ? FW_TR("Disconnect") : FW_TR("Connect"));
+    m_klogConnect->setText(running ? FW_TR("Stop log") : FW_TR("Start log"));
     setToolPrimary(m_klogConnect, !running);
-    setButtonIcon(m_klogConnect, running ? QStringLiteral("unplug") : QStringLiteral("plug"));
+    setButtonIcon(m_klogConnect, running ? QStringLiteral("stop") : QStringLiteral("play"));
     m_klogPause->setEnabled(running);
     Tone tone = Tone::Neutral;
     QString word = ps5::klogStateName(state);
@@ -2000,7 +2018,7 @@ void Ps5ConnectPage::klogState(ps5::KlogState state, const QString& detail)
     case ps5::KlogState::Connecting: tone = Tone::Info; word = FW_TR("Connecting"); break;
     case ps5::KlogState::Reconnecting: tone = Tone::Info; word = FW_TR("Reconnecting"); break;
     case ps5::KlogState::Disconnected: tone = Tone::Warn; word = FW_TR("Disconnected"); break;
-    case ps5::KlogState::Stopped: tone = Tone::Neutral; word = FW_TR("Disconnected"); break;
+    case ps5::KlogState::Stopped: tone = Tone::Neutral; word = FW_TR("Not started"); break; // not "Disconnected" under a connected console (V-05)
     }
     // The card's chip said "live" while the stream ran; it does not any more.
     if (state != ps5::KlogState::Connected && m_klogLive)
@@ -2486,7 +2504,7 @@ QString Ps5ConnectPage::unsavedChanges() const
     if (m_autoloader->hasUnsavedEdits())
         what << FW_TR("autoload.txt has edits that are not saved");
     if (m_smp->hasLoaded() && !m_smp->changes().isEmpty())
-        what << FW_TR("the ShadowMount+ settings have changes that are not pushed to the console");
+        what << FW_TR("the ShadowMount+ settings have changes that are not sent to the console");
     return what.join(FW_TR(", and "));
 }
 
@@ -2561,6 +2579,8 @@ void Ps5ConnectPage::applyDemoState(const QString& name)
     // The console card as it looks when connected (example values).
     auto exampleConsole = [this] {
         m_hero->setState(ConsoleHero::State::Connected);
+        if (m_host->text().isEmpty())
+            m_host->setText(QStringLiteral("192.168.1.40")); // connected: an address, not the placeholder
         m_hero->setSubtitle(QStringLiteral("192.168.1.40 · FTP 2121 · ftpsrv v0.21.1 (example)"));
         m_hero->setChip(QStringLiteral("ftp"), Tone::Ok, QStringLiteral("ftpsrv v0.21.1"));
         m_hero->setChip(QStringLiteral("klog"), Tone::Ok, QStringLiteral("3232"));

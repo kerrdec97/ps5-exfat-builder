@@ -10,6 +10,7 @@
 #include "app/ui/Icons.h"
 #include "app/ui/JobRows.h"
 #include "app/ui/LibraryGrid.h"
+#include "app/ui/LogView.h"
 #include "app/ui/Motion.h"
 #include "app/ui/SettingRow.h"
 #include "app/ui/Sheet.h"
@@ -53,6 +54,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextEdit>
+#include <QTextLayout>
 #include <QTimer>
 #include <QToolTip>
 #include <QTreeWidget>
@@ -2712,6 +2714,61 @@ private slots:
     // placeholder is a sentence of the interface: right to left in a
     // right-to-left language. Qt paints it in the application's direction
     // (main() sets it for such a language), not the well's.
+    // V-06 (UI review 5.2): every table header in one style, 12 px DemiBold,
+    // whether or not its page gave it a font (the Logs table did, the FTP
+    // browser and most others did not).
+    void tableHeadersShareOneFont()
+    {
+        auto* plain = add<QTableWidget>();
+        plain->setColumnCount(2);
+        plain->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Size")});
+        plain->setFont(theme::font::body()); // a page's body font on the view
+        auto* tree = add<QTreeWidget>();
+        tree->setHeaderLabels({QStringLiteral("Path"), QStringLiteral("Size")});
+        auto* own = add<LogTable>(); // the Logs page's table
+        for (QWidget* w : {static_cast<QWidget*>(plain), static_cast<QWidget*>(tree), static_cast<QWidget*>(own)})
+            w->show();
+        QCoreApplication::processEvents();
+        const QFont want = FwStyle::headerFont();
+        QCOMPARE(want.pixelSize(), theme::font::caption().pixelSize());
+        QCOMPARE(want.weight(), QFont::DemiBold);
+        int n = 0;
+        for (QHeaderView* h : {plain->horizontalHeader(), tree->header(), own->horizontalHeader()}) {
+            const QString which = QStringLiteral("header %1: %2").arg(n++).arg(h->font().toString());
+            QVERIFY2(h->font().pixelSize() == want.pixelSize(), qPrintable(which));
+            QVERIFY2(h->font().weight() == want.weight(), qPrintable(which));
+        }
+    }
+
+    // V-02 (UI review 5.2): in a right-to-left sentence "63 %" stays one
+    // piece: the sign right after its number, not at the far end of the line.
+    void percentKeepsItsSignRightToLeft()
+    {
+        QGuiApplication::setLayoutDirection(Qt::RightToLeft);
+        const auto back = qScopeGuard([] { QGuiApplication::setLayoutDirection(Qt::LeftToRight); });
+        const QString pct = thinPercent(0.63);
+        const QString arabic = QString::fromUtf8("\xd9\x82\xd9\x8a\xd8\xaf \xd8\xa7\xd9\x84\xd8\xaa\xd8\xb4\xd8\xba\xd9\x8a\xd9\x84"); // "running"
+        const QString line = arabic + QStringLiteral(": Demon's Souls (PPSA01342) · ") + pct;
+        QTextLayout layout(line, theme::font::body());
+        QTextOption opt;
+        opt.setTextDirection(Qt::RightToLeft);
+        layout.setTextOption(opt);
+        layout.beginLayout();
+        QTextLine l = layout.createLine();
+        l.setLineWidth(2000);
+        layout.endLayout();
+        const int digit = int(line.indexOf(QStringLiteral("63")));
+        const int sign = int(line.lastIndexOf(u'%'));
+        QVERIFY(digit > 0 && sign > digit);
+        // Left to right inside its run: the sign to the right of the number, close by.
+        const qreal xDigit = l.cursorToX(digit), xSign = l.cursorToX(sign);
+        QVERIFY2(xSign > xDigit, qPrintable(QStringLiteral("digit %1, sign %2").arg(xDigit).arg(xSign)));
+        QVERIFY2(xSign - xDigit < 4 * QFontMetricsF(theme::font::body()).horizontalAdvance(u'0'), qPrintable(QStringLiteral("digit %1, sign %2").arg(xDigit).arg(xSign)));
+        // Left to right nothing is added.
+        QGuiApplication::setLayoutDirection(Qt::LeftToRight);
+        QCOMPARE(thinPercent(0.63), QStringLiteral("63 %"));
+    }
+
     void logWellPlaceholderReadsInTheWindowsDirection()
     {
         QGuiApplication::setLayoutDirection(Qt::RightToLeft);

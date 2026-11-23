@@ -7,7 +7,9 @@
 
 #include "app/AppContext.h"
 #include "app/MainWindow.h"
+#include "app/models/JobQueueModel.h"
 #include "app/pages/DlcPage.h"
+#include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
 #include "core/Tr.h"
@@ -18,7 +20,13 @@
 
 #include <QAction>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QPushButton>
+#include <QThread>
+#include <QTimer>
+
+#include <atomic>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPlainTextEdit>
@@ -133,6 +141,61 @@ private slots:
         QVERIFY(plan.contains(QStringLiteral("OUTPUT: ") + QDir::toNativeSeparators(out)));
         QVERIFY(plan.contains(QStringLiteral("EP1004-PPSA05678_00-SEASONPASS000001.pkg")));
         QVERIFY(!plan.contains(QStringLiteral("BLOCKED")));
+    }
+
+    // A18: closing the page stops the "Change region…" lookup at once, so the
+    // app does not wait for its network time-outs at exit.
+    void closingThePageStopsTheRegionLookup()
+    {
+        auto started = std::make_shared<std::atomic<bool>>(false);
+        auto ended = std::make_shared<std::atomic<bool>>(false);
+        auto byCancel = std::make_shared<std::atomic<bool>>(false);
+        pages::DlcPage::setRegionLookupForTests([started, ended, byCancel](const CancellationToken& token) {
+            *started = true;
+            QElapsedTimer t;
+            t.start();
+            while (!token.isCancelled() && t.elapsed() < 15000) // the stand-in for a slow Store
+                QThread::msleep(10);
+            *byCancel = token.isCancelled();
+            *ended = true;
+            return dlc::DlcLookupResult{};
+        });
+        const auto restore = qScopeGuard([] { pages::DlcPage::setRegionLookupForTests({}); });
+        JobQueueModel model(m_ctx->queue());
+        auto page = std::make_unique<pages::DlcPage>(*m_ctx, model);
+        page->resize(1200, 800);
+        page->show();
+        page->addInputs({m_ini});
+        QCOMPARE(page->rowCount(), 2);
+        page->table()->selectRow(0);
+        QPushButton* change = nullptr;
+        for (auto* b : page->findChildren<QPushButton*>())
+            if (b->text() == QStringLiteral("Change region…"))
+                change = b;
+        QVERIFY(change);
+        QVERIFY(change->isEnabled());
+        // The sheet waits in its own event loop: closed from a timer once the lookup runs.
+        auto* poll = new QTimer(page.get());
+        poll->setInterval(20);
+        connect(poll, &QTimer::timeout, page.get(), [&page, started, poll] {
+            if (!*started)
+                return;
+            for (auto* s : page->findChildren<ui::Sheet*>())
+                if (s->isOpen()) {
+                    poll->stop();
+                    s->close(0);
+                }
+        });
+        poll->start();
+        change->click(); // returns when the sheet is closed
+        QVERIFY(*started);
+        QVERIFY(!*ended); // still at work after the sheet closed
+        QElapsedTimer clock;
+        clock.start();
+        page.reset();
+        QTRY_VERIFY_WITH_TIMEOUT(*ended, 1000);
+        QVERIFY(*byCancel);
+        QVERIFY2(clock.elapsed() < 1000, qPrintable(QString::number(clock.elapsed())));
     }
 
     void saveUpdatedInis()

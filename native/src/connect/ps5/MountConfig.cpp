@@ -1153,14 +1153,25 @@ QStringList mountConfigWarnings(MountTool tool, const MountConfigValues& v)
         out << FW_TR("Keep lvd_exfat_sector_size at 512: the exFAT fast path needs it.");
     if (v.value(QStringLiteral("exfat_backend")).trimmed().compare(QLatin1String("md"), Qt::CaseInsensitive) == 0)
         out << FW_TR("The exFAT fast path needs the lvd backend.");
+    // SMP 1.7 [emulators] auto_update_ampr fetches libSceAmpr.sprx from ampr_update_url, by default
+    // drakmor's ampr_emu, which replaces the ampr-emu-ng runtime that zstd-packed games need.
+    if (parseBool(v.value(QStringLiteral("auto_update_ampr"), QStringLiteral("0"))) == true) {
+        QString url = v.value(QStringLiteral("ampr_update_url")).trimmed();
+        if (url.isEmpty())
+            for (const SmpKey& k : smpKeys())
+                if (k.key == u"ampr_update_url")
+                    url = k.defaultValue;
+        if (!url.contains(QLatin1String("ampr-emu-ng"), Qt::CaseInsensitive))
+            out << FW_TR("auto_update_ampr installs drakmor's ampr_emu, which cannot read zstd packs: games packed by this app would stop starting.");
+    }
     QStringList obsolete;
     for (auto it = v.cbegin(); it != v.cend(); ++it)
         if (isObsoleteSmpKey(it.key()))
             obsolete << it.key();
     if (!obsolete.isEmpty())
         out << (obsolete.size() == 1
-                    ? FW_TR("%1 no longer exists in ShadowMount+ 1.7 and is removed on push to a 1.7 console.")
-                    : FW_TR("%1 no longer exist in ShadowMount+ 1.7 and are removed on push to a 1.7 console."))
+                    ? FW_TR("%1 no longer exists in ShadowMount+ 1.7 and is removed when sent to a 1.7 console.")
+                    : FW_TR("%1 no longer exist in ShadowMount+ 1.7 and are removed when sent to a 1.7 console."))
                    .arg(obsolete.join(QStringLiteral(", ")));
     return out;
 }
@@ -1303,7 +1314,8 @@ Result<QString> loadMountConfig(FtpClient& c, MountTool tool, const Cancellation
 
 Result<QString> fetchMountDebugLog(FtpClient& c, MountTool tool, const CancellationToken& token)
 {
-    FW_TRY_ASSIGN(QByteArray bytes, c.download(mountDebugLogRemotePath(tool), token));
+    // The end of the log only: after weeks of debug=1 it can be gigabytes.
+    FW_TRY_ASSIGN(QByteArray bytes, c.downloadTail(mountDebugLogRemotePath(tool), kMountDebugLogTailBytes, token));
     return QString::fromUtf8(bytes);
 }
 

@@ -8,7 +8,9 @@ GPL-3.0; their terms still apply to the ported parts (see
 it was ported from.
 
 For the same input and options the engine writes **byte-identical** images to
-Lazy_MkPFS (see [Compatibility](#compatibility)); it is multithreaded,
+Lazy_MkPFS (see [Compatibility](#compatibility)), except that no directory
+entry crosses a block (see [Directory entry](#directory-entry)), which changes
+the bytes only of folders with more than one block of entries; it is multithreaded,
 streaming (no file is held in memory, the nested image of a folder build is
 never written to disk), deterministic for any number of threads, and it
 verifies what it wrote before the image gets its final name.
@@ -37,7 +39,7 @@ verifies what it wrote before the image gets its final name.
 | **.ffpfsc** (container) | game folder | legacy PFS tab: `mkpfs pack folder --no-compress … pfs_image.dat` then `mkpfs pack file pfs_image.dat out.ffpfsc` | The nested uncompressed folder image `pfs_image.dat` (the name ShadowMount+ requires) is generated on the fly from the source files and compressed directly — never written to disk. |
 | **.ffpfsc** (container) | image file (`.exfat`, `.ffpkg`, …) | Lazy `main_file.py SRC OUT` (the path the legacy app drives Lazy through), MkPFS `pack file` | The file keeps its name inside the container. |
 | **.ffpfs** (folder image) | game folder | MkPFS `pack folder --no-compress` | Default: files stored raw. |
-| **.ffpfs** with per-file compression | game folder | Lazy `main_folder.py --no-exfat` | Off by default (`pfs.compressFiles`): compressed files grow to whole blocks (see below). |
+| **.ffpfs** with per-file compression | game folder | Lazy `main_folder.py --no-exfat` | Off by default (`pfs.compressFiles`): compressed files grow to whole blocks (see below), and MkPFS 1.1.0 reports that the console reads such files incorrectly although the image verifies. |
 | .ffpfs (single file, raw) | image file | Lazy `main_file.py --no-compress` | Rarely useful; supported because Lazy offers it. |
 
 Lazy's default `main_folder.py` mode (folder → temporary exFAT image via
@@ -119,6 +121,25 @@ Every folder starts with "." and ".." (uroot's ".." is itself), then
 subfolders, then files, each group in case-insensitive name order. Names are
 ASCII only. A folder's inode size is its block count × bs.
 
+No entry crosses a block (`appendDirentInBlock`, since the 5.2 cycle): when
+the next entry would not fit in what is left of the current block, the last
+entry of that block is padded to the block's end (its `ent_size` grows by the
+gap, the gap is zero bytes) and the next entry starts the next block. Readers
+that parse each directory block from its start need this: UltraPack 2.7.0
+reports that the LibProsperoPkg-based package builders (and so "build a
+`.pkg` from an `.ffpfsc`" in PSVIETHOA and UltraPack) find half an entry at
+the start of a block and stop. Lazy_MkPFS and MkPFS 1.1.0 join the entries
+with no alignment, so this departs from them for folders over one block of
+entries (about 1,500–3,000 files in one folder at 64 KiB); every smaller
+folder gets the same bytes as before. Our reader accepts both layouts (it
+parses a folder's whole payload and allows an `ent_size` larger than
+`align8(name_len + 17)`), so images made by 5.0.3 and earlier still read and
+verify. Whether the console's own PFS driver needs the alignment is
+**UNVERIFIED, HARDWARE REQUIRED**. The super root, the uroot of a container
+and the collision_resolver (entries reached by offset) keep the plain layout.
+`LayoutOptions::lazyDirents` writes the Lazy_MkPFS layout; only the golden
+test sets it, to show that nothing else differs from Lazy_MkPFS.
+
 ### flat_path_table and collision_resolver
 
 For every folder (except uroot) and file, `h = fpt_hash("/" + path)` with
@@ -185,7 +206,7 @@ the lower-cased path, 0 → 1; linear probing; 2ⁿ ≥ 2 × rows slots; `u64 ha
 u32 row + 1, u32 flags`, bit 0 set on the earlier slot when a later row has
 the same 64-bit hash).
 
-What the bundled runtime (ampr-emu-ng 0.3.3) reads, from its loader in
+What the bundled runtime (ampr-emu-ng 0.5.0; these checks were read from the 0.3.3 loader, and upstream documents the index format as unchanged up to 0.5.0) reads, from its loader in
 `libSceAmpr.sprx` (`AmprIndex.h` has the details; `tst_pfs_ampr_index` holds a
 port of its checks):
 
@@ -276,7 +297,7 @@ into the dump).
 
 | Kind | Parameters | Phases |
 |---|---|---|
-| `image.pfs.build` | `source` (folder, image file, or a zipped dump that is unpacked to the job's temp folder first), `output`, `format` (`ffpfsc` \| `ffpfs`; default from the extension, `.ffpfs` → folder image), `replaceExisting` (false), `timestamp` (seconds; default now), `title`, `findGameRoot` (true), `innerName` (file source: its plain ASCII name inside the container; default the file's own name) | Scanning → Compressing and writing → Verifying |
+| `image.pfs.build` | `source` (folder, image file, or an archived dump `.zip` / `.7z` / `.rar`: an `.ffpfs` with files stored raw is built straight from any of them and an `.ffpfsc` straight from a ZIP, with no copy of the game on disk; an `.ffpfsc` from a 7z or RAR and an `.ffpfs` with per-file compression unpack it to the job's temp folder first; see [Building from an archive](#building-from-an-archive-github-37); the log says which), `output`, `format` (`ffpfsc` \| `ffpfs`; default from the extension, `.ffpfs` → folder image), `replaceExisting` (false), `timestamp` (seconds; default now), `title`, `findGameRoot` (true), `innerName` (file source: its plain ASCII name inside the container; default the file's own name) | Scanning → Compressing and writing → Verifying |
 | `image.pfs.verify` | `image`, `source` (folder or file, optional), `depth` (`full` \| `structure`; default full with a source, structure without), `findGameRoot` (true), `innerName` (as for the build) | Verifying |
 | `image.pfs.extract` | `image`, `output` (folder), `deep` (true: unpack the nested `pfs_image.dat`, MkPFS `unpack --deep`), `overwrite` (false) | Extracting |
 
@@ -319,6 +340,61 @@ deleted then. `pfs.deleteSourceAfterConvert` deletes an image source only after
 **full** verification passed; folders are never deleted. Outcome details carry
 the statistics (files, compressed files, source/stored/image bytes, MB/s,
 threads, timestamp).
+
+### Building from an archive (GitHub #37)
+
+An archived dump is planned from the archive's list alone: `planArchive()`
+gives the plan `planFolder()` makes of the game unpacked to a folder
+(`unpackArchiveSource`): the same walk (exclusions, the ASCII rule, empty
+folders and their `.pfskeep` markers), the same order and the same AMPR
+index decision. A file keeps the time the archive lists (the build's time
+when it lists none, where unpacking would give it the time it was
+unpacked); the dump's own `ampr_emu.index` is read out of the archive only
+when the decision needs its bytes (in a solid 7z or RAR that decodes what is
+stored before it). Links are left out, as unpacking leaves them out.
+
+* **`.ffpfs`, files stored raw (the default), from a ZIP, 7z or RAR:**
+  `writeFolderImageFromArchive()` lays the image out as `writeImage()` does
+  for that plan, writes everything but the archive's files (header, inode
+  table, super root, FPT, collision resolver, directories, generated files)
+  at the offsets of the folder image, sets the image's length, and then one
+  pass through the archive (`archive::streamGameInto`, as exFAT) writes each
+  file into its blocks in the archive's order (a ZIP in the image's). The
+  bytes not written read as zeros, which is what the format pads with. No
+  hash or signature covers the blocks (unsigned images only: see the
+  header's 0x368 marker), so there is nothing to compute in a second pass.
+  Verification compares each file read back from the image with the digest
+  taken while it was written (`SourceFile::hasDigest`; full mode) and
+  checks that the padding after it is zero.
+* **`.ffpfsc` from a ZIP:** the nested folder image is compressed front to
+  back as for a folder; its files are read out of the ZIP in the image's
+  order (`zip::EntryReader`, decoded as they are read, the CRC-32 checked
+  once a file's last byte is read). A container that does not shrink is
+  written raw over the attempt, as Lazy does, by reading the ZIP a second
+  time. Verification reads each file out of the ZIP again and compares it
+  byte for byte, as with a folder.
+* **Unpacked first:** an `.ffpfsc` from a 7z or RAR (the nested image is
+  compressed front to back, and a solid archive gives its files only in its
+  own order), and an `.ffpfs` with per-file compression (a file's place in
+  the image depends on how the files before it compressed). The log says
+  so (`unpackFirstLogLine`).
+
+Every entry's checksum is verified while it is decoded; an entry that is
+damaged, larger or smaller than listed, missing or listed twice fails the
+job and removes the `.fw.part`; a cancel does too. The image is byte for
+byte the image the same build makes of the unpacked folder (`tst_archive_stream_more`:
+ZIP stored and deflated, solid 7z LZMA2, stored and PPMd, the RAR 4 and RAR 5
+samples of libarchive, contents and game-folder archives, exclusions, no
+markers, 16 KiB blocks, archive order unlike image order). The archive is
+never deleted (`pfs.deleteSourceAfterConvert` deletes only an image source).
+
+Not done: an `.ffpfsc` straight from a 7z or RAR. A correct way exists: each
+64 KiB block of the nested image is compressed on its own, so the blocks
+could be compressed in the archive's order into a spool in the temporary
+folder (about the compressed size) and the container written from it in the
+image's order; with PFS blocks under 64 KiB a compressed block can span files
+that arrive far apart, which needs those blocks held until complete. It is
+not implemented; such a build unpacks first.
 
 ### Verification
 
@@ -398,7 +474,7 @@ To regenerate: `python3 -I native/tests/data/pfs/make_golden.py <scratch> --writ
 
 Identity was verified with madler zlib 1.3 on both sides (Python's `zlib`
 module and the native build; on Windows the native build uses a system/vcpkg
-zlib or zlib 1.3.1 from FetchContent, and CPython 3.11 — the legacy release
+zlib or zlib 1.4 from FetchContent, and CPython 3.11 — the legacy release
 build — bundles madler zlib). madler zlib's deflate has produced the same
 output at default parameters for many releases, but nothing guarantees it: if
 a zlib update ever changes it, `tst_pfs_golden` fails and the references must
@@ -535,13 +611,14 @@ threaded (30 vs 6 MB/s); level 9 is the legacy default.
 
 | Test | Covers |
 |---|---|
-| `tst_pfs_golden` | 20 byte-identical golden cases against Lazy_MkPFS |
-| `tst_pfs_roundtrip` | build → read → compare for all four modes; verify finds changed / missing / extra / resized files; exclusions do not fail verification (H2); damaged compressed block, inode, dirent, PFSC and PFS headers, truncation → `CorruptData`; short (RAM-mode) images; extract (plain, deep, nested file, overwrite); cancelled extract leaves nothing; 1/4/7 threads → identical bytes; ASCII rule, empty source, AMPR modes |
+| `tst_pfs_golden` | 20 golden cases against Lazy_MkPFS: with `lazyDirents` all 20 byte-identical; with the default layout byte-identical for every case whose directory entries stay inside their blocks, and for any other case different, parsed block by block and verified |
+| `tst_pfs_roundtrip` | build → read → compare for all four modes; verify finds changed / missing / extra / resized files; exclusions do not fail verification (H2); damaged compressed block, inode, dirent, PFSC and PFS headers, truncation → `CorruptData`; short (RAM-mode) images; extract (plain, deep, nested file, overwrite); cancelled extract leaves nothing; 1/4/7 threads → identical bytes; ASCII rule, empty source, AMPR modes; a folder of 3,000 files at 16 and 64 KiB blocks: every directory block parses from its start, every name once (the Lazy layout fails that parse and still reads and verifies) |
 | `tst_pfs_jobs` | settings declared and read, legacy import, the three jobs, queue integration, validation, cancellation while writing leaves no output or `.part`, cancellation while verifying saves the image unverified (the source image kept), a finished image is kept when the old one is in use, `ampr.index.local` checks the folder again and reads its index back before it replaces the old one, failed verification removes the image and keeps the source (C1), delete-source rules, standalone verify with the build's exclusions (H2), game-root detection in a wrapper folder, extract job |
 | `tst_pfs_ampr_index` | `ampr_emu.index` as the runtime sees it: a port of the ampr-emu-ng 0.3.3 loader accepts every index the builder writes (case-only variants, deep and 255-byte names, 5,000 rows) and sets damaged ones aside; version 4.0.2's script output (bytes kept in the test) equals ours for ASCII names and is set aside for others; `decideAmprIndex` in all four modes for a missing, current, stale (file added, removed, renamed, case-renamed, resized, changed in place, copied with other times), unusable and equivalent-but-other-bytes index, asset packs and no library; the verification's times-only tolerance |
 | `tst_pfs_hostile` | crafted images: separator / NUL / dot entry names → `CorruptData` and nothing extracted; names a drive cannot store renamed on extraction and reported, nothing written outside the folder; size without blocks and size beyond the blocks → `CorruptData` (verification and extraction fail); a PFSC header declaring a 16 GiB block table in a small file is refused without allocating it; the path-safety helpers |
 | `tst_pfs_pipeline` | the read-ahead pipeline: a source cut short after planning is an `IoError` and a cancel from the progress callback stops the build, with 1 and 4 threads, folder image and container; repeated builds with 1, 2, 3, 8 and 16 threads give the same bytes |
 | `tst_pfs_benchmark` | MB/s native (1 and N threads) vs Lazy_MkPFS on the same input; outputs identical; then extraction (decompression) and full verification of the image just built |
+| `tst_archive_stream_more` (integration) | `.ffpfs` from ZIP, 7z and RAR and `.ffpfsc` from ZIP byte for byte the unpacked folder's image; the jobs stream or unpack first as documented above, with no game-sized data in the temp folder when they stream; damaged entries, a size unlike the list, a cancel in the pass; the digest check finding a changed byte |
 
 The benchmark honours `FW_PFS_BENCH_MIB`, `FW_PFS_BENCH_LEVEL`, `FW_PFS_BENCH_REPEAT`,
 `FW_PFS_BENCH_SINGLE=0` (no one-thread build) and the Performance settings

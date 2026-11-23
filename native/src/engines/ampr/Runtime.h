@@ -13,8 +13,8 @@
 
 namespace fw::ampr {
 
-inline constexpr const char* kBundledRuntimeVersion = "0.3.3";
-inline constexpr const char* kBundledRuntimeSha256 = "1c1051f91bc7cba19b15362b2b832114b53a4c3d6193f50c90fdf1ae5d78d268";
+inline constexpr const char* kBundledRuntimeVersion = "0.5.0";
+inline constexpr const char* kBundledRuntimeSha256 = "7379e49953d8f14f26b45ff06a863ecea56aa90a60ba3d5a375f61c52618a174";
 inline const QString kRuntimeRelPath = QStringLiteral("fakelib/libSceAmpr.sprx");
 
 // FW_AMPR_RUNTIME (tests, development), else <app>/engines/ampr-emu-ng/libSceAmpr.sprx.
@@ -35,7 +35,18 @@ struct RuntimeInfo {
     bool bundled = false; // byte-for-byte the bundled build
     QString describe() const; // "ampr-emu-ng 0.3.2", "ampr_emu 0.4.2.1", "an unknown libSceAmpr.sprx"
 };
-// Identifies a libSceAmpr.sprx by its contents.
+// Identifies a libSceAmpr.sprx by its contents: the 0.3.x string
+// "ampr-emu-ng 0.3.3" and the 0.4.x/0.5.x notice "ampr-emu-ng: v0.5.0 (zstd)
+// running" both give the version.
 RuntimeInfo identifyRuntime(const QByteArray& sprx);
+
+// Dotted version numbers compared part by part ("0.10.0" > "0.9.9", "0.4" ==
+// "0.4.0"): <0, 0 or >0. An empty or malformed version is unknown and
+// compares as 0 with everything.
+int compareVersions(const QString& a, const QString& b);
+
+// What a packed game needs from the mounter (English, for job warnings;
+// the setting's description says the same in the interface's language).
+QString packedGameMounterNote();
 
 } // namespace fw::ampr

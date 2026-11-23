@@ -1,6 +1,7 @@
 #include "engines/integration/GameSources.h"
 
 #include "core/ArchiveSource.h"
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 #include "core/PathSafety.h"
 #include "engines/ampr/GamePack.h"
@@ -15,6 +16,7 @@
 #include "engines/fpkg/DumpRules.h"
 #include "engines/fpkg/SourceStager.h"
 #include "engines/general/Module.h"
+#include "engines/integration/ZstdImage.h"
 #include "engines/pfs/Module.h"
 #include "engines/ufs2/Module.h"
 
@@ -170,6 +172,10 @@ public:
     }
     QString subtitle() const override
     {
+        // A ZSTD image (GitHub #98) is named as the Build page's tile is, with
+        // its own extension, ".zstd", in the queue and the monitor.
+        if (isZstdImageName(output()))
+            return QStringLiteral("ZSTD image (experimental) · .zstd → %1").arg(native(QFileInfo(output()).absolutePath()));
         return QStringLiteral("zstd packs · .%1 → %2").arg(format(), native(QFileInfo(output()).absolutePath()));
     }
     QStringList phases() const override
@@ -192,6 +198,9 @@ public:
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the game folder (or an archived dump) to pack."));
         if (output().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the image."));
+        // A .zstd single file is an exFAT image with the packs inside (ZstdImage.h).
+        if (isZstdImageName(output()) && format() != u"exfat")
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Only an exFAT image with zstd packs can be named .zstd."));
         if (!m_factory || !m_factory->contains(childKindFor(format())))
             return Error(ErrorCode::Unsupported, QStringLiteral("This image format is not available in this build."));
         const QString problem = ampr::bundledRuntimeProblem();
@@ -214,12 +223,34 @@ public:
     Result<JobOutcome> run(JobContext& ctx) override
     {
         FW_TRY(validate(ctx.settings));
+        QString src = QFileInfo(source()).absoluteFilePath();
+        // An archived dump (#37) is packed in one pass through it, with no
+        // copy of the game on disk: only the packed folder the image is then
+        // built from (packs and loose files), as from a folder. A game that is
+        // itself packed in the archive is unpacked first.
+        std::shared_ptr<ampr::ArchiveGame> fromArchive;
+        if (archive::isZipSource(src)) {
+            FW_TRY_ASSIGN(archive::GameListing listed, archive::listArchiveGame(src, ctx.token));
+            auto game = std::make_shared<ampr::ArchiveGame>(std::move(listed), QDateTime::currentSecsSinceEpoch());
+            m_unpackFirst = !ampr::archivePackProblem(*game).isEmpty();
+            if (!m_unpackFirst)
+                fromArchive = std::move(game);
+        }
         const QStringList ph = phases();
         ctx.progress->setPhases(ph, phaseWeights(ctx.settings));
         ctx.progress->beginPhase(0, 0);
-
-        QString src = QFileInfo(source()).absoluteFilePath();
-        if (archive::isZipSource(src)) {
+        // The name the game's folder gets in the work folder: the one it
+        // would have unpacked (the archive's game folder, or "zip-source" for
+        // an archive of the game's contents).
+        QString gameName;
+        if (fromArchive) {
+            ctx.log.info(archive::packingLogLine(src, fromArchive->listing().zip));
+            gameName = fromArchive->listing().rootName();
+            if (gameName.isEmpty())
+                gameName = QStringLiteral("zip-source");
+        } else if (archive::isZipSource(src)) {
+            FW_TRY_ASSIGN(archive::GameListing listed, archive::listArchiveGame(src, ctx.token));
+            ctx.log.info(archive::unpackFirstLogLine(src, ampr::archivePackProblem(ampr::ArchiveGame(std::move(listed), 0))));
             FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
             // The unpacking was a step inside Preparing; Preparing goes on from there.
@@ -232,30 +263,37 @@ public:
         const QString work = QDir(outDir).filePath(QStringLiteral(".fw-zstd-%1").arg(randomHex(8)));
         FW_TRY(fpkg::createTrackedWorkFolder(work));
         fpkg::TrackedWorkFolder guard(work);
-        QString gameName = QFileInfo(src).fileName();
+        if (gameName.isEmpty())
+            gameName = QFileInfo(src).fileName();
         if (gameName.isEmpty())
             gameName = QStringLiteral("game"); // a game at the root of a drive
         const QString staged = QDir(work).filePath(gameName);
 
         const ampr::PackSettings ps = ampr::readPackSettings(ctx.settings, m_p);
-        FW_TRY_ASSIGN(auto files, ampr::openFolderGame(src, ctx.token));
+        std::shared_ptr<ampr::GameFiles> files = fromArchive;
+        if (!fromArchive) {
+            FW_TRY_ASSIGN(files, ampr::openFolderGame(src, ctx.token));
+        }
         ampr::PackGameOptions o;
         o.level = ps.level;
         o.threads = ps.threads;
         o.strategy = ps.strategy;
         o.verify = ps.verify;
-        o.linkFromFolder = src;
+        if (!fromArchive)
+            o.linkFromFolder = src;
         o.packPhase = 1;
         o.verifyPhase = ps.verify ? 2 : -1;
         o.freeSpaceMarginBytes = qint64(ctx.settings.integer(general::keys::kFreeSpaceMarginMiB)) * 1024 * 1024;
-        o.exclude = excluder(ctx.settings, src);
+        o.exclude = excluder(ctx.settings, fromArchive ? QString() : src);
         ctx.log.info(QStringLiteral("Packing %1 with zstd level %2 (%3) for .%4; work folder %5")
                          .arg(native(src))
                          .arg(ps.level)
                          .arg(ps.strategy == ampr::PackStrategy::Compatible ? QStringLiteral("compatible: containers, configs and media stay loose")
                                                                             : QStringLiteral("everything except system files"),
                               format(), native(work)));
-        FW_TRY_ASSIGN(ampr::PackGameReport rep, ampr::packGame(files, staged, o, ctx.token, ctx.progress, ctx.log));
+        FW_TRY_ASSIGN(ampr::PackGameReport rep,
+                      fromArchive ? ampr::packGameFromArchive(fromArchive, staged, o, ctx.tempDir, ctx.token, ctx.progress, ctx.log)
+                                  : ampr::packGame(files, staged, o, ctx.token, ctx.progress, ctx.log));
         // A cancel while the packs are checked stops the job: the image, the
         // job's real work, is not made yet.
         if (ctx.token.isCancelled())
@@ -277,6 +315,9 @@ public:
         // its files (that would drop the packed files), no per-file PFS
         // compression (the volumes keep their exact sizes), and nothing deleted.
         sub.settings = childSettings(ctx.settings);
+        if (isZstdImageName(output()) && ctx.settings.string(exfat::keys::kSectorSize) != u"512")
+            ctx.log.info(QStringLiteral("Sector size %1 in Settings is not used: a .zstd is written with 512-byte sectors, the only size "
+                                        "Kraken Mount MOD reads.").arg(ctx.settings.string(exfat::keys::kSectorSize)));
         ChildProgress cp(ctx.progress, 3, ph);
         // The child's own phase list, so each of its phases gets its index
         // (a build that never declares them would stay on its first).
@@ -299,8 +340,12 @@ public:
                                        {QStringLiteral("previousRuntime"), rep.previousRuntime.describe()}});
         if (out.verification != Verification::Failed)
             out.summary = QStringLiteral("zstd: %1. %2").arg(rep.summary(), out.summary);
-        out.warnings << QStringLiteral("Packed games need ShadowMount+ with \"Update game fakelib emulators\" turned off, or the "
-                                       "runtime is replaced and the game cannot read its packs.");
+        // ShadowMount+ does not mount a .zstd (report 03): its warning is for the other images.
+        if (isZstdImageName(output()))
+            out.warnings << QStringLiteral("A .zstd file is for Kraken Mount MOD; it is not yet confirmed on a console.");
+        else
+            out.warnings << QStringLiteral("Packed games need ShadowMount+ with \"Update game fakelib emulators\" turned off, or the "
+                                           "runtime is replaced and the game cannot read its packs.");
         return out;
     }
 
@@ -331,7 +376,8 @@ private:
     // 0.3), the rest is scaled down.
     QList<double> weights(const QList<double>& child, bool checkPacks) const
     {
-        const double prepare = archive::isZipSource(source()) ? 0.3 : 0.02;
+        // An archive streams in Packing (#37); one that holds a packed game is unpacked here.
+        const double prepare = m_unpackFirst && archive::isZipSource(source()) ? 0.3 : 0.02;
         const double scale = (1.0 - prepare) / 0.98;
         QList<double> w = checkPacks ? QList<double>{prepare, 0.5 * scale, 0.06 * scale} : QList<double>{prepare, 0.56 * scale, 0.0};
         const double build = 0.42 * scale;
@@ -352,7 +398,16 @@ private:
     // files (that would drop the packed files), no per-file PFS compression
     // (the volumes keep their exact sizes), no exclusions (they were applied
     // before packing; a pattern could now hit the packs) and nothing deleted.
-    static SettingsValues childSettings(const SettingsValues& s)
+    // A .zstd (Kraken Mount MOD) is attached with 512-byte sectors only
+    // (report 03): Settings › exFAT › Sector size, which may be 4096 for
+    // ShadowMount+, never reaches it.
+    SettingsValues childSettings(const SettingsValues& s) const
+    {
+        if (isZstdImageName(output()))
+            return baseChildSettings(s).withOverrides({{exfat::keys::kSectorSize, QStringLiteral("512")}});
+        return baseChildSettings(s);
+    }
+    static SettingsValues baseChildSettings(const SettingsValues& s)
     {
         return s.withOverrides({{pfs::keys::kAmprIndex, QStringLiteral("off")},
                                 {exfat::keys::kAmprIndex, QStringLiteral("off")},
@@ -402,13 +457,22 @@ private:
             const QString name = rel.section(u'/', -1);
             if (isDir)
                 return matcher->excludesDir(name, rel);
-            const bool hidden = hiddenRule && QFileInfo(QDir(root).filePath(rel)).isHidden();
+            // From an archive (no root) a file is hidden only where unpacking
+            // would make it so: by a leading dot, outside Windows (as treeFromArchive).
+#ifdef Q_OS_WIN
+            const bool archiveHidden = false;
+#else
+            const bool archiveHidden = name.startsWith(u'.');
+#endif
+            const bool hidden = hiddenRule && (root.isEmpty() ? archiveHidden : QFileInfo(QDir(root).filePath(rel)).isHidden());
             return matcher->excludesFile(name, rel, hidden);
         };
     }
 
     QJsonObject m_p;
     const JobFactory* m_factory;
+    // run(): the archive holds a packed game and is unpacked in Preparing.
+    bool m_unpackFirst = false;
 };
 
 // ---- game.extract -----------------------------------------------------------------------
@@ -430,7 +494,9 @@ public:
         if (!QFileInfo::exists(source()))
             return Error(ErrorCode::NotFound, QStringLiteral("Choose the image or game folder to extract."));
         if (!QFileInfo(source()).isDir() && !isTreeImage(source()))
-            return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs or .ffpfsc image or a game folder."));
+            return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .zstd, .ffpkg, .ffpfs or .ffpfsc image or a game folder."));
+        if (isZstdImageName(source()))
+            FW_TRY(checkZstdImage(source()));
         if (output().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to extract to."));
         const QString o = QFileInfo(output()).absoluteFilePath();
@@ -631,6 +697,8 @@ Result<StagePlan> planStage(const QString& source, const CancellationToken& toke
     p.root = *root;
     const QString prefix = p.root.isEmpty() ? QString() : p.root + u'/';
     QStringList excludedDirs;
+    const QString suffix = QFileInfo(source).suffix().toLower();
+    const bool pfsImage = QFileInfo(source).isFile() && (suffix == u"ffpfs" || suffix == u"ffpfsc");
     for (int i = 0; i < int(p.files->items().size()); ++i) {
         const ampr::GameItem& it = p.files->items()[size_t(i)];
         if (!prefix.isEmpty() && !it.path.startsWith(prefix))
@@ -664,6 +732,13 @@ Result<StagePlan> planStage(const QString& source, const CancellationToken& toke
         }
         if (it.isDir) {
             p.dirs << rel;
+            continue;
+        }
+        // The PFS builder's empty-folder markers (pfs.keepEmptyFolders, PFS.md:
+        // they exist only in the image): the folder is staged and declared
+        // empty, the marker itself is not part of the game.
+        if (pfsImage && it.size == 0 && name == u".pfskeep") {
+            ++p.excluded;
             continue;
         }
         p.include.push_back(i);

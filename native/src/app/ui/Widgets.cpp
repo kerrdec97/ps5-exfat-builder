@@ -2437,7 +2437,14 @@ void reserveScrollBarSpace(QAbstractScrollArea* area)
 
 QString thinPercent(double fraction)
 {
-    return QStringLiteral("%1 %").arg(int(std::floor(std::clamp(fraction, 0.0, 1.0) * 100.0 + 1e-9)));
+    const QString text = QStringLiteral("%1 %").arg(int(std::floor(std::clamp(fraction, 0.0, 1.0) * 100.0 + 1e-9)));
+    // Right to left, the space parts the sign from its number for the bidi
+    // algorithm and "%" moves to the far end of the line, past a game title
+    // (V-02). Between two left-to-right marks number and sign are one
+    // left-to-right run wherever they stand.
+    if (QGuiApplication::isRightToLeft())
+        return QChar(0x200E) + text + QChar(0x200E);
+    return text;
 }
 
 QString elideMiddle(const QString& s, int max)

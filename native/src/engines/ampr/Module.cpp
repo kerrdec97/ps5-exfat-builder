@@ -1,6 +1,7 @@
 #include "engines/ampr/Module.h"
 
 #include "core/ArchiveSource.h"
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 #include "core/Tr.h"
 #include "engines/ampr/GamePack.h"
@@ -8,6 +9,7 @@
 #include "engines/ampr/Runtime.h"
 #include "engines/general/Module.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonObject>
@@ -29,9 +31,10 @@ void registerSettings(SettingsSchema& s)
         d.label = QStringLiteral("Compress game files (zstd packs)");
         d.description = QStringLiteral(
             "A smaller image: the game's files go into zstd packs that ampr-emu-ng reads on the console. The bundled "
-            "runtime goes to fakelib/libSceAmpr.sprx; mount with ShadowMount+ with \"Update game fakelib emulators\" turned "
-            "off. Not "
-            "every game works packed yet: keep your original dump.");
+            "runtime goes to fakelib/libSceAmpr.sprx. Mount with ShadowMount+ with its emulator updates off "
+            "([emulators] update_enabled = off and auto_update_ampr = off), or use Kraken Mount, which brings its own "
+            "ampr-emu-ng and mounts packed folders, not images. Not every game works packed yet: keep your original "
+            "dump.");
         d.type = SettingType::Bool;
         d.defaultValue = false;
         d.perJob = true;
@@ -67,8 +70,8 @@ void registerSettings(SettingsSchema& s)
         d.group = group;
         d.label = QStringLiteral("What to pack");
         d.description = QStringLiteral(
-            "Everything: every file except executables, modules, sce_sys, sce_module and fakelib (the smallest; "
-            "ampr-emu-ng serves a fully packed game). Compatible: also keeps root files, containers (.pak, .utoc), "
+            "Everything: every file except executables, modules, settings files (.ini), sce_sys, sce_module and "
+            "fakelib (the smallest; ampr-emu-ng serves a fully packed game). Compatible: also keeps root files, containers (.pak, .utoc), "
             "configs, media and video folders loose, for games that do not start fully packed.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("everything");
@@ -180,15 +183,29 @@ public:
         const PackSettings ps = readPackSettings(ctx.settings, m_p);
         ctx.progress->beginPhase(0, 0);
         QString src = QFileInfo(source()).absoluteFilePath();
+        // An archived dump (#37) is packed in one pass through it; only a game
+        // that is itself packed in the archive is unpacked first.
+        std::shared_ptr<ArchiveGame> fromArchive;
         if (isZip()) {
-            FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
-            ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
-            // The unpack was a step of the first stage, which goes on (the
-            // stages and their weights are declared again, as they were).
-            ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
-            ctx.progress->beginPhase(0, 0);
+            FW_TRY_ASSIGN(archive::GameListing listed, archive::listArchiveGame(src, ctx.token));
+            auto game = std::make_shared<ArchiveGame>(std::move(listed), QDateTime::currentSecsSinceEpoch());
+            if (const QString why = archivePackProblem(*game); !why.isEmpty()) {
+                ctx.log.info(archive::unpackFirstLogLine(src, why));
+                FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
+                ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
+                // The unpack was a step of the first stage, which goes on (the
+                // stages and their weights are declared again, as they were).
+                ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
+                ctx.progress->beginPhase(0, 0);
+            } else {
+                ctx.log.info(archive::packingLogLine(src, game->listing().zip));
+                fromArchive = std::move(game);
+            }
         }
-        FW_TRY_ASSIGN(auto files, openFolderGame(src, ctx.token));
+        std::shared_ptr<GameFiles> files = fromArchive;
+        if (!fromArchive) {
+            FW_TRY_ASSIGN(files, openFolderGame(src, ctx.token));
+        }
         PackGameOptions o;
         o.level = ps.level;
         o.threads = ps.threads;
@@ -210,7 +227,8 @@ public:
                          .arg(ps.strategy == PackStrategy::Compatible ? QStringLiteral("compatible: containers, configs and media stay loose")
                                                                       : QStringLiteral("everything except system files"),
                               native(out)));
-        auto r = packGame(files, staged->path(), o, ctx.token, ctx.progress, ctx.log);
+        auto r = fromArchive ? packGameFromArchive(fromArchive, staged->path(), o, ctx.tempDir, ctx.token, ctx.progress, ctx.log)
+                             : packGame(files, staged->path(), o, ctx.token, ctx.progress, ctx.log);
         if (!r.ok())
             return r.takeError();
         const bool checked = ps.verify && !r->verifyCancelled;
@@ -229,8 +247,7 @@ public:
         outcome.outputs = {out};
         outcome.summary = QStringLiteral("zstd: %1").arg(r->summary());
         outcome.warnings = r->warnings;
-        outcome.warnings << QStringLiteral("Packed games need ShadowMount+ with \"Update game fakelib emulators\" turned off, or the "
-                                           "runtime is replaced and the game cannot read its packs.");
+        outcome.warnings << packedGameMounterNote();
         if (r->verifyCancelled) {
             // Cancel while the finished packs were checked (GitHub #97): the
             // folder is kept as with the check turned off, and not called verified.

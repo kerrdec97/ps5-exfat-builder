@@ -33,9 +33,15 @@ namespace {
 
 bool cancelled(const std::atomic_bool* c) { return c && c->load(); }
 
+// A param.json, settings.json or journal is a few KiB; a far larger file is
+// not one of them and is not read into memory to find that out (a damaged or
+// crafted dump). The ledger grows with every apply and gets more room.
+constexpr qint64 kMaxJsonBytes = 8LL * 1024 * 1024;
+constexpr qint64 kMaxLedgerBytes = 64LL * 1024 * 1024;
+
 // `why` (optional) says why the file gave no object: empty for "there is no
 // such file", otherwise the reason it could not be opened or parsed.
-QJsonObject readJsonObject(const QString& path, bool* ok = nullptr, QString* why = nullptr)
+QJsonObject readJsonObject(const QString& path, bool* ok = nullptr, QString* why = nullptr, qint64 maxBytes = kMaxJsonBytes)
 {
     if (ok)
         *ok = false;
@@ -45,6 +51,11 @@ QJsonObject readJsonObject(const QString& path, bool* ok = nullptr, QString* why
     if (!f.open(QIODevice::ReadOnly)) {
         if (why && f.exists())
             *why = f.errorString();
+        return {};
+    }
+    if (f.size() > maxBytes) {
+        if (why)
+            *why = QStringLiteral("larger than %1").arg(formatBytes(maxBytes));
         return {};
     }
     QByteArray b = f.readAll();
@@ -390,19 +401,47 @@ qint64 executableBytes(const QString& folder, const std::atomic_bool* cancel)
 // ---- ledger --------------------------------------------------------------------------
 
 namespace {
+// The ledger's "applied" rows that are objects (a damaged or hand-edited row
+// is left out, as the standalone program 0.3.5 does).
 QJsonArray ledgerRows()
 {
-    return readJsonObject(folders().ledgerPath).value(QStringLiteral("applied")).toArray();
+    QJsonArray out;
+    for (const QJsonValue& v : readJsonObject(folders().ledgerPath, nullptr, nullptr, kMaxLedgerBytes).value(QStringLiteral("applied")).toArray())
+        if (v.isObject())
+            out.append(v);
+    return out;
 }
-QString journalState(const QString& journal, bool* readable)
+// The journal a record names, when it can be read and holds an object whose
+// state is text; otherwise nullopt ("not known", never "nothing applied").
+std::optional<QJsonObject> readJournal(const QJsonObject& record)
 {
+    const QJsonValue name = record.value(QStringLiteral("journal"));
+    if (!name.isString() || name.toString().isEmpty())
+        return std::nullopt;
     bool ok = false;
-    const QJsonObject j = readJsonObject(journal, &ok);
-    if (readable)
-        *readable = ok;
-    return j.value(QStringLiteral("state")).toString();
+    const QJsonObject j = readJsonObject(name.toString(), &ok);
+    if (!ok || (j.contains(QStringLiteral("state")) && !j.value(QStringLiteral("state")).isString()))
+        return std::nullopt;
+    return j;
+}
+// An undo that could not put every file back but left none of the backport's
+// files in the folder (0.3.5 writes backport_files_left): finished with.
+bool undoLeftNothing(const QJsonObject& journal)
+{
+    return journal.value(QStringLiteral("state")).toString() == QLatin1String("ROLLBACK_INCOMPLETE")
+        && journal.value(QStringLiteral("backport_files_left")).isBool() && !journal.value(QStringLiteral("backport_files_left")).toBool();
 }
 } // namespace
+
+bool isActiveLedgerState(const QString& state)
+{
+    return state == QLatin1String("APPLIED") || isUnfinishedLedgerState(state);
+}
+
+bool isUnfinishedLedgerState(const QString& state)
+{
+    return state == QLatin1String("IN_PROGRESS") || state == QLatin1String("ROLLBACK_INCOMPLETE") || state == QLatin1String("RESTORING");
+}
 
 QJsonArray readLedger() { return ledgerRows(); }
 
@@ -413,16 +452,24 @@ QJsonObject activeLedgerRecord(const QString& gameDir, const QJsonArray& ledger)
     const QString key = normKey(gameDir);
     std::vector<QJsonObject> rows;
     for (const QJsonValue& v : ledger) {
-        const QJsonObject r = v.toObject();
+        if (!v.isObject())
+            continue;
+        QJsonObject r = v.toObject();
         if (normKey(r.value(QStringLiteral("game_dir")).toString()) != key)
             continue;
-        const QString st = r.value(QStringLiteral("state")).toString();
-        if (st != QLatin1String("APPLIED") && st != QLatin1String("IN_PROGRESS"))
+        if (!isActiveLedgerState(r.value(QStringLiteral("state")).toString()))
             continue;
-        bool readable = false;
-        const QString js = journalState(r.value(QStringLiteral("journal")).toString(), &readable);
-        if (readable && js != QLatin1String("APPLIED") && js != QLatin1String("IN_PROGRESS"))
-            continue;
+        // A readable journal has the last word (an apply whose restore was
+        // started says RESTORING there); an unreadable one keeps the folder
+        // flagged by its record.
+        if (const auto j = readJournal(r)) {
+            if (undoLeftNothing(*j))
+                continue;
+            const QString js = j->value(QStringLiteral("state")).toString(r.value(QStringLiteral("state")).toString());
+            if (!isActiveLedgerState(js))
+                continue;
+            r.insert(QStringLiteral("state"), js);
+        }
         rows.push_back(r);
     }
     if (rows.empty())
@@ -438,12 +485,26 @@ std::vector<QJsonObject> unfinishedApplies(int quietSeconds)
     std::vector<QJsonObject> out;
     const QDateTime now = QDateTime::currentDateTime();
     for (const QJsonValue& v : ledgerRows()) {
-        const QJsonObject r = v.toObject();
-        if (r.value(QStringLiteral("state")).toString() != QLatin1String("IN_PROGRESS"))
+        QJsonObject r = v.toObject();
+        if (!isActiveLedgerState(r.value(QStringLiteral("state")).toString()))
             continue;
+        const auto j = readJournal(r);
+        if (!j)
+            continue;
+        const QString js = j->value(QStringLiteral("state")).toString();
+        if (!isUnfinishedLedgerState(js) || undoLeftNothing(*j))
+            continue;
+        // A game folder that is gone has nothing to restore into.
+        QString gameDir = j->value(QStringLiteral("game_dir")).toString();
+        if (gameDir.isEmpty())
+            gameDir = r.value(QStringLiteral("game_dir")).toString();
+        if (!gameDir.isEmpty() && !QFileInfo(gameDir).isDir())
+            continue;
+        r.insert(QStringLiteral("state"), js);
+        // Keys only PS5 Backport GUI 0.3.5 writes: that program knows this journal best.
+        r.insert(QStringLiteral("written_by_035"), j->contains(QStringLiteral("worker_started")) || j->contains(QStringLiteral("backport_files_left"))
+                                                       || j->contains(QStringLiteral("derived")) || j->contains(QStringLiteral("record_derived")));
         const QString journal = r.value(QStringLiteral("journal")).toString();
-        if (journalState(journal, nullptr) != QLatin1String("IN_PROGRESS"))
-            continue;
         // A journal that was written a moment ago belongs to an apply that is
         // most likely still running (in the standalone PS5 Backport GUI).
         const QDateTime written = QFileInfo(journal).lastModified();
@@ -532,8 +593,15 @@ bool saveSettings(const Settings& s) { return saveSettings(s, AllSettingsKeys, n
 // ---- preflight -----------------------------------------------------------------------
 
 namespace {
+std::function<qint64(const QString&)>& freeProbeForTests()
+{
+    static std::function<qint64(const QString&)> f;
+    return f;
+}
 qint64 freeBytes(QString p)
 {
+    if (const auto& probe = freeProbeForTests())
+        return probe(p);
     QFileInfo fi(p);
     while (!fi.exists()) {
         const QString parent = fi.absolutePath();
@@ -544,7 +612,35 @@ qint64 freeBytes(QString p)
     return QStorageInfo(fi.absoluteFilePath()).bytesAvailable();
 }
 QString gb(qint64 b) { return QString::number(double(b) / 1e9, 'f', 1); }
+// Two existing folders on one volume (a junction counts as the volume it points to).
+bool sameVolume(const QString& a, const QString& b)
+{
+    const QStorageInfo va(a), vb(b);
+    if (!va.isValid() || !vb.isValid())
+        return false;
+    return va.rootPath().compare(vb.rootPath(), Qt::CaseInsensitive) == 0;
+}
 } // namespace
+
+void setFreeSpaceProbeForTests(std::function<qint64(const QString&)> probe) { freeProbeForTests() = std::move(probe); }
+
+SpaceNeed spaceNeed(qint64 executableBytes)
+{
+    // The backup holds the loose originals and their ZIP (PS5 Backport GUI 0.3.5: 1.6, was 1.1).
+    return {qint64(double(executableBytes) * 2.2) + 50LL * 1024 * 1024, qint64(double(executableBytes) * 1.6) + 20LL * 1024 * 1024};
+}
+
+std::optional<int> sdkCeiling(const QString& gameSdk, int target)
+{
+    static const QRegularExpression lead(QStringLiteral("^\\s*(\\d+)"));
+    const auto m = lead.match(gameSdk);
+    if (target <= 4 || !m.hasMatch())
+        return std::nullopt;
+    const int own = m.captured(1).toInt();
+    if (target <= own)
+        return std::nullopt;
+    return std::max(4, own);
+}
 
 Preflight preflight(const QString& output, const QString& backup, const QStringList& games, const std::atomic_bool* cancel)
 {
@@ -555,8 +651,8 @@ Preflight preflight(const QString& output, const QString& backup, const QStringL
         est += b;
         largest = std::max(largest, b);
     }
-    const qint64 needOut = qint64(double(est) * 2.2) + 50LL * 1024 * 1024;
-    const qint64 needBak = qint64(double(est) * 1.1) + 20LL * 1024 * 1024;
+    const SpaceNeed need = spaceNeed(est);
+    const qint64 needOut = need.output, needBak = need.backup;
     const QString home = engineHome();
     // One whole sentence per folder and problem (the texts are shown and translated).
     struct Dest {
@@ -627,6 +723,14 @@ Preflight preflight(const QString& output, const QString& backup, const QStringL
             r.errors << t.noSpace.arg(gb(t.need), gb(free));
         else if (free < t.need * 2)
             r.warnings << t.lowSpace.arg(gb(free));
+    }
+    // Each folder fits on its own; on one drive they share its free space.
+    if (r.errors.isEmpty() && sameVolume(output, backup)) {
+        const qint64 free = freeBytes(output);
+        if (free < needOut + needBak)
+            r.errors << FW_TR("Not enough free space: the backport output folder and the originals backup folder are on the same "
+                              "drive and together need about %1 GB (%2 GB free).")
+                            .arg(gb(needOut + needBak), gb(free));
     }
     const qint64 engineFree = freeBytes(home);
     if (engineFree > 0 && engineFree < largest * 6 + 500LL * 1024 * 1024) {

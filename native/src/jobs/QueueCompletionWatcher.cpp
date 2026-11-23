@@ -1,5 +1,12 @@
 #include "jobs/QueueCompletionWatcher.h"
 
+#include "core/Log.h"
+
+namespace {
+const QString kAction = QStringLiteral("general.afterQueueAction");
+const QString kThisRunOnly = QStringLiteral("general.afterQueueThisRunOnly");
+} // namespace
+
 namespace fw {
 
 QueueCompletionWatcher::QueueCompletionWatcher(JobQueue& queue, SettingsStore& settings, QObject* parent)
@@ -41,6 +48,39 @@ QueueCompletionWatcher::QueueCompletionWatcher(JobQueue& queue, SettingsStore& s
             m_runIds << id;
     });
     connect(&m_queue, &JobQueue::idle, this, &QueueCompletionWatcher::onIdle);
+    // A choice the user makes after a "this run only" action was due wins
+    // over it, also during that run's countdown.
+    connect(&m_settings, &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
+        if (!m_resetting && (key == kAction || key == kThisRunOnly))
+            m_thisRunAction = power::Action::None;
+    });
+    connect(&m_settings, &SettingsStore::resetDone, this, [this] {
+        if (!m_resetting)
+            m_thisRunAction = power::Action::None;
+    });
+}
+
+power::Action QueueCompletionWatcher::dueAction() const
+{
+    if (m_thisRunAction != power::Action::None)
+        return m_thisRunAction;
+    return power::actionFromName(m_settings.value(kAction).toString());
+}
+
+void QueueCompletionWatcher::endThisRunOnly(power::Action ranFor)
+{
+    m_resetting = true;
+    const Status a = m_settings.setValue(kAction, QStringLiteral("none"));
+    const Status b = m_settings.setValue(kThisRunOnly, false);
+    m_resetting = false;
+    if (!a.ok() || !b.ok()) {
+        Log(QStringLiteral("power")).warn(QStringLiteral("Could not set \"When the queue finishes\" back to \"Do nothing\": %1")
+                                              .arg((a.ok() ? b : a).error().message));
+        return;
+    }
+    Log(QStringLiteral("power")).info(QStringLiteral("After-queue action was for this run only (%1): set back to \"Do nothing\"")
+                                          .arg(power::actionLabel(ranFor)));
+    // (The app saves the settings on every change, before a sleep or shut down.)
 }
 
 void QueueCompletionWatcher::onIdle()
@@ -58,16 +98,25 @@ void QueueCompletionWatcher::onIdle()
         return;
     emit queueFinished(ok, failed, cancelled);
 
+    m_thisRunAction = power::Action::None; // another run ended: the earlier run's action is over
     const SettingsValues snap = m_settings.snapshot();
-    const auto action = power::actionFromName(snap.string(QStringLiteral("general.afterQueueAction")));
+    const auto action = power::actionFromName(snap.string(kAction));
     if (action == power::Action::None)
         return;
+    const bool thisRunOnly = snap.boolean(kThisRunOnly);
     // "Only if every job succeeded": a job that failed, or was cancelled after
     // it had started, keeps the computer on. One cancelled while it was still
     // waiting never ran and does not count. With the option off the action
     // runs whatever the jobs did, also when every one of them failed.
-    if (snap.boolean(QStringLiteral("general.afterQueueOnlyIfAllSucceeded")) && (failed > 0 || cancelledAfterStart > 0))
+    if (snap.boolean(QStringLiteral("general.afterQueueOnlyIfAllSucceeded")) && (failed > 0 || cancelledAfterStart > 0)) {
+        if (thisRunOnly)
+            endThisRunOnly(action); // the run is over: Sleep is not left armed for the next one
         return;
+    }
+    if (thisRunOnly) {
+        endThisRunOnly(action);
+        m_thisRunAction = action; // for this run's countdown (MainWindow asks dueAction())
+    }
     emit actionDue(action, int(snap.integer(QStringLiteral("general.afterQueueDelaySeconds"))), ok, failed);
 }
 

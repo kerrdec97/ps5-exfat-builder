@@ -199,6 +199,22 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
         m_afterAction->widget()->setAccessibleName(name->text());
         m_afterAction->widget()->setToolTip(plainTip(shownDescription(*def)));
         rl->addWidget(m_afterAction->widget());
+        // "Only after this run" (GitHub #96): the choice is for the next run
+        // only and goes back to "Do nothing" afterwards.
+        if (const SettingDef* once = m_ctx.schema().find(general::keys::kAfterQueueThisRunOnly)) {
+            m_afterOnce = new SettingEditor(*once, row);
+            m_afterOnce->widget()->setObjectName(QStringLiteral("queue-after-this-run"));
+            m_afterOnce->widget()->setToolTip(plainTip(shownDescription(*once)));
+            m_afterOnceLabel = label(shownLabel(*once), TextStyle::Body, color::fg_1, row);
+            m_afterOnceLabel->setToolTip(m_afterOnce->widget()->toolTip());
+            m_afterOnceLabel->setBuddy(m_afterOnce->widget());
+            rl->addSpacing(space::md);
+            rl->addWidget(m_afterOnce->widget());
+            rl->addWidget(m_afterOnceLabel);
+            connect(m_afterOnce, &SettingEditor::edited, this, [this](const QVariant& v) {
+                (void)m_ctx.settings().setValue(general::keys::kAfterQueueThisRunOnly, v);
+            });
+        }
         rl->addStretch(1);
         after->body()->addWidget(row);
         m_afterNote = new MessageRow(after);
@@ -209,7 +225,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
             (void)m_ctx.settings().setValue(general::keys::kAfterQueueAction, v);
         });
         connect(&m_ctx.settings(), &SettingsStore::changed, this, [this](const QString& key, const QVariant&) {
-            if (key == general::keys::kAfterQueueAction || key == general::keys::kAfterQueueDelay)
+            if (key == general::keys::kAfterQueueAction || key == general::keys::kAfterQueueDelay || key == general::keys::kAfterQueueThisRunOnly)
                 updateAfterQueue();
         });
         updateAfterQueue();
@@ -236,7 +252,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     m_filter = new Segmented(card);
     for (const auto& s : {FW_TR("All"), FW_TR("Running"), FW_TR("Queued"), FW_TR("Done"), FW_TR("Not finished")})
         m_filter->addSegment(s);
-    m_filter->setAccessibleName(QStringLiteral("Filter jobs"));
+    m_filter->setAccessibleName(FW_TR("Filter jobs"));
     h->addWidget(m_filter);
     // The time left takes the rest of the row, at its end: one line while it
     // fits ("Running job: about 3 min left" wrapped after "3" when it had only
@@ -316,7 +332,20 @@ void QueuePage::updateAfterQueue()
     case power::Action::Restart: note = FW_TR("When the last job ends, the computer restarts after a %1 s countdown that you can cancel."); break;
     case power::Action::None: break;
     }
-    m_afterNote->set(note.isEmpty() ? QString() : note.arg(seconds), Tone::Warn);
+    const bool once = m_ctx.settings().value(general::keys::kAfterQueueThisRunOnly).toBool();
+    if (m_afterOnce) {
+        m_afterOnce->setValue(once);
+        // Only while there is an action to limit to this run.
+        const bool any = power::actionFromName(value) != power::Action::None;
+        m_afterOnce->setEnabled(any);
+        m_afterOnceLabel->setEnabled(any);
+    }
+    if (!note.isEmpty()) {
+        note = note.arg(seconds);
+        if (once)
+            note += u' ' + FW_TR("After this run the choice goes back to Do nothing.");
+    }
+    m_afterNote->set(note, Tone::Warn);
 }
 
 std::vector<const JobRecord*> QueuePage::listedJobs() const

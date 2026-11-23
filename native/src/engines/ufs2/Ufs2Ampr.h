@@ -12,14 +12,21 @@
 #include "engines/pfs/AmprIndex.h"
 #include "engines/ufs2/Ufs2Tree.h"
 
+#include <functional>
+
 namespace fw::ufs2 {
 
 // The index of the files `tree` holds, by the rules of the AMPR index tool
 // (pfs::amprToolRows). Empty when there is nothing to list.
 QByteArray amprIndexFor(const SourceTree& tree);
 
-// What `mode` makes of the scanned game (pfs::decideAmprIndex).
-pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mode);
+// The contents of a node that is no file on disk (a build from an archive
+// reads the dump's own index out of the archive).
+using NodeContents = std::function<Result<QByteArray>(const TreeNode&)>;
+
+// What `mode` makes of the scanned game (pfs::decideAmprIndex). `contents`
+// reads the dump's own index when it has no localPath.
+pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mode, const NodeContents& contents = {});
 
 // Makes `indexFile` (a file on disk) the root's ampr_emu.index in `tree`: the
 // content of the dump's own entry, or a new entry where an NTFS listing of
@@ -35,7 +42,8 @@ struct AmprPlacement {
 // places it in `tree`. The root's index, new or the dump's own, is called
 // exactly ampr_emu.index in the tree: the one name the runtime opens (for the
 // dump's own, whatever `mode` is, when the game has fakelib/libSceAmpr.sprx).
-Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const QString& tempDir);
+Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const QString& tempDir,
+                                     const NodeContents& contents = {});
 
 // For a verification against a folder: when `image` holds the index of the
 // folder's files (`tree`) and the folder has none or another one, the image's

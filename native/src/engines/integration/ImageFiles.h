@@ -5,6 +5,8 @@
 // native readers:
 //
 //   .exfat            ExfatReader (tree) + ImageFileStream (content)
+//   .zstd             the same, once its first sector is an exFAT boot sector
+//                     (ZstdImage.h); a zstd stream or anything else is refused
 //   .ffpkg            Ufs2Reader (tree, inode extents, readAt)
 //   .ffpfs / .ffpfsc  PfsImage; a container holding one nested PFS image is
 //                     opened through to the nested image (as "deep" extraction
@@ -79,7 +81,7 @@ protected:
     qint64 m_files = 0, m_dirs = 0, m_bytes = 0;
 };
 
-// True for the image extensions openFileTree reads (.exfat .ffpkg .ffpfs .ffpfsc).
+// True for the image extensions openFileTree reads (.exfat .zstd .ffpkg .ffpfs .ffpfsc).
 bool isTreeImage(const QString& path);
 
 // Opens an image (by extension) or a folder. Fails with NotFound when the

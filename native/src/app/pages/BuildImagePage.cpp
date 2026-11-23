@@ -30,9 +30,11 @@
 #include <QApplication>
 #include <QCursor>
 #include <QDir>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMouseEvent>
@@ -46,6 +48,9 @@
 
 #include <algorithm>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 namespace fw::pages {
 
@@ -111,6 +116,8 @@ QString typeLabel(const QString& tile)
         return QStringLiteral("FPKG");
     if (tile == kFormatZstdFolder)
         return QStringLiteral("zstd");
+    if (tile == jobs::kFormatZstdImage)
+        return QStringLiteral("ZSTD");
     return QStringLiteral("exFAT");
 }
 
@@ -177,9 +184,9 @@ QString sourceKindLabel(const QString& kind)
 }
 
 // ---- format tiles ------------------------------------------------------------------
-// Five large choices (pages::OptionTiles): one row when it fits, otherwise
-// three and two (the three images on the first row, the package and the
-// packed folder below, sharing that row), two by two when narrow.
+// Six large choices (pages::OptionTiles): one row when it fits, otherwise
+// three and three (the three images on the first row, the package, the
+// packed folder and the ZSTD image below), two by two when narrow.
 OptionTiles* tilesOf(QWidget* w) { return static_cast<OptionTiles*>(w); }
 
 // One of several games found below the chosen folder: a 44 px row on the
@@ -335,8 +342,86 @@ struct SpaceProbe {
     bool exists;
 };
 
+// Tests: called on the worker before the drive is asked (blocks to play a
+// drive that does not answer).
+std::mutex g_spaceHookMutex;
+std::function<void(const QString&)>& spaceProbeHook()
+{
+    static std::function<void(const QString&)> hook;
+    return hook;
+}
+
+// The drive probes (A16) run on threads of their own, never on the global pool
+// or the UI thread, one at a time per drive: a drive that does not answer
+// (a NAS gone to sleep, a dead share) holds only its own probes, and a probe
+// of another drive starts at once. While a drive's probe runs, only the
+// newest request for that drive waits; an older one is dropped unasked.
+QString driveRootOf(const QString& folder)
+{
+    const QString p = QDir::cleanPath(QDir::fromNativeSeparators(folder));
+    if (p.startsWith(QLatin1String("//"))) { // \\server\share
+        const QStringList parts = p.mid(2).split(u'/', Qt::SkipEmptyParts);
+        return QStringLiteral("//") + parts.mid(0, 2).join(u'/').toLower();
+    }
+    if (p.size() >= 2 && p.at(1) == u':')
+        return p.left(2).toUpper();
+    return QStringLiteral("/");
+}
+
+struct ProbeLane {
+    bool running = false;
+    std::function<void()> next; // the newest request while one runs
+};
+std::mutex g_probeMutex;
+QHash<QString, ProbeLane>& probeLanes()
+{
+    static QHash<QString, ProbeLane> lanes;
+    return lanes;
+}
+
+void runDriveProbe(const QString& root, std::function<void()> work)
+{
+    {
+        std::lock_guard lock(g_probeMutex);
+        ProbeLane& lane = probeLanes()[root];
+        if (lane.running) {
+            lane.next = std::move(work);
+            return;
+        }
+        lane.running = true;
+    }
+    std::thread([root, work = std::move(work)]() mutable {
+        for (;;) {
+            work();
+            std::lock_guard lock(g_probeMutex);
+            ProbeLane& lane = probeLanes()[root];
+            if (!lane.next) {
+                probeLanes().remove(root);
+                return;
+            }
+            work = std::move(lane.next);
+            lane.next = {};
+        }
+    }).detach();
+}
+
+// To the UI thread, unless the application is already gone (a probe that
+// answers after the window closed).
+void postToUi(std::function<void()> f)
+{
+    if (QCoreApplication* app = QCoreApplication::instance())
+        QMetaObject::invokeMethod(app, std::move(f), Qt::QueuedConnection);
+}
+
 SpaceProbe probeOutputFolder(const QString& folder, qint64 largestFileBytes)
 {
+    std::function<void(const QString&)> hook;
+    {
+        std::lock_guard lock(g_spaceHookMutex);
+        hook = spaceProbeHook();
+    }
+    if (hook)
+        hook(folder);
     // A folder created by the build: measure the drive it will be on.
     QString probe = folder;
     while (!probe.isEmpty() && !QFileInfo::exists(probe))
@@ -396,8 +481,10 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
         if (key == general::keys::kFreeSpaceMarginMiB || key == exfat::keys::kImageSizeGiB || key == exfat::keys::kSpareSpace
             || key == exfat::keys::kSpareSpaceMiB)
             checkSpace();
-        if (key == ampr::keys::kZstdPack)
+        if (key == ampr::keys::kZstdPack) {
             keepZstdPackOn();
+            syncExfatKind();
+        }
         if (key == kSpeed)
             updateSpeedNotes();
         if (key == fpkg::keys::kKeepDlcEmulator)
@@ -405,6 +492,7 @@ BuildImagePage::BuildImagePage(AppContext& ctx, JobQueueModel& queueModel, QWidg
     });
     connect(&ctx.settings(), &SettingsStore::resetDone, this, [this] {
         keepZstdPackOn();
+        syncExfatKind();
         updateSpeedNotes();
         updateDlcEmuNote();
         checkSpace();
@@ -507,6 +595,10 @@ void BuildImagePage::buildFormatCard()
                    QStringLiteral("package_check"), kFormatFpkg);
     tiles->addTile(FW_TR("Packed folder"), FW_TR("No image: the game folder with its files in zstd packs, for a USB drive or FTP."),
                    QStringLiteral("archive"), kFormatZstdFolder, QStringLiteral("zstd"));
+    // GitHub #98: one .zstd file, what Kraken Mount MOD mounts. Only the
+    // reader's contract is proven (report 03), so the tile says Experimental.
+    tiles->addTile(FW_TR("ZSTD image"), FW_TR("One .zstd file: an exFAT image with the game in zstd packs. For Kraken Mount MOD."),
+                   QStringLiteral("compress"), jobs::kFormatZstdImage, FW_TR("Experimental"));
     tiles->setAccessibleName(FW_TR("Output format"));
     tiles->onChanged = [this](int) { onFormatChanged(); };
     card->body()->addWidget(tiles);
@@ -530,6 +622,8 @@ void BuildImagePage::buildFormatCard()
         if (!m_nameEdited)
             renderFileName();
         updateOutput();
+        if (m_sourceMsg && sourceKind() == QLatin1String("zip"))
+            refreshSourceState(); // an .ffpfsc from a 7z or RAR is unpacked first, an .ffpfs is not
     });
 
     // FPKG: the user's own Sony Publishing Tools, one compact row.
@@ -552,7 +646,7 @@ void BuildImagePage::buildFormatCard()
 
     // One options panel per format: only that format's settings.
     const QStringList shared = {kVerify, kVerifyMode, kKeepTemp};
-    m_formats.resize(5);
+    m_formats.resize(6);
     m_formats[0].tile = jobs::kFormatExfat;
     // Every format shows the speed row (Performance mode) up front, and the
     // image formats the zstd packs switch; their details are under Advanced.
@@ -562,7 +656,7 @@ void BuildImagePage::buildFormatCard()
                         QStringLiteral("PS5 connection")},
                        QStringList{QStringLiteral("exfat."), zstd, kThreads, kSpeed, kAutoUpload} + shared,
                        {exfat::keys::kEditStrategy, exfat::keys::kExtractParallel, exfat::keys::kExtractThreads},
-                       {kSpeed, exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB, ampr::keys::kZstdPack});
+                       {kSpeed, exfat::keys::kClusterSize, exfat::keys::kImageSizeGiB});
     m_formats[1].tile = jobs::kFormatFfpkg;
     buildFormatOptions(m_formats[1],
                        {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Advanced"),
@@ -591,8 +685,25 @@ void BuildImagePage::buildFormatCard()
                        {zstd, kThreads, kSpeed, kKeepTemp}, {}, {kSpeed, ampr::keys::kZstdLevel, ampr::keys::kPackStrategy});
     if (SettingRow* on = m_formats[4].panel->row(ampr::keys::kZstdPack))
         on->hide();
+    // ZSTD image: an exFAT image with the game in zstd packs (image.build.zstd,
+    // format exfat, named .zstd). The pack settings up front, the exFAT
+    // settings that shape the image under Advanced; the "Compress game files"
+    // switch is what this output is, so it is always on and never shown.
+    m_formats[5].tile = jobs::kFormatZstdImage;
+    buildFormatOptions(m_formats[5],
+                       {QStringLiteral("Build"), QStringLiteral("Verification"), QStringLiteral("Performance"), QStringLiteral("Advanced"),
+                        QStringLiteral("PS5 connection")},
+                       QStringList{QStringLiteral("exfat."), zstd, kThreads, kSpeed, kAutoUpload} + shared,
+                       // The packer writes the AMPR index, the source is never deleted and a .zstd always has
+                       // 512-byte sectors (image.build.zstd; Kraken Mount MOD reads no other size).
+                       {exfat::keys::kEditStrategy, exfat::keys::kExtractParallel, exfat::keys::kExtractThreads, exfat::keys::kAmprIndex,
+                        exfat::keys::kDeleteSourceAfterVerify, exfat::keys::kSectorSize},
+                       {kSpeed, ampr::keys::kZstdLevel, ampr::keys::kPackStrategy, exfat::keys::kClusterSize});
+    if (SettingRow* on = m_formats[5].panel->row(ampr::keys::kZstdPack))
+        on->hide();
     keepZstdPackOn();
     connect(m_formats[4].panel, &JobOptionsPanel::overridesChanged, this, &BuildImagePage::keepZstdPackOn);
+    connect(m_formats[5].panel, &JobOptionsPanel::overridesChanged, this, &BuildImagePage::keepZstdPackOn);
     updateSpeedNotes();
     // The PFS type row leads the PFS essentials; the tools row leads FPKG's.
     // (layout items 0 and 1 are the hairline and the space under it)
@@ -605,9 +716,48 @@ void BuildImagePage::buildFormatCard()
     }
     if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[3].essentials->layout()))
         l->insertWidget(2, m_toolsRow);
+    // exFAT leads with the choice that changes the image's size most: the
+    // same .exfat, with the game's files in zstd packs or as they are.
+    if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[0].essentials->layout())) {
+        const QString more = FW_TR("Compressed keeps the .exfat name and the way you mount it, and is smaller: the game's files go "
+                                   "into zstd packs that the bundled ampr-emu-ng reads on the console. How much smaller depends on "
+                                   "the game. Not every game works compressed yet: keep your original dump.");
+        m_exfatKind = new Segmented(m_formats[0].essentials);
+        m_exfatKind->addSegment(FW_TR("Standard"), {}, false);
+        m_exfatKind->addSegment(FW_TR("Compressed"), {}, true);
+        m_exfatKind->setAccessibleName(FW_TR("exFAT image type"));
+        m_exfatKind->setToolTip(more);
+        m_exfatKindRow = plainRow(FW_TR("Image type"),
+                                  FW_TR("Compressed is a smaller .exfat: the game's files go into zstd packs."),
+                                  m_exfatKind, m_formats[0].essentials, nullptr, more);
+        m_exfatKindRow->setObjectName(QStringLiteral("exfat-kind-row"));
+        l->insertWidget(2, m_exfatKindRow);
+        connect(m_exfatKind, &Segmented::currentChanged, this, [this](int) {
+            JobOptionsPanel* panel = m_formats[0].panel;
+            const bool on = m_exfatKind->currentValue().toBool();
+            if (panel->effectiveValue(ampr::keys::kZstdPack).toBool() != on)
+                panel->setOverride(ampr::keys::kZstdPack, on);
+        });
+        connect(m_formats[0].panel, &JobOptionsPanel::overridesChanged, this, &BuildImagePage::syncExfatKind);
+        syncExfatKind();
+    }
+    // The ZSTD image leads with what loads it (report 03, ZSTD-3): never more
+    // than the investigation proved.
+    if (auto* l = qobject_cast<QVBoxLayout*>(m_formats[5].essentials->layout())) {
+        m_zstdImageNote = plainRow(FW_TR("Kraken Mount MOD only"),
+                                   FW_TR("A .zstd file is an exFAT image with zstd packs inside. Kraken Mount MOD mounts it; "
+                                         "ShadowMount+ does not: rename it to .exfat for ShadowMount+.")
+                                       + u' '
+                                       + FW_TR("Experimental: not yet confirmed against ModGames44's own tool or on a console."),
+                                   nullptr, m_formats[5].essentials);
+        m_zstdImageNote->setObjectName(QStringLiteral("zstd-image-note"));
+        l->insertWidget(2, m_zstdImageNote);
+    }
     for (auto& fo : m_formats)
         eh->addWidget(fo.essentials);
 }
+
+bool BuildImagePage::isZstdImage() const { return tile() == jobs::kFormatZstdImage; }
 
 void BuildImagePage::buildFormatOptions(FormatOptions& fo, const QStringList& sections, const QStringList& keyFilter,
                                         const QStringList& exclude, const QStringList& essentials)
@@ -675,6 +825,8 @@ void BuildImagePage::buildFormatOptions(FormatOptions& fo, const QStringList& se
             updateDlcEmuNote(); // "Keep the DLC emulator" for this job
         if (tile != this->tile())
             return;
+        if (m_sourceMsg && sourceKind() == QLatin1String("zip"))
+            refreshSourceState(); // the zstd packs switch decides whether an archive is unpacked first
         updateAdvancedSummary();
         updateClusterNote();
         updatePfsRows();
@@ -724,13 +876,21 @@ void BuildImagePage::buildPackageCard()
     details->body()->addWidget(grid);
     m_title = textInput({}, false, details);
     m_title->setAccessibleName(FW_TR("Title"));
-    // The name is written for param.json's default language only (as the
-    // reference toolkit does); a console in another language shows that
-    // language's own name (GitHub #94).
-    m_titleRow = field(FW_TR("Title"), m_title,
-                       FW_TR("Written for the default language of param.json. A console set to another language shows that language's own name."),
-                       details);
+    // The name the console shows. "Title for all languages" (default on,
+    // GitHub #94) writes it for every language of param.json; off, only the
+    // default language (as the reference toolkit does) and a console in
+    // another language shows that language's own name.
+    m_titleRow = field(FW_TR("Title"), m_title, {}, details);
     details->body()->addWidget(m_titleRow);
+    m_titleAll = new Switch(details);
+    m_titleAll->setChecked(true);
+    m_titleAll->setAccessibleName(FW_TR("Title for all languages"));
+    m_titleAllRow = plainRow(FW_TR("Title for all languages"),
+                             FW_TR("A changed title is written for every language of param.json. Off: only the default language, and a "
+                                   "console set to another language shows that language's own name."),
+                             m_titleAll, details);
+    m_titleAllRow->setObjectName(QStringLiteral("title-all-languages"));
+    details->body()->addWidget(m_titleAllRow);
     // App builds of a game with a DLC emulator: its DLC data goes into the
     // package, and the list is edited in Library › DLC emulator.
     m_dlcEmuRow = new QWidget(details);
@@ -897,7 +1057,7 @@ void BuildImagePage::buildSaveCard()
     connect(m_spaceTimer, &QTimer::timeout, this, &BuildImagePage::checkSpace);
     connect(m_output, &PathField::pathChanged, this, [this](const QString&) {
         renderFileName();
-        ++m_spaceGen; // answers about the folder before are dropped
+        nextSpaceGen(); // answers about the folder before are dropped
         m_spaceState = SpaceCheck::Checking;
         m_spaceTimer->start();
     });
@@ -1079,6 +1239,7 @@ void BuildImagePage::onFormatChanged()
     const QString t = tile();
     const bool pkg = t == kFormatFpkg;
     const bool folder = t == kFormatZstdFolder;
+    const bool zstdImage = t == jobs::kFormatZstdImage;
     for (auto& fo : m_formats) {
         const bool on = fo.tile == t;
         fo.essentials->setVisible(on && (!fo.essentialKeys.isEmpty() || fo.tile == jobs::kFormatFfpfsc || fo.tile == kFormatFpkg));
@@ -1095,15 +1256,17 @@ void BuildImagePage::onFormatChanged()
         header()->setCaption(FW_TR("Turn a game dump into a PFS image, compressed (.ffpfsc) or not (.ffpfs)."));
     else if (folder)
         header()->setCaption(FW_TR("Pack a game dump into a folder of zstd packs: smaller on the drive, read on the console by ampr-emu-ng, no image."));
+    else if (zstdImage)
+        header()->setCaption(FW_TR("Turn a game dump into one .zstd file: an exFAT image with the game in zstd packs, for Kraken Mount MOD (experimental)."));
     else
         header()->setCaption(FW_TR("Package a game folder, an image or a .gp5 project as an installable .pkg."));
     primaryButton()->setText(pkg ? FW_TR("Build package") : folder ? FW_TR("Pack game") : FW_TR("Build image"));
     // What the "not available in this build" state names follows the tile.
     setFeatureName(pkg ? FW_TR("Package building") : folder ? FW_TR("Packing a game folder") : FW_TR("Image building"));
     sourceCard()->setTitleText(pkg ? FW_TR("Source") : FW_TR("Game dump"));
-    m_drop->setTitle(pkg ? FW_TR("Drop a game folder, an image or a .gp5 project here")
+    m_drop->setTitle(pkg ? FW_TR("Drop a game folder, an archive, an image or a .gp5 project here")
                          : FW_TR("Drop a game dump folder or an archive (.zip, .7z, .rar) here"));
-    m_drop->setText(pkg ? FW_TR("or click to browse \u2014 a folder, an .exfat, .ffpfs, .ffpfsc or .ffpkg image, or a .gp5 project")
+    m_drop->setText(pkg ? FW_TR("or click to browse \u2014 a folder, an archive (.zip, .7z, .rar), an .exfat, .ffpfs, .ffpfsc or .ffpkg image, or a .gp5 project")
                         : FW_TR("or click to browse \u2014 the folder that holds eboot.bin and sce_sys, or an archive of it"));
     if (t == jobs::kFormatExfat)
         m_advanced->setCaption(FW_TR("Free space, volume label, contents, verification"));
@@ -1113,12 +1276,14 @@ void BuildImagePage::onFormatChanged()
         m_advanced->setCaption(FW_TR("Threads, PFS format, source folder, verification"));
     else if (folder)
         m_advanced->setCaption(FW_TR("Check after packing, threads, temporary files"));
+    else if (zstdImage)
+        m_advanced->setCaption(FW_TR("Check after packing, free space, volume label, verification"));
     else
         m_advanced->setCaption(FW_TR("Packing, param.json, files, PlayGo, verification"));
     m_settingsLink->setText(t == jobs::kFormatExfat ? FW_TR("All exFAT settings")
                             : t == jobs::kFormatFfpkg ? FW_TR("All FFPKG settings")
                             : t == jobs::kFormatFfpfsc ? FW_TR("All PFS settings")
-                            : folder ? FW_TR("All zstd settings")
+                            : folder || zstdImage ? FW_TR("All zstd settings")
                                      : FW_TR("All FPKG settings"));
     m_fileLabel->setText(pkg ? FW_TR("Package name") : folder ? FW_TR("Folder name") : FW_TR("File name"));
     m_fileName->setAccessibleName(m_fileLabel->text());
@@ -1131,7 +1296,7 @@ void BuildImagePage::onFormatChanged()
         m_resetName->hide();
     else
         m_resetName->setVisible(m_nameEdited);
-    if (folder)
+    if (folder || zstdImage)
         keepZstdPackOn();
     setRequiredKinds({pkg ? QStringLiteral("fpkg.build") : folder ? ampr::kPackJob : jobs::imageBuildKind(format())});
     updateStartHint();
@@ -1164,8 +1329,10 @@ void BuildImagePage::applyRowVisibility()
             bool hide = false;
             if (fo.tile == jobs::kFormatFfpfsc)
                 hide = (f == jobs::kFormatFfpfsc && fileOnly.contains(key)) || (f == jobs::kFormatFfpfs && containerOnly.contains(key));
-            if (fo.tile == kFormatZstdFolder && key == ampr::keys::kZstdPack)
+            if ((fo.tile == kFormatZstdFolder || fo.tile == jobs::kFormatZstdImage) && key == ampr::keys::kZstdPack)
                 hide = true; // always on for this output
+            if (fo.tile == jobs::kFormatExfat && key == ampr::keys::kZstdPack)
+                hide = true; // the "Image type" row is this switch
             row->setHidden(hide);
         }
         // Dividers between visible rows; a heading only above a bucket with rows.
@@ -1189,14 +1356,27 @@ void BuildImagePage::applyRowVisibility()
     }
 }
 
-// Packed folder: "Compress game files" is what this output is. Its hidden
-// switch stays on whatever the global setting or the panel's overrides do, so
-// the rows that depend on it never grey out.
+// Packed folder and ZSTD image: "Compress game files" is what these outputs
+// are. Their hidden switch stays on whatever the global setting or the
+// panel's overrides do, so the rows that depend on it never grey out.
 void BuildImagePage::keepZstdPackOn()
 {
-    JobOptionsPanel* panel = optionsPanel(kFormatZstdFolder);
-    if (panel && !panel->effectiveValue(ampr::keys::kZstdPack).toBool())
-        panel->setOverride(ampr::keys::kZstdPack, true);
+    for (const QString& t : {kFormatZstdFolder, jobs::kFormatZstdImage}) {
+        JobOptionsPanel* panel = optionsPanel(t);
+        if (panel && !panel->effectiveValue(ampr::keys::kZstdPack).toBool())
+            panel->setOverride(ampr::keys::kZstdPack, true);
+    }
+}
+
+// The exFAT "Image type" row shows what the tile's zstd packs switch is,
+// wherever the value came from (the row, the global setting, a restored job).
+void BuildImagePage::syncExfatKind()
+{
+    if (!m_exfatKind)
+        return;
+    const bool on = m_formats[0].panel->effectiveValue(ampr::keys::kZstdPack).toBool();
+    if (m_exfatKind->currentValue().toBool() != on)
+        m_exfatKind->setCurrentValue(on);
 }
 
 void BuildImagePage::updateAdvancedSummary()
@@ -1215,16 +1395,19 @@ void BuildImagePage::updateAdvancedSummary()
 
 void BuildImagePage::updateClusterNote()
 {
-    // ShadowMount+ 1.7 and later mount exFAT only with 64 KiB clusters.
-    JobOptionsPanel* panel = optionsPanel(jobs::kFormatExfat);
-    SettingRow* row = panel ? panel->row(exfat::keys::kClusterSize) : nullptr;
-    if (!row)
-        return;
-    const QString v = panel->effectiveValue(exfat::keys::kClusterSize).toString();
-    if (v == QLatin1String("auto") || v == QLatin1String("65536") || v.isEmpty())
-        row->setMessage({}, Tone::Neutral);
-    else
-        row->setMessage(FW_TR("ShadowMount+ 1.7 and later need 64 KB."), Tone::Warn);
+    // ShadowMount+ 1.7 and later mount exFAT only with 64 KiB clusters (and
+    // Kraken Mount MOD attaches a .zstd as ShadowMount+ 1.7 does).
+    for (const QString& t : {jobs::kFormatExfat, jobs::kFormatZstdImage}) {
+        JobOptionsPanel* panel = optionsPanel(t);
+        SettingRow* row = panel ? panel->row(exfat::keys::kClusterSize) : nullptr;
+        if (!row)
+            continue;
+        const QString v = panel->effectiveValue(exfat::keys::kClusterSize).toString();
+        if (v == QLatin1String("auto") || v == QLatin1String("65536") || v.isEmpty())
+            row->setMessage({}, Tone::Neutral);
+        else
+            row->setMessage(FW_TR("ShadowMount+ 1.7 and later need 64 KB."), Tone::Warn);
+    }
 }
 
 void BuildImagePage::updatePfsRows()
@@ -1286,8 +1469,8 @@ bool BuildImagePage::acceptsDrop(const QList<QUrl>& urls) const
         return true;
     static const QStringList exts = {QStringLiteral("exfat"), QStringLiteral("ffpfsc"), QStringLiteral("ffpfs"),
                                      QStringLiteral("ffpkg"), QStringLiteral("gp5")};
-    if (tile() != kFormatFpkg && fi.isFile() && archive::isArchiveSource(fi.absoluteFilePath()))
-        return true; // an archived dump
+    if (fi.isFile() && archive::isArchiveSource(fi.absoluteFilePath()))
+        return true; // an archived dump (every tile unpacks it first, FPKG too: #37)
     return tile() == kFormatFpkg && fi.isFile() && exts.contains(fi.suffix().toLower());
 }
 
@@ -1360,12 +1543,16 @@ void BuildImagePage::browseSource()
         QMenu menu(this);
         auto* folder = menu.addAction(iconPixmap(QStringLiteral("folder"), 16, color::fg_2, devicePixelRatioF()), FW_TR("Game folder\u2026"));
         auto* file = menu.addAction(iconPixmap(QStringLiteral("file"), 16, color::fg_2, devicePixelRatioF()), FW_TR("Image or .gp5 project\u2026"));
+        auto* zip = menu.addAction(iconPixmap(QStringLiteral("archive"), 16, color::fg_2, devicePixelRatioF()), FW_TR("Archived dump (.zip, .7z, .rar)\u2026"));
         QAction* chosen = menu.exec(at);
         if (chosen == folder)
             picked = QFileDialog::getExistingDirectory(window(), FW_TR("Choose the game folder"), start);
         else if (chosen == file)
             picked = QFileDialog::getOpenFileName(window(), FW_TR("Choose the image or project"), start,
                                                   FW_TR("Images and projects") + QStringLiteral(" (*.exfat *.ffpfsc *.ffpfs *.ffpkg *.gp5)"));
+        else if (chosen == zip)
+            picked = QFileDialog::getOpenFileName(window(), FW_TR("Choose the archived dump"), start,
+                                                  FW_TR("Archives") + QStringLiteral(" (*.") + archive::archiveSourceSuffixes().join(QStringLiteral(" *.")) + u')');
     }
     if (!picked.isEmpty())
         setSource(picked);
@@ -1466,8 +1653,11 @@ void BuildImagePage::onSummary(const GameSummary& s)
     if (s.exists && m_contentId) {
         const bool newSource = m_detailsFor != m_sourcePath;
         m_detailsFor = m_sourcePath;
-        // For a file the summary's title is the file's name, not a title.
-        const QString title = sourceKind() == QLatin1String("folder") ? s.title : QString();
+        // For a file the summary's title is the file's name, not a title; an
+        // archived dump's is the game's only when its param.json was read
+        // (it has the content ID then).
+        const bool titleRead = sourceKind() == QLatin1String("folder") || (sourceKind() == QLatin1String("zip") && !s.contentId.isEmpty());
+        const QString title = titleRead ? s.title : QString();
         if (newSource || !s.contentId.isEmpty())
             m_contentId->setText(s.contentId);
         if (newSource || !title.isEmpty())
@@ -1484,6 +1674,43 @@ void BuildImagePage::onSummary(const GameSummary& s)
     renderFileName();
     updateOutput();
     emit statusContextChanged();
+}
+
+// What the build does with an archived dump (#37), for the note under the
+// source. It streams wherever the job does: exFAT and FFPKG, an uncompressed
+// .ffpfs (files stored raw) from any archive, an .ffpfsc from a ZIP; with zstd
+// packs the game is packed in one pass and only the packs (and the loose
+// files) are written, plus, from a 7z or RAR, the packs' data in the
+// temporary folder until the packs are laid out. FPKG, an .ffpfsc from a 7z
+// or RAR and per-file PFS compression unpack it first.
+QString BuildImagePage::archiveNote() const
+{
+    const GameSummary& s = m_summary;
+    const QString f = format();
+    const QString t = tile();
+    const FormatOptions* fo = current();
+    const bool zip = archive::isZipFormatArchive(m_sourcePath);
+    const QString unpacks = FW_TR("The archive is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
+                                .arg(formatBytes(s.bytes));
+    if (t == kFormatFpkg)
+        return unpacks;
+    if (t == kFormatZstdFolder)
+        return zip ? FW_TR("The packed folder is made straight from the archive: nothing is unpacked to disk.")
+                   : FW_TR("The packed folder is made straight from the archive: nothing is unpacked, but up to %1 of packed "
+                           "data waits in the temporary folder while it is made.")
+                         .arg(formatBytes(s.bytes));
+    const bool zstd = f == jobs::kFormatZstdImage || (fo && fo->panel->effectiveValue(ampr::keys::kZstdPack).toBool());
+    if (zstd)
+        return zip ? FW_TR("Nothing is unpacked: the game is packed straight from the archive. Its zstd packs need up to %1 "
+                           "of temporary space before the image is built from them.")
+                         .arg(formatBytes(s.bytes))
+                   : FW_TR("Nothing is unpacked: the game is packed straight from the archive. Its zstd packs need up to %1 "
+                           "of temporary space before the image is built from them, and as much again while they are made.")
+                         .arg(formatBytes(s.bytes));
+    const bool streams = f == jobs::kFormatExfat || f == jobs::kFormatFfpkg
+                         || (f == jobs::kFormatFfpfs && !(fo && fo->panel->effectiveValue(pfs::keys::kCompressFiles).toBool()))
+                         || (f == jobs::kFormatFfpfsc && zip);
+    return streams ? FW_TR("The image is built straight from the archive: nothing is unpacked to disk.") : unpacks;
 }
 
 void BuildImagePage::refreshSourceState()
@@ -1531,21 +1758,15 @@ void BuildImagePage::refreshSourceState()
                                                                 : FW_TR("Folder without a game"));
             }
         }
-        if (kind == QLatin1String("zip") && isFpkg()) {
-            m_stripTile->setTone(Tone::Warn);
-            m_sourceMsg->set(FW_TR("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the archive, or pick exFAT, FFPKG, PFS or Packed folder."), Tone::Warn);
-            m_sourceBadge->set(FW_TR("Needs a folder"), Tone::Warn);
-            m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
-        } else if (kind == QLatin1String("zip") && (!s.isGame || !s.error.isEmpty())) {
+        // An archived dump: every tile takes it, FPKG included (#37).
+        if (kind == QLatin1String("zip") && (!s.isGame || !s.error.isEmpty())) {
             m_stripTile->setTone(Tone::Warn);
             m_sourceMsg->set(s.error.isEmpty() ? FW_TR("This archive holds no game (no eboot.bin or sce_sys/param.json).") : s.error, Tone::Warn);
             m_sourceBadge->set(FW_TR("Not a game"), Tone::Warn);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip")) {
             m_stripTile->setTone(Tone::Ok);
-            m_sourceMsg->set(FW_TR("The archive is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
-                                 .arg(formatBytes(s.bytes)),
-                             Tone::Neutral);
+            m_sourceMsg->set(archiveNote(), Tone::Neutral);
             m_sourceBadge->set(FW_TR("Ready"), Tone::Ok);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Ok));
         } else if (file && !isFpkg()) {
@@ -1646,6 +1867,7 @@ void BuildImagePage::onPackageTypeChanged()
                                   : FW_TR("Read from the game's sce_sys/param.json. A package must carry the game's own content ID, so it "
                                                    "cannot be changed here."));
     m_titleRow->setVisible(!backport);
+    m_titleAllRow->setVisible(!backport && t != QLatin1String("addon"));
     if (backport) {
         m_backportNote->setText(QStringLiteral(
             "Each backport becomes its own small update that installs over the base package, so the base stays the original "
@@ -1948,10 +2170,11 @@ qint64 BuildImagePage::neededBytes() const
     if (f == jobs::kFormatFfpfsc || f == kFormatFpkg || f == kFormatZstdFolder)
         return m_summary.bytes; // compressed: never more than the source
     qint64 need = qint64(double(m_summary.bytes) * 1.006) + 64LL * 1024 * 1024;
-    if (f == jobs::kFormatExfat) {
+    if (f == jobs::kFormatExfat || f == jobs::kFormatZstdImage) {
         // The two exFAT settings that set the size: a fixed image size, or
-        // fixed free space on top of an automatically sized image.
-        if (const JobOptionsPanel* panel = optionsPanel(jobs::kFormatExfat)) {
+        // fixed free space on top of an automatically sized image. (A ZSTD
+        // image is usually smaller; its packs are only known once made.)
+        if (const JobOptionsPanel* panel = optionsPanel(f)) {
             const double fixedGiB = panel->effectiveValue(exfat::keys::kImageSizeGiB).toDouble();
             if (fixedGiB > 0)
                 return qint64(fixedGiB * 1024.0 * 1024.0 * 1024.0);
@@ -1993,7 +2216,7 @@ void BuildImagePage::checkSpace()
     m_spaceProblem.clear();
     m_spaceState = SpaceCheck::Checking;
     if (m_demo) {
-        ++m_spaceGen; // drop results of checks still running
+        nextSpaceGen(); // drop results of checks still running
         m_spaceState = SpaceCheck::Ok;
         m_spaceRow->set(isFpkg() && packageTypeKind() == PackageType::Backport ? QStringLiteral("412 GB free on D:.")
                         : isFpkg() ? QStringLiteral("412 GB free on D:. The package needs up to 31.6 GB.")
@@ -2010,36 +2233,79 @@ void BuildImagePage::checkSpace()
             m_freeSpace->setText(QStringLiteral("\u2014"));
         return;
     }
+    startSpaceProbe(folder, nextSpaceGen());
+}
+
+quint64 BuildImagePage::nextSpaceGen()
+{
+    m_spaceLatest->store(++m_spaceGen);
+    return m_spaceGen;
+}
+
+// Asks the drive of `folder` on a probe thread; the answer is applied when it
+// is still the newest (gen), and a probe superseded before it started never
+// touches the drive.
+void BuildImagePage::startSpaceProbe(const QString& folder, quint64 gen)
+{
     const qint64 needed = neededBytes();
     const qint64 largest = largestOutputFileBytes();
     const bool pkg = isFpkg();
-    const quint64 gen = ++m_spaceGen;
     QPointer<BuildImagePage> self(this);
-    (void)QtConcurrent::run([self, folder, needed, largest, gen, pkg] {
+    runDriveProbe(driveRootOf(folder), [self, latest = m_spaceLatest, folder, needed, largest, gen, pkg] {
+        if (latest->load() != gen)
+            return;
         const SpaceProbe p = probeOutputFolder(folder, largest);
         // The page is only touched on the UI thread, where the pointer is tested.
-        QMetaObject::invokeMethod(qApp, [self, p, folder, needed, gen, pkg] {
+        postToUi([self, p, folder, needed, gen, pkg] {
             if (self && gen == self->m_spaceGen)
                 self->applySpaceCheck(p.space, p.volume, folder, needed, pkg, p.exists);
-        }, Qt::QueuedConnection);
+        });
     });
 }
 
+void BuildImagePage::setSpaceProbeHookForTests(std::function<void(const QString&)> hook)
+{
+    std::lock_guard lock(g_spaceHookMutex);
+    spaceProbeHook() = std::move(hook);
+}
+
+// The same check as checkSpace(), waited for (A16): the drive is asked on a
+// worker and the page waits at most m_spaceWaitMs for the answer in a local
+// event loop that takes no user input, so a NAS that went to sleep or a USB
+// drive that spins up never freezes the window. Without an answer the state
+// is NoAnswer; a late answer still updates the row, as checkSpace()'s does.
+// The verdict is the page's state after the wait, not whether this probe
+// answered: a check that began meanwhile (a settings change) supersedes it,
+// and then only that check's answer counts.
 void BuildImagePage::checkSpaceNow()
 {
     const QString folder = outputFolder();
-    const qint64 needed = neededBytes();
-    ++m_spaceGen; // an answer still on its way is superseded by this one
+    m_spaceTimer->stop(); // this check is the one the typing pause would start
+    const quint64 gen = nextSpaceGen(); // an answer still on its way is superseded by this one
     m_spaceBar->hide();
     m_spaceOk = true;
     m_spaceProblem.clear();
-    const SpaceProbe p = probeOutputFolder(folder, largestOutputFileBytes());
-    applySpaceCheck(p.space, p.volume, folder, needed, isFpkg(), p.exists);
+    m_spaceState = SpaceCheck::Checking;
+    QEventLoop loop;
+    QPointer<BuildImagePage> self(this);
+    m_spaceWait = &loop;
+    startSpaceProbe(folder, gen);
+    QTimer::singleShot(std::max(0, m_spaceWaitMs), &loop, &QEventLoop::quit);
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    if (!self)
+        return;
+    m_spaceWait = nullptr;
+    if (m_spaceState != SpaceCheck::Checking)
+        return;
+    m_spaceState = SpaceCheck::NoAnswer;
+    m_spaceRow->set(FW_TR("The output drive does not answer."), Tone::Warn);
 }
 
 void BuildImagePage::applySpaceCheck(const Result<DiskSpace>& ds, const Result<QStringList>& vol, const QString& folder, qint64 needed, bool pkg, bool exists)
 {
     Q_UNUSED(folder);
+    if (m_spaceWait) // checkSpaceNow() waits for the newest answer: this is it
+        m_spaceWait->quit();
     m_spaceChecked.start();
     m_output->setError({});
     if (!ds.ok()) {
@@ -2180,8 +2446,15 @@ QString BuildImagePage::validateForm()
                 return FW_TR("%1 already exists. Choose another folder name.").arg(nativePath(out));
         }
     } else {
-        if (kind == QLatin1String("zip"))
-            return FW_TR("FPKG packages are made from a folder, an image or a .gp5 project. Unpack the archive first.");
+        // An archived dump is unpacked into the job's temporary folder first (#37).
+        if (kind == QLatin1String("zip")) {
+            if (!m_summary.error.isEmpty())
+                return m_summary.error;
+            if (!m_summary.isGame)
+                return FW_TR("This archive holds no game (no eboot.bin or sce_sys/param.json).");
+            if (packageTypeKind() == PackageType::Addon)
+                return FW_TR("An add-on is made from its own folder (addcont0…). Unpack the archive first.");
+        }
         if (kind == QLatin1String("folder") && !m_summary.isGame)
             return m_summary.gameRoots.size() > 1 ? FW_TR("This folder holds several games. Choose one of them.")
                                                   : FW_TR("The folder is not a game dump: it has neither sce_sys\\param.json nor eboot.bin.");
@@ -2242,6 +2515,8 @@ QString BuildImagePage::validateForm()
     if (!m_demo && !outputFolder().isEmpty()
         && (!positive || !m_spaceChecked.isValid() || m_spaceChecked.elapsed() > kSpaceVerdictMs))
         checkSpaceNow();
+    if (m_spaceState == SpaceCheck::NoAnswer)
+        return FW_TR("The output drive does not answer. Try again when it is ready, or choose another output folder.");
     if (m_spaceState == SpaceCheck::Unavailable)
         return FW_TR("The output drive is not available. Choose another output folder.");
     if (!m_spaceOk)
@@ -2272,6 +2547,7 @@ Result<QString> BuildImagePage::submit(bool)
             details.insert(QStringLiteral("contentId"), m_contentId->text().trimmed());
         if (!m_title->text().trimmed().isEmpty())
             details.insert(QStringLiteral("title"), m_title->text().trimmed());
+        details.insert(QStringLiteral("titleAllLanguages"), m_titleAll->isChecked());
         if (!m_version->text().trimmed().isEmpty())
             details.insert(QStringLiteral("contentVersion"), m_version->text().trimmed());
         const QString type = m_packageType->currentValue().toString();
@@ -2336,8 +2612,8 @@ QString BuildImagePage::statusContext() const
 
 QStringList BuildImagePage::demoStates() const
 {
-    return {QStringLiteral("space-error"), QStringLiteral("format-exfat"), QStringLiteral("format-ffpkg"), QStringLiteral("format-pfs"),
-            QStringLiteral("format-fpkg"), QStringLiteral("format-zstd"), QStringLiteral("advanced-exfat"), QStringLiteral("advanced-zstd"), QStringLiteral("advanced-fpkg"), QStringLiteral("several-games"),
+    return {QStringLiteral("space-error"), QStringLiteral("format-exfat"), QStringLiteral("format-exfat-compressed"), QStringLiteral("format-ffpkg"), QStringLiteral("format-pfs"),
+            QStringLiteral("format-fpkg"), QStringLiteral("format-zstd"), QStringLiteral("format-zstdimage"), QStringLiteral("advanced-exfat"), QStringLiteral("advanced-zstd"), QStringLiteral("advanced-zstdimage"), QStringLiteral("advanced-fpkg"), QStringLiteral("several-games"),
             QStringLiteral("fpkg-backport"), QStringLiteral("building"), QStringLiteral("built"), QStringLiteral("build-failed")};
 }
 
@@ -2386,7 +2662,9 @@ void BuildImagePage::applyDemoState(const QString& name)
     s.isGame = true;
     s.exists = true;
     QString fmt = jobs::kFormatExfat;
-    if (name.endsWith(QLatin1String("ffpkg")))
+    if (name.endsWith(QLatin1String("zstdimage")))
+        fmt = jobs::kFormatZstdImage;
+    else if (name.endsWith(QLatin1String("ffpkg")))
         fmt = jobs::kFormatFfpkg;
     else if (name.endsWith(QLatin1String("pfs")))
         fmt = jobs::kFormatFfpfsc;
@@ -2395,6 +2673,10 @@ void BuildImagePage::applyDemoState(const QString& name)
     else if (name.endsWith(QLatin1String("zstd")))
         fmt = kFormatZstdFolder;
     setFormat(fmt);
+    if (name == QLatin1String("format-exfat-compressed")) {
+        m_formats[0].panel->setOverride(ampr::keys::kZstdPack, true);
+        m_demoCompressed = true;
+    }
     if (name == QLatin1String("several-games")) {
         s.folder = QStringLiteral("D:/PS5/Dumps");
         s.title = QStringLiteral("Dumps");
@@ -2444,6 +2726,10 @@ void BuildImagePage::clearDemoState()
     m_spaceState = SpaceCheck::Unknown;
     if (m_demo) {
         m_demo = false;
+        if (m_demoCompressed) {
+            m_demoCompressed = false;
+            m_formats[0].panel->clearOverrides();
+        }
         m_advanced->setExpanded(false);
         setFormat(jobs::kFormatExfat);
         m_pfsKind->setCurrentValue(jobs::kFormatFfpfsc);

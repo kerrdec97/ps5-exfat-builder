@@ -1,5 +1,6 @@
 #include "app/pages/DumpCheckSheet.h"
 
+#include "app/backport/BackportCore.h"
 #include "app/pages/Page.h"
 #include "app/ui/Icons.h"
 #include "core/FileUtil.h"
@@ -8,6 +9,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QDir>
+#include <QFileInfo>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QJsonArray>
@@ -364,11 +366,49 @@ DumpCheckSheet::DumpCheckSheet(QWidget* host, const QJsonObject& d, const QStrin
         copy->setText(FW_TR("Copied"));
         QTimer::singleShot(1500, copy, [copy] { copy->setText(FW_TR("Copy report")); });
     });
-    // Repairing is the Backport tab's work: restore the originals, or backport again.
-    auto* backport = addButton(FW_TR("Backport…"), Role::Safe);
-    backport->setToolTip(FW_TR("Open this game in the Backport tab (restore originals, or backport again)"));
-    connect(backport, &QPushButton::clicked, this, &DumpCheckSheet::backportRequested);
+    // Repairing is the Backport tab's work (#26): a dump that carries a
+    // backport this app's engine applied, with its backup, is restored from
+    // there; any other is opened there to backport (again). Nothing is written
+    // from here: the Backport tab asks first.
+    m_offersRestore = backportBackupFor(m_folder, facts.value(QStringLiteral("backportState")).toString());
+    auto* backport = addButton(m_offersRestore ? FW_TR("Restore originals…") : FW_TR("Backport…"), Role::Safe);
+    backport->setObjectName(QStringLiteral("dump-check-backport"));
+    backport->setToolTip(m_offersRestore
+                             ? FW_TR("Open this game in the Backport tab and restore its original files from the verified backup (you are asked first)")
+                             : FW_TR("Open this game in the Backport tab (restore originals, or backport again)"));
+    connect(backport, &QPushButton::clicked, this, [this] {
+        if (m_offersRestore)
+            emit restoreRequested();
+        else
+            emit backportRequested();
+    });
     addButton(FW_TR("Close"), Role::Close);
+}
+
+bool DumpCheckSheet::backportBackupFor(const QString& folder, const QString& backportState)
+{
+    // An automated run that did not give the PS5 Backport files a folder of
+    // its own never reads the user's ledger (as the Backport tab).
+    if (qEnvironmentVariableIsSet("FW_OFFLINE") && !qEnvironmentVariableIsSet("D97BETA_CONFIG_DIR"))
+        return false;
+    if (folder.isEmpty())
+        return false;
+    const QJsonObject record = bp::activeLedgerRecord(folder);
+    if (record.isEmpty())
+        return false;
+    const QString journal = record.value(QStringLiteral("journal")).toString();
+    if (journal.isEmpty() || !QFileInfo(journal).isFile())
+        return false; // no backup to restore from
+    // Backported, or half (an apply or restore that did not finish).
+    return backportState != QLatin1String("original") || bp::isUnfinishedLedgerState(record.value(QStringLiteral("state")).toString());
+}
+
+QVariantMap DumpCheckSheet::backportArgs(const QString& folder, bool restore)
+{
+    QVariantMap args{{QStringLiteral("folder"), folder}, {QStringLiteral("select"), folder}};
+    if (restore)
+        args.insert(QStringLiteral("restore"), true);
+    return args;
 }
 
 QString DumpCheckSheet::selectedPath() const

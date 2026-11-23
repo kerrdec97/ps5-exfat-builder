@@ -180,7 +180,7 @@ void registerModule(ModuleContext& ctx)
         d.group = QStringLiteral("When the queue finishes");
         d.label = QStringLiteral("Then");
         d.description = QStringLiteral("What the computer does after the last job finishes, whether the jobs succeeded or failed "
-                                       "(the switch below can limit that). Nothing happens when every job was cancelled. A countdown "
+                                       "(\"Only if every job succeeded\" can limit that). Nothing happens when every job was cancelled. A countdown "
                                        "lets you cancel.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("none");
@@ -189,6 +189,22 @@ void registerModule(ModuleContext& ctx)
                      {QStringLiteral("hibernate"), QStringLiteral("Hibernate"), {}},
                      {QStringLiteral("shutdown"), QStringLiteral("Shut down"), {}},
                      {QStringLiteral("restart"), QStringLiteral("Restart"), {}}};
+        d.order = order++;
+        s.add(d);
+    }
+    {
+        // GitHub #96: a choice for the next run only, so a Sleep chosen for
+        // one long run is not left armed for every later one.
+        SettingDef d;
+        d.key = keys::kAfterQueueThisRunOnly;
+        d.section = QStringLiteral("General");
+        d.group = QStringLiteral("When the queue finishes");
+        d.label = QStringLiteral("Only after this run");
+        d.description = QStringLiteral("On: the action runs after the next run only; then this switch turns off and the choice above "
+                                       "goes back to Do nothing, also when the run ended without the action. Off: the action runs "
+                                       "after every run.");
+        d.type = SettingType::Bool;
+        d.defaultValue = false;
         d.order = order++;
         s.add(d);
     }

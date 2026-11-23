@@ -2,6 +2,8 @@
 
 #include "engines/fpkg/BackportUpdate.h"
 
+#include "core/ArchiveSource.h"
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 #include "engines/fpkg/PubCmd.h"
 #include "engines/fpkg/SourceScanner.h"
@@ -70,7 +72,22 @@ Status FpkgBuildJob::validate(const SettingsValues& settings) const
 Result<JobOutcome> FpkgBuildJob::run(JobContext& ctx)
 {
     const LiveCpuLimitScope live(ctx.jobId);
-    return runBuild(m_request, FpkgSettings::from(ctx.settings), ctx);
+    const FpkgSettings settings = FpkgSettings::from(ctx.settings);
+    if (!archive::isArchiveSource(m_request.source))
+        return runBuild(m_request, settings, ctx);
+    // An archived dump (#37): unpacked into the job's temporary folder (free
+    // space on that drive checked first), then built exactly as that folder.
+    // The package goes where it would for the archive, never into the temp.
+    FW_TRY(validateBuildRequest(m_request, settings));
+    BuildRequest r = m_request;
+    if (r.output.isEmpty())
+        r.output = defaultOutputFolder(m_request.source, settings.defaultOutputDir);
+    ctx.log.info(archive::unpackFirstLogLine(m_request.source,
+                                             QStringLiteral("the publishing tool reads the game's files from a folder")));
+    FW_TRY_ASSIGN(r.source, archive::unpackArchiveSource(m_request.source, ctx.tempDir, ctx.token, ctx.progress,
+                                                         settings.freeSpaceMarginBytes));
+    ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(nativePath(m_request.source), nativePath(r.source)));
+    return runBuild(r, settings, ctx);
 }
 
 FpkgAddonJob::FpkgAddonJob(AddonRequest request) : m_request(std::move(request)) {}

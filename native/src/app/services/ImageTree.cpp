@@ -1,6 +1,7 @@
 #include "app/services/ImageTree.h"
 
 #include "engines/exfat/ExfatReader.h"
+#include "engines/integration/ZstdImage.h"
 #include "engines/ufs2/Ufs2Reader.h"
 #include "core/Tr.h"
 
@@ -94,12 +95,18 @@ ImageTreeResult readImageTree(const QString& image, const CancellationToken& tok
         out.error = QStringLiteral("The image does not exist.");
         return out;
     }
-    if (ext == QLatin1String("exfat"))
+    if (ext == QLatin1String("zstd")) {
+        // The .zstd single file: an exFAT image once its first sector says so.
+        if (const Status st = integration::checkZstdImage(image); !st.ok())
+            out.error = st.error().message;
+        else
+            out = readExfat(image, token);
+    } else if (ext == QLatin1String("exfat"))
         out = readExfat(image, token);
     else if (ext == QLatin1String("ffpkg"))
         out = readFfpkg(image, token);
     else
-        out.error = QStringLiteral("Only .exfat and .ffpkg images can be opened here.");
+        out.error = QStringLiteral("Only .exfat, .zstd and .ffpkg images can be opened here.");
     out.image = image;
     return out;
 }

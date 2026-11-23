@@ -589,6 +589,14 @@ private slots:
             return;
         const QString out = m_root.filePath(QStringLiteral("zips/out"));
         QVERIFY(QDir().mkpath(out));
+        // These stream from the ZIP since #37 was extended; a ZIP of a game
+        // that is itself packed is still unpacked first, in a step of Preparing.
+        const QString packedZip = m_root.filePath(QStringLiteral("zips/packed-game.zip"));
+        {
+            auto packed = m_env->runDirect(ampr::kPackJob, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), out + QStringLiteral("/packed-src")}});
+            QVERIFY2(packed.ok(), packed.ok() ? "" : qPrintable(packed.error().toLogString()));
+            QVERIFY(zipFolder(out + QStringLiteral("/packed-src"), packedZip, QStringLiteral("PPSA01234/")));
+        }
         struct Case {
             QString kind;
             QJsonObject params;
@@ -596,11 +604,16 @@ private slots:
         };
         const std::vector<Case> cases = {
             {ampr::kPackJob, {{QStringLiteral("source"), zip}, {QStringLiteral("output"), out + QStringLiteral("/packed")}},
-             {QStringLiteral("Unpacking ZIP"), QStringLiteral("Preparing"), QStringLiteral("Packing"), QStringLiteral("Checking packs")}},
+             {QStringLiteral("Preparing"), QStringLiteral("Packing"), QStringLiteral("Checking packs")}},
             {QStringLiteral("image.pfs.build"), {{QStringLiteral("source"), zip}, {QStringLiteral("output"), out + QStringLiteral("/plain.ffpfs")}},
-             {QStringLiteral("Unpacking ZIP"), QStringLiteral("Scanning"), QStringLiteral("Compressing and writing"), QStringLiteral("Verifying")}},
+             {QStringLiteral("Scanning"), QStringLiteral("Compressing and writing"), QStringLiteral("Verifying")}},
             {integration::kZstdBuildJob,
              {{QStringLiteral("format"), QStringLiteral("ffpfs")}, {QStringLiteral("source"), zip}, {QStringLiteral("output"), out + QStringLiteral("/zstd.ffpfs")}},
+             {QStringLiteral("Preparing"), QStringLiteral("Packing"), QStringLiteral("Checking packs"), QStringLiteral("Scanning"),
+              QStringLiteral("Compressing and writing"), QStringLiteral("Verifying")}},
+            {integration::kZstdBuildJob,
+             {{QStringLiteral("format"), QStringLiteral("ffpfs")}, {QStringLiteral("source"), packedZip},
+              {QStringLiteral("output"), out + QStringLiteral("/repacked.ffpfs")}},
              {QStringLiteral("Unpacking ZIP"), QStringLiteral("Preparing"), QStringLiteral("Packing"), QStringLiteral("Checking packs"),
               QStringLiteral("Scanning"), QStringLiteral("Compressing and writing"), QStringLiteral("Verifying")}},
         };
@@ -613,11 +626,13 @@ private slots:
                 lastCount = s.phaseCount;
             });
             QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(c.kind + u' ' + r.error().toLogString()));
+            const bool unpacks = c.expected.first() == QLatin1String("Unpacking ZIP");
+            QCOMPARE(seen.contains(QStringLiteral("Unpacking ZIP")), unpacks);
             // The job may enter "Preparing"/"Scanning" before the ZIP is unpacked.
-            while (!seen.isEmpty() && seen.first() != QLatin1String("Unpacking ZIP"))
+            while (!seen.isEmpty() && seen.first() != c.expected.first())
                 seen.removeFirst();
             QCOMPARE(seen, c.expected);
-            QCOMPARE(lastCount, int(c.expected.size()) - 1);
+            QCOMPARE(lastCount, int(c.expected.size()) - (unpacks ? 1 : 0));
         }
     }
 
@@ -803,24 +818,37 @@ private slots:
         }
     }
 
-    // A zipped dump is unpacked in Preparing first: that gets a share of the
-    // bar like the image builds give it, not 1 % of it (which also made the
-    // job's time left about a hundred times too long).
+    // A zipped dump is packed straight from the ZIP (#37): Packing starts
+    // after Preparing's 2 %. A ZIP of a game that is itself packed is
+    // unpacked in Preparing first: that gets a share of the bar like the image
+    // builds give it, not 1 % of it (which also made the job's time left about
+    // a hundred times too long).
     void zstdBuildFromAZipGivesTheUnpackingItsShare()
     {
         const QString dir = m_root.filePath(QStringLiteral("zstd-zip"));
         const QString zip = dir + QStringLiteral("/PPSA01234.zip");
         QVERIFY(QDir().mkpath(dir));
         QVERIFY(zipFolder(m_game, zip, QStringLiteral("PPSA01234/")));
-        fwtest::ProgressAudit audit;
-        auto r = m_env->runDirect(integration::kZstdBuildJob,
-                                  {{QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("source"), zip},
-                                   {QStringLiteral("output"), dir + QStringLiteral("/z.exfat")}},
-                                  {}, {}, &audit);
-        QVERIFY2(r.ok(), r.ok() ? "" : qPrintable(r.error().toLogString()));
-        QVERIFY2(audit.problems().isEmpty(), qPrintable(audit.problems().join(u'\n')));
-        const double packing = audit.fractionWhen([](const ProgressSnapshot& s) { return s.phase == QLatin1String("Packing"); });
-        QVERIFY2(packing >= 0.25 && packing < 0.5, qPrintable(QString::number(packing)));
+        const auto packingStarts = [&](const QString& source, const QString& output) -> double {
+            fwtest::ProgressAudit audit;
+            auto r = m_env->runDirect(integration::kZstdBuildJob,
+                                      {{QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("source"), source},
+                                       {QStringLiteral("output"), output}},
+                                      {}, {}, &audit);
+            if (!r.ok() || !audit.problems().isEmpty()) {
+                qWarning("%s", qPrintable(r.ok() ? audit.problems().join(u'\n') : r.error().toLogString()));
+                return -1;
+            }
+            return audit.fractionWhen([](const ProgressSnapshot& s) { return s.phase == QLatin1String("Packing"); });
+        };
+        const double streamed = packingStarts(zip, dir + QStringLiteral("/z.exfat"));
+        QVERIFY2(streamed >= 0.0 && streamed < 0.05, qPrintable(QString::number(streamed)));
+        auto packed = m_env->runDirect(ampr::kPackJob, {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), dir + QStringLiteral("/packed")}});
+        QVERIFY2(packed.ok(), packed.ok() ? "" : qPrintable(packed.error().toLogString()));
+        const QString packedZip = dir + QStringLiteral("/packed-game.zip");
+        QVERIFY(zipFolder(dir + QStringLiteral("/packed"), packedZip, QStringLiteral("PPSA01234/")));
+        const double unpacked = packingStarts(packedZip, dir + QStringLiteral("/repacked.exfat"));
+        QVERIFY2(unpacked >= 0.25 && unpacked < 0.5, qPrintable(QString::number(unpacked)));
     }
 
     // With "Check the packs" off the pack job's bar runs to the end: Checking

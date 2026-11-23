@@ -1,7 +1,9 @@
 #pragma once
 
-// Host side of the bundled PS5 Backport engine (the owner's PS5 Backport GUI
-// 0.3.4 release, run as `PS5BackportGUI.exe --worker job.json`).
+// Host side of the bundled PS5 Backport engine (the owner's PS5 Backport GUI,
+// run as `PS5BackportGUI.exe --worker job.json`). Which release is bundled
+// is chosen in cmake/BackportEngine.cmake: the 0.3.5-test4 testing build by
+// default, 0.3.4 with -DFW_BACKPORT_ENGINE_VERSION=0.3.4.
 //
 // The Backport page replaces that program's window; every build, rebuild,
 // switch and restore runs in the owner's worker exactly as in the original
@@ -35,9 +37,26 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 namespace fw::bp {
 
-inline constexpr const char* kEngineVersion = "0.3.4";
+// One source for the engine version: cmake/BackportEngine.cmake
+// (FW_BACKPORT_ENGINE_VERSION; the fallbacks are its default).
+#ifndef FW_BACKPORT_ENGINE_VERSION_STR
+#define FW_BACKPORT_ENGINE_VERSION_STR "0.3.5-test4"
+#endif
+#ifndef FW_BACKPORT_ENGINE_REVISION_STR
+#define FW_BACKPORT_ENGINE_REVISION_STR "3e08eda5-19422409a6"
+#endif
+#ifndef FW_BACKPORT_ENGINE_TESTING
+#define FW_BACKPORT_ENGINE_TESTING 1
+#endif
+inline constexpr const char* kEngineVersion = FW_BACKPORT_ENGINE_VERSION_STR;
+// The engine revision the pinned exe reports in its selftest.
+inline constexpr const char* kEngineRevision = FW_BACKPORT_ENGINE_REVISION_STR;
+// True when the bundled engine is a testing build, not a regular release.
+inline constexpr bool kEngineIsTestingBuild = FW_BACKPORT_ENGINE_TESTING != 0;
 inline constexpr const char* kEngineExeName = "PS5BackportGUI.exe";
 inline constexpr const char* kIssuesUrl = "https://github.com/kerrdec97/PS5-Backport-GUI/issues/new";
 
@@ -68,6 +87,8 @@ QProcessEnvironment workerEnvironment();
 // True while a PS5 Backport GUI process runs that is not a worker of this app
 // (the standalone program, which shares the settings and the ledger).
 bool foreignEngineRunning();
+// Tests only: replaces the process-list check (an empty function restores it).
+void setForeignEngineCheckForTests(std::function<bool()> check);
 
 // One worker process (one job). Not reusable: create one per job.
 class Worker : public QObject {

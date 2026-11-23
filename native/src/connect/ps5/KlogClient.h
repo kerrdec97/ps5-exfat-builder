@@ -23,6 +23,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <vector>
 
 class QTcpSocket;
 class QThread;
@@ -40,14 +41,18 @@ struct KlogLine {
 };
 
 // Splits a byte stream into klog lines (UTF-8 is decoded per complete line,
-// so a character split across two reads survives).
+// so a character split across two reads survives). A line longer than
+// kMaxLineBytes (with or without its '\n' yet) is cut there, at a character
+// boundary, and ends in "…"; the rest of it up to the next '\n' is dropped.
 class KlogLineSplitter {
 public:
+    static constexpr qsizetype kMaxLineBytes = 16 * 1024;
     QStringList feed(const QByteArray& bytes);
     QString flush(); // the unterminated rest, if any
 
 private:
     QByteArray m_pending;
+    bool m_skipping = false; // inside the dropped rest of a cut line
 };
 
 enum class KlogState { Connecting, Connected, Disconnected, Reconnecting, Stopped };
@@ -63,10 +68,16 @@ public:
         int reconnectDelayMs = 2000;
     };
     using LineCallback = std::function<void(const KlogLine&)>;
+    // Lines in arrival order, handed over at most every kBatchMs (and when
+    // the connection ends), so a flood of lines costs one call per interval.
+    using BatchCallback = std::function<void(const std::vector<KlogLine>&)>;
     using StateCallback = std::function<void(KlogState, const QString& detail)>;
+    static constexpr int kBatchMs = 100;
 
     // Callbacks run on the client's reader thread; marshal to the UI yourself.
+    // `onLine` is called once per line of every batch.
     KlogClient(Options options, LineCallback onLine, StateCallback onState = {});
+    static std::unique_ptr<KlogClient> withBatches(Options options, BatchCallback onBatch, StateCallback onState = {});
     ~KlogClient(); // stop()
     KlogClient(const KlogClient&) = delete;
     KlogClient& operator=(const KlogClient&) = delete;
@@ -80,8 +91,10 @@ public:
 private:
     void run();
 
+    KlogClient(Options options, BatchCallback onBatch, StateCallback onState, int);
+
     Options m_opt;
-    LineCallback m_onLine;
+    BatchCallback m_onBatch;
     StateCallback m_onState;
     std::unique_ptr<CancellationSource> m_stop;
     QThread* m_thread = nullptr;

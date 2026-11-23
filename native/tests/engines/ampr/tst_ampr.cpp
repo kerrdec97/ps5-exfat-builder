@@ -272,7 +272,17 @@ private slots:
         QVERIFY(!alwaysLooseReason(QStringLiteral("data/x.bin"), 0).isEmpty()); // empty
         QVERIFY(!alwaysLooseReason(QStringLiteral("ampr_emu.index"), 10).isEmpty());
         QVERIFY(alwaysLooseReason(QStringLiteral("data/sce_sys/x.bin"), 10).isEmpty()); // not the root sce_sys
-        QVERIFY(alwaysLooseReason(QStringLiteral("game.ini"), 10).isEmpty());          // root files are packed
+        QVERIFY(alwaysLooseReason(QStringLiteral("game.dat"), 10).isEmpty());          // root files are packed
+        // Every .ini stays loose (dlc_emu.ini stays editable), as ps5-dump-forge 0.5.5.
+        QVERIFY(!alwaysLooseReason(QStringLiteral("game.ini"), 10).isEmpty());
+        QVERIFY(!alwaysLooseReason(QStringLiteral("dlc_emu.ini"), 10).isEmpty());
+        QVERIFY(!alwaysLooseReason(QStringLiteral("Engine/Config/BaseGame.INI"), 10).isEmpty());
+        QVERIFY(!looseReason(QStringLiteral("dlc_emu.ini"), 10, PackStrategy::Everything).isEmpty());
+        QVERIFY(alwaysLooseReason(QStringLiteral("data/notini"), 10).isEmpty());
+        // The caution list follows the upstream issues (PackRules.h).
+        QVERIFY(knownPackProblemTitles().contains(QStringLiteral("Control Resonant")));
+        QVERIFY(knownPackProblemTitles().contains(QStringLiteral("Marvel's Wolverine")));
+        QVERIFY(!knownPackProblemTitles().contains(QStringLiteral("Sonic X Shadow Generations")));
         QVERIFY(!compatibleLooseReason(QStringLiteral("game.ini")).isEmpty());
         QVERIFY(!compatibleLooseReason(QStringLiteral("Content/Paks/a.PAK")).isEmpty());
         QVERIFY(!compatibleLooseReason(QStringLiteral("data/Movies/intro.bin")).isEmpty());
@@ -291,8 +301,17 @@ private slots:
         const RuntimeInfo info = identifyRuntime(*rt);
         QCOMPARE(info.kind, RuntimeKind::AmprEmuNg);
         QVERIFY(info.bundled);
-        QCOMPARE(info.version, QStringLiteral("0.3.3"));
+        QCOMPARE(info.version, QStringLiteral("0.5.0"));
         QCOMPARE(identifyRuntime(QByteArray("....ampr-emu-ng 0.3.2....")).version, QStringLiteral("0.3.2"));
+        // The notice 0.4.x and 0.5.x write at launch (synthetic banners).
+        for (const char* v : {"0.4.0", "0.4.1", "0.5.0"}) {
+            const RuntimeInfo n = identifyRuntime(QByteArray("..\0ampr-emu-ng: v", 17) + v + " (zstd) running..");
+            QCOMPARE(n.kind, RuntimeKind::AmprEmuNg);
+            QCOMPARE(n.version, QString::fromLatin1(v));
+            QVERIFY(!n.bundled);
+        }
+        QCOMPARE(identifyRuntime(QByteArray("ampr-emu-ng: v0.4.0 (pkg) running")).version, QStringLiteral("0.4.0"));
+        QCOMPARE(identifyRuntime(QByteArray("ampr-emu-ng: vX (zstd)")).version, QString());
         const RuntimeInfo up = identifyRuntime(QByteArray("[AMPR_EMU] name=libSceAmpr version=%s ... 0.4.2.1 (c) Drakmor"));
         QCOMPARE(up.kind, RuntimeKind::AmprEmu);
         QCOMPARE(up.version, QStringLiteral("0.4.2.1"));
@@ -313,9 +332,12 @@ private slots:
         o.freeSpaceMarginBytes = 0;
         auto rep = packGame(*files, out, o, {}, nullptr, Log(QStringLiteral("test")));
         QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
-        QCOMPARE(rep->packedFiles, qint64(3)); // level1.bin, noise.bin, settings.ini
+        QCOMPARE(rep->packedFiles, qint64(2)); // level1.bin, noise.bin (every .ini stays loose)
         QCOMPARE(rep->droppedFiles, QStringList{QStringLiteral("ampr_commands.bin")});
         QCOMPARE(rep->previousRuntime.kind, RuntimeKind::AmprEmuNg);
+        QCOMPARE(rep->previousRuntime.version, QStringLiteral("0.3.1"));
+        // An older runtime is replaced without a warning about it.
+        QVERIFY2(!rep->warnings.join(u'\n').contains(QLatin1String("newer than the bundled")), qPrintable(rep->warnings.join(u'\n')));
         QVERIFY(rep->amprIndexWritten);
         // Loose files are linked only where both folders are on one NTFS
         // volume; anywhere else they are copied, which is as correct.
@@ -329,7 +351,10 @@ private slots:
         QVERIFY(QFile::exists(out + QStringLiteral("/ampr_zstd.index")));
         QVERIFY(QFile::exists(out + QStringLiteral("/ampr_zstd-000.pak")));
         QVERIFY(!QFileInfo::exists(out + QStringLiteral("/data")));
-        QVERIFY(!QFile::exists(out + QStringLiteral("/settings.ini")));
+        // Settings files stay on disk, editable (dlc_emu.ini at the root, where Kraken Mount looks).
+        QCOMPARE(bytesOf(out + QStringLiteral("/settings.ini")), bytesOf(game + QStringLiteral("/settings.ini")));
+        QCOMPARE(bytesOf(out + QStringLiteral("/dlc_emu.ini")), bytesOf(game + QStringLiteral("/dlc_emu.ini")));
+        QCOMPARE(bytesOf(out + QStringLiteral("/Config/Engine.INI")), bytesOf(game + QStringLiteral("/Config/Engine.INI")));
         QVERIFY(!QFile::exists(out + QStringLiteral("/ampr_commands.bin")));
         QVERIFY(QFileInfo(out + QStringLiteral("/saves/empty")).isDir()); // a real empty folder stays
         QCOMPARE(bytesOf(out + QStringLiteral("/fakelib/libSceNpAuth.sprx")), QByteArray("backport lib"));
@@ -341,7 +366,17 @@ private slots:
         QVERIFY(amprIdx.startsWith("AMPRIDX3"));
         QVERIFY(amprIdx.contains("/app0/data/level1.bin"));
         QVERIFY(amprIdx.contains("/app0/fakelib/libSceAmpr.sprx"));
+        QVERIFY(amprIdx.contains("/app0/dlc_emu.ini"));
+        QVERIFY(amprIdx.contains("/app0/Config/Engine.INI"));
         QVERIFY(!amprIdx.contains("ampr_zstd-000.pak"));
+        // ... and not in the packs.
+        {
+            auto zi = decodeZstdIndex(bytesOf(out + QStringLiteral("/ampr_zstd.index")));
+            QVERIFY(zi.ok());
+            QCOMPARE(zi->find("dlc_emu.ini"), -1);
+            QCOMPARE(zi->find("settings.ini"), -1);
+            QVERIFY(zi->find("data/level1.bin") >= 0);
+        }
 
         // Seen through its packs, the packed game is the original (minus the
         // journal, with the new runtime and index).
@@ -365,7 +400,7 @@ private slots:
         auto u = unpackGame(*packed, un, {}, {}, nullptr, Log(QStringLiteral("test")));
         QVERIFY2(u.ok(), u.ok() ? "" : qPrintable(u.error().toLogString()));
         QCOMPARE(u->kind, PackKind::Zstd);
-        QCOMPARE(u->unpackedFiles, qint64(3));
+        QCOMPARE(u->unpackedFiles, qint64(2));
         QCOMPARE(snapshot(un, ignore), original);
         QVERIFY(!QFile::exists(un + QStringLiteral("/ampr_zstd.index")));
         QVERIFY(QFile::exists(un + QStringLiteral("/ampr_emu.index")));
@@ -374,7 +409,7 @@ private slots:
         auto again = packGame(*packed, m_tmp.filePath(QStringLiteral("repacked/PPSA01234")), o, {}, nullptr, Log(QStringLiteral("test")));
         QVERIFY2(again.ok(), again.ok() ? "" : qPrintable(again.error().toLogString()));
         QCOMPARE(again->sourcePacks, PackKind::Zstd);
-        QCOMPARE(again->packedFiles, qint64(3));
+        QCOMPARE(again->packedFiles, qint64(2));
     }
 
     void readOnlyOriginalsStayReadOnly()
@@ -396,6 +431,44 @@ private slots:
         QVERIFY(removeTreeSafely(m_tmp.filePath(QStringLiteral("rogame-out"))).ok());
         QVERIFY2(!QFileInfo(ro).isWritable(), "removing the packed folder must not change the original");
         QVERIFY(QFile::setPermissions(ro, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    }
+
+    void versionsCompareByTheirNumbers()
+    {
+        QCOMPARE(compareVersions(QStringLiteral("0.3.3"), QStringLiteral("0.3.3")), 0);
+        QVERIFY(compareVersions(QStringLiteral("0.4.1"), QStringLiteral("0.3.3")) > 0);
+        QVERIFY(compareVersions(QStringLiteral("0.3.2"), QStringLiteral("0.3.3")) < 0);
+        QVERIFY(compareVersions(QStringLiteral("0.10.0"), QStringLiteral("0.9.9")) > 0); // numbers, not text
+        QCOMPARE(compareVersions(QStringLiteral("0.4"), QStringLiteral("0.4.0")), 0);
+        QVERIFY(compareVersions(QStringLiteral("0.4.0.1"), QStringLiteral("0.4.0")) > 0);
+        // Unknown compares as equal: never "newer".
+        QCOMPARE(compareVersions(QString(), QStringLiteral("0.3.3")), 0);
+        QCOMPARE(compareVersions(QStringLiteral("v0.5.0"), QStringLiteral("0.3.3")), 0);
+        QCOMPARE(compareVersions(QStringLiteral("0.5.x"), QStringLiteral("0.3.3")), 0);
+    }
+
+    // A game that already has a newer ampr-emu-ng gets the bundled one (the
+    // packs were checked against it), and the report says what was replaced.
+    void aNewerRuntimeIsReplacedWithAWarning()
+    {
+        const QString game = m_tmp.filePath(QStringLiteral("newer-rt/PPSA07777"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/eboot.bin"), QByteArray("\x54\x14\xF5\xEE", 4) + QByteArray(1000, 'E')));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"), "{}"));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/a.bin"), compressible(300000, 3)));
+        QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray("..ampr-emu-ng 9.9.9 build..")));
+        auto files = openFolderGame(game, {});
+        QVERIFY(files.ok());
+        PackGameOptions o;
+        o.freeSpaceMarginBytes = 0;
+        const QString out = m_tmp.filePath(QStringLiteral("newer-rt-out/PPSA07777"));
+        auto rep = packGame(*files, out, o, {}, nullptr, Log(QStringLiteral("test")));
+        QVERIFY2(rep.ok(), rep.ok() ? "" : qPrintable(rep.error().toLogString()));
+        QCOMPARE(rep->previousRuntime.version, QStringLiteral("9.9.9"));
+        const QString all = rep->warnings.join(u'\n');
+        QVERIFY2(all.contains(QStringLiteral("ampr-emu-ng 9.9.9, newer than the bundled %1").arg(QLatin1String(kBundledRuntimeVersion))),
+                 qPrintable(all));
+        // The bundled file is still the one written.
+        QCOMPARE(bytesOf(out + QStringLiteral("/fakelib/libSceAmpr.sprx")), *loadBundledRuntime());
     }
 
     void compatibleStrategyKeepsConfigsLoose()
@@ -534,6 +607,8 @@ private:
             && fwtest::writeTextFile(game + QStringLiteral("/data/sub/noise.bin"), randomBytes(300 * 1024, 9))
             && fwtest::writeTextFile(game + QStringLiteral("/Media/Modules/game.prx"), QByteArray(5000, 'P'))
             && fwtest::writeTextFile(game + QStringLiteral("/settings.ini"), QByteArray("[a]\nb=1\n"))
+            && fwtest::writeTextFile(game + QStringLiteral("/dlc_emu.ini"), QByteArray("[dlc]\nPPSA01234-DLC1=1\n"))
+            && fwtest::writeTextFile(game + QStringLiteral("/Config/Engine.INI"), QByteArray("[Core]\nx=1\n"))
             && fwtest::writeTextFile(game + QStringLiteral("/empty.bin"), QByteArray())
             && fwtest::writeTextFile(game + QStringLiteral("/ampr_commands.bin"), QByteArray("journal"))
             && QDir().mkpath(game + QStringLiteral("/saves/empty")); // made last: its presence means the dump is whole

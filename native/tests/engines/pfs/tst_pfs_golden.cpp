@@ -9,9 +9,12 @@
 // test regenerates the same trees, builds them natively and compares hashes.
 
 #include "engines/pfs/PfsBuilder.h"
+#include "engines/pfs/PfsReader.h"
 #include "engines/pfs/PfsSource.h"
+#include "engines/pfs/PfsVerify.h"
 #include "engines/pfs/PfscCodec.h"
 
+#include "engines/pfs/PfsDirentBlocks.h"
 #include "engines/pfs/PfsTestUtil.h"
 #include "support/TestSupport.h"
 
@@ -103,20 +106,86 @@ private slots:
             }
         }
 
+        // With the Lazy_MkPFS directory layout (entries may cross a block)
+        // every case is byte-identical to Lazy_MkPFS.
+        BuildOptions lazy = o;
+        lazy.layout.lazyDirents = true;
+        const QString lazyOut = tmp.filePath(QStringLiteral("lazy.img"));
+        auto lst = writeImage(in, fmt, lazy, lazyOut, CancellationToken());
+        QVERIFY2(lst.ok(), lst.ok() ? "" : qPrintable(lst.error().toLogString()));
+        QCOMPARE(QFileInfo(lazyOut).size(), expected.value(QStringLiteral("size")).toInteger());
+        QCOMPARE(pfstest::sha256(lazyOut), expected.value(QStringLiteral("sha256")).toString());
+        const bool crossed = !direntProblems(lazyOut).isEmpty();
+
+        // The images we build keep every entry inside its block: the same
+        // bytes wherever no entry crossed one; where one did, the image
+        // changes and must parse block by block.
         const QString out = tmp.filePath(QStringLiteral("out.img"));
         auto st = writeImage(in, fmt, o, out, CancellationToken());
         QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
         const qint64 size = QFileInfo(out).size();
         const QString digest = pfstest::sha256(out);
-        QCOMPARE(size, expected.value(QStringLiteral("size")).toInteger());
-        QCOMPARE(digest, expected.value(QStringLiteral("sha256")).toString());
         QCOMPARE(st->imageBytes, size);
+        const QStringList problems = direntProblems(out);
+        QVERIFY2(problems.isEmpty(), qPrintable(problems.join(u'\n')));
+        if (!crossed) {
+            QCOMPARE(size, expected.value(QStringLiteral("size")).toInteger());
+            QCOMPARE(digest, expected.value(QStringLiteral("sha256")).toString());
+        } else {
+            QVERIFY2(digest != expected.value(QStringLiteral("sha256")).toString(), "an entry crossed a block, yet nothing changed");
+            qInfo("%s: a directory entry crossed a block in the Lazy_MkPFS layout; the image differs from it there",
+                  qPrintable(name));
+            if (in.isFolder) {
+                VerifyExpectation ex;
+                ex.format = fmt;
+                ex.kind = VerifyExpectation::Kind::Folder;
+                ex.plan = &in.plan;
+                auto vr = verifyImage(out, ex, VerifyDepth::Full, CancellationToken());
+                QVERIFY2(vr.ok(), vr.ok() ? "" : qPrintable(vr.error().toLogString()));
+                QVERIFY2(vr->passed, qPrintable(vr->problems.join(u'\n')));
+            }
+        }
+        m_crossed[name] = crossed;
+    }
+
+    // Which cases changed (the record of the departure from Lazy_MkPFS).
+    void cleanupTestCase()
+    {
+        QStringList changed;
+        for (auto it = m_crossed.cbegin(); it != m_crossed.cend(); ++it)
+            if (it.value())
+                changed << it.key();
+        qInfo("cases whose directory entries crossed a block: %s", qPrintable(changed.isEmpty() ? QStringLiteral("none") : changed.join(u", ")));
     }
 
 private:
+    // Per-block dirent problems of the image at `path` and of a PFS image
+    // nested in it (a folder container).
+    static QStringList direntProblems(const QString& path)
+    {
+        auto file = std::make_shared<FileByteSource>(path);
+        if (!file->open().ok())
+            return {QStringLiteral("cannot open %1").arg(path)};
+        auto img = PfsImage::open(file);
+        if (!img.ok())
+            return {img.error().toLogString()};
+        QStringList problems = pfstest::scanDirentBlocks(**img).problems;
+        const auto& files = (*img)->files();
+        if (files.size() == 1 && files.front().path == kNestedImageName) {
+            auto ns = (*img)->openFile((*img)->inodes()[files.front().inode]);
+            if (!ns.ok())
+                return problems << ns.error().toLogString();
+            auto nested = PfsImage::open(*ns);
+            if (nested.ok())
+                problems += pfstest::scanDirentBlocks(**nested).problems;
+        }
+        return problems;
+    }
+
     QTemporaryDir m_appData;
     QJsonObject m_spec;
     QJsonObject m_golden;
+    QMap<QString, bool> m_crossed;
 };
 
 QTEST_GUILESS_MAIN(TestPfsGolden)

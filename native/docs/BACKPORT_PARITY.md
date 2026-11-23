@@ -1,6 +1,8 @@
 # Backport: parity spec and C++ plan
 
 > **Status:** a record from the v5 rewrite, not kept current. It is the specification an in-app C++ backport pipeline was written from. That pipeline was removed before 5.0.1: the Backport page runs the bundled PS5 Backport engine, a separate program (see `engines/BACKPORT.md`). The settings (§5), the files, classes, job kinds and tests (§6) and the "Impl" / "Ported" statuses (§4) describe the removed code, not this repository.
+>
+> The window texts quoted from Backport GUI 0.3.4 below (status bar "PS5 Backport GUI 0.3.4 · … backend 3e08eda5-914d90065d", the Options card) are that release's. The app now bundles the owner's testing build 0.3.5-test4 by default (0.3.4 with `-DFW_BACKPORT_ENGINE_VERSION=0.3.4`); what changed for the host is in `engines/BACKPORT.md` ("What the host does for a 0.3.5 engine").
 
 Scope: the **Backports** area of the PS5 exFAT Image Builder Farewell Edition (Python/Tkinter, `APP_VERSION 4.1.0`, branch `claude/wizardly-sagan-mahxhj` based on `farewell-edition-dev`, HEAD `b298c2d`). It covers what the C++20/Qt 6 rebuild under `native/src/engines/backport/` must do.
 

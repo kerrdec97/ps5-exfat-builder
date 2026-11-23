@@ -12,10 +12,13 @@
 
 #include "engines/pfs/PfsBuilder.h"
 
+#include "core/ArchiveStream.h"
+#include "core/FileUtil.h"
 #include "engines/pfs/PfsIo.h"
 #include "engines/pfs/PfscCodec.h"
 
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 
 #include <condition_variable>
@@ -523,6 +526,20 @@ Status writeCompressedFolder(const SourcePlan& plan, const BuildOptions& o, Imag
     return success();
 }
 
+BuildStats finishStats(BuildStats& st, const QElapsedTimer& timer, const Log& log)
+{
+    st.seconds = double(timer.nsecsElapsed()) / 1e9;
+    log.debug(QStringLiteral("PFS image written: %1 bytes in %2 s with %3 thread(s); reading the input %4 s; writer "
+                             "thread: waiting for the next block %5 s, write %6 s")
+                  .arg(st.imageBytes)
+                  .arg(st.seconds, 0, 'f', 2)
+                  .arg(st.threads)
+                  .arg(st.readSeconds, 0, 'f', 2)
+                  .arg(st.waitSeconds, 0, 'f', 2)
+                  .arg(st.writeSeconds, 0, 'f', 2));
+    return st;
+}
+
 QByteArray singleFileName(const BuildInput& in)
 {
     if (!in.fileName.isEmpty())
@@ -597,16 +614,97 @@ Result<BuildStats> writeImage(const BuildInput& input, OutputFormat format, cons
         FW_TRY(writeSingleFile(src, name, options, p, out, token, hooks, true, st));
     }
     FW_TRY(out.close());
-    st.seconds = double(timer.nsecsElapsed()) / 1e9;
-    log.debug(QStringLiteral("PFS image written: %1 bytes in %2 s with %3 thread(s); reading the input %4 s; writer "
-                             "thread: waiting for the next block %5 s, write %6 s")
-                  .arg(st.imageBytes)
-                  .arg(st.seconds, 0, 'f', 2)
-                  .arg(st.threads)
-                  .arg(st.readSeconds, 0, 'f', 2)
-                  .arg(st.waitSeconds, 0, 'f', 2)
-                  .arg(st.writeSeconds, 0, 'f', 2));
-    return st;
+    return finishStats(st, timer, log);
+}
+
+Result<BuildStats> writeFolderImageFromArchive(SourcePlan& plan, const archive::GameListing& game, const BuildOptions& options,
+                                               const QString& path, const CancellationToken& token, ProgressReporter* progress,
+                                               const Log& log)
+{
+    if (options.files.compress)
+        return Error(ErrorCode::Internal, QStringLiteral("A PFS image with compressed files cannot be built straight from an archive."));
+    QElapsedTimer timer;
+    timer.start();
+    BuildStats st;
+    st.threads = 1;
+    FW_TRY_ASSIGN(FolderLayout L, rawFolderLayout(plan, options.layout));
+    const qint64 bs = options.layout.blockSize;
+    const qint64 size = L.ndblock * bs;
+
+    // Everything FolderImageSource holds except the archive's files, at the
+    // same offsets; the rest of the image is zeros, as there.
+    {
+        QFile out(toLongPath(path));
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not create %1.").arg(QFileInfo(path).fileName()), out.errorString());
+        const auto put = [&](qint64 offset, const QByteArray& blob) -> Status {
+            if (blob.isEmpty())
+                return success();
+            if (!out.seek(offset) || out.write(blob) != blob.size())
+                return Error(ErrorCode::IoError, QStringLiteral("Could not write the image. The drive may be full or disconnected."),
+                             out.errorString());
+            return success();
+        };
+        FW_TRY(put(0, layoutHeader(L)));
+        FW_TRY(put(bs, inodeTableBytes(L.inodes, int(bs), L.inodeBlockCount)));
+        FW_TRY(put(L.inodes[size_t(L.superInode)].db[0] * bs, L.superBlob));
+        FW_TRY(put(L.inodes[size_t(L.fptInode)].db[0] * bs, L.fptBlob));
+        if (L.collisionInode >= 0)
+            FW_TRY(put(L.inodes[size_t(L.collisionInode)].db[0] * bs, L.collisionBlob));
+        for (const FolderLayout::Dir& d : L.dirs)
+            FW_TRY(put(L.inodes[size_t(d.inode)].db[0] * bs, d.blob));
+        for (size_t i = 0; i < plan.files.size(); ++i) {
+            const SourceFile& f = plan.files[i];
+            if (f.archiveItem >= 0)
+                continue;
+            if (!f.generated)
+                return Error(ErrorCode::Internal, QStringLiteral("%1 is neither in the archive nor made by the build.")
+                                                      .arg(QString::fromLatin1(f.relPath)));
+            FW_TRY(put(L.inodes[size_t(L.fileInode[i])].db[0] * bs, f.content));
+        }
+        if (!out.resize(size))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not set the image size. The drive may be full."), out.errorString());
+        if (!out.flush())
+            return Error(ErrorCode::IoError, QStringLiteral("Could not write the image."), out.errorString());
+    }
+    if (!token.checkpoint())
+        return Error::cancelled();
+    log.debug(QStringLiteral("PFS metadata written (%1 bytes of image); now the files from the archive").arg(size));
+
+    // The files, in one pass through the archive.
+    std::vector<archive::Placement> placements(game.items.size());
+    for (size_t i = 0; i < plan.files.size(); ++i) {
+        const SourceFile& f = plan.files[i];
+        if (f.archiveItem < 0)
+            continue;
+        if (size_t(f.archiveItem) >= placements.size() || placements[size_t(f.archiveItem)].write)
+            return Error(ErrorCode::Internal, QStringLiteral("The plan of %1 is inconsistent.").arg(QFileInfo(game.archive).fileName()));
+        archive::Placement& p = placements[size_t(f.archiveItem)];
+        p.write = true;
+        if (f.size > 0)
+            p.extents.push_back({0, L.inodes[size_t(L.fileInode[i])].db[0] * bs, f.size});
+    }
+    FW_TRY_ASSIGN(const archive::StreamStats stream, archive::streamGameInto(game, placements, path, 8 * 1024 * 1024, token, progress));
+    for (SourceFile& f : plan.files) {
+        if (f.archiveItem < 0)
+            continue;
+        f.hasDigest = true;
+        f.digest = stream.digests[size_t(f.archiveItem)];
+    }
+    {
+        // On the drive before it is checked or replaces anything, as ImageWriter::close().
+        QFile out(toLongPath(path));
+        if (!out.open(QIODevice::ReadWrite))
+            return Error(ErrorCode::IoError, QStringLiteral("Could not finish the image file."), out.errorString());
+        FW_TRY(flushToDisk(out, QStringLiteral("the image")));
+    }
+    st.files = qint64(plan.files.size());
+    st.sourceBytes = plan.totalBytes;
+    st.storedBytes = plan.totalBytes;
+    st.allCompressedBytes = plan.totalBytes;
+    st.imageBytes = size;
+    st.readSeconds = double(stream.elapsedMs) / 1000.0;
+    return finishStats(st, timer, log);
 }
 
 } // namespace fw::pfs

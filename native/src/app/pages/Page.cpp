@@ -16,12 +16,14 @@
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QMutex>
 #include <QPainter>
 #include <QTextLayout>
 #include <QPointer>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QStorageInfo>
+#include <QThreadPool>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -636,8 +638,44 @@ QString driveLabel(const QString& path)
     return root.isEmpty() ? FW_TR("this drive") : root;
 }
 
+namespace {
+
+QMutex g_driveHookMutex;
+std::function<DriveSpace(const QString&)> g_driveHook; // tests: setDriveSpaceHookForTests()
+
+} // namespace
+
+void setDriveSpaceHookForTests(std::function<DriveSpace(const QString& folder)> hook)
+{
+    const QMutexLocker lock(&g_driveHookMutex);
+    g_driveHook = std::move(hook);
+}
+
+QThreadPool& drivePool()
+{
+    // Never destroyed: a probe stuck on a network share that does not answer
+    // must not hold up the end of the process (a static pool would wait for
+    // it at exit, as the global pool does).
+    static QThreadPool* pool = [] {
+        auto* p = new QThreadPool;
+        p->setMaxThreadCount(2);
+        p->setExpiryTimeout(30000);
+        return p;
+    }();
+    return *pool;
+}
+
 DriveSpace driveSpaceOf(const QString& folder)
 {
+    {
+        std::function<DriveSpace(const QString&)> hook;
+        {
+            const QMutexLocker lock(&g_driveHookMutex);
+            hook = g_driveHook;
+        }
+        if (hook)
+            return hook(folder);
+    }
     // A folder that is not created yet: the drive it will be on.
     QString path = folder.isEmpty() ? QDir::homePath() : folder;
     while (!QFileInfo::exists(path)) {
@@ -663,13 +701,17 @@ void probeFreeSpace(QObject* context, const QString& folder, std::function<void(
     if (!context)
         return; // nobody to answer
     QPointer<QObject> guard(context);
-    (void)QtConcurrent::run([guard, folder, done = std::move(done)] {
+    // On the drive pool, not the global one: a drive that does not answer
+    // blocks its probes for the network timeout, and the global pool's
+    // threads are what the pages' other background work runs on.
+    (void)QtConcurrent::run(&drivePool(), [guard, folder, done = std::move(done)] {
         const DriveSpace d = driveSpaceOf(folder);
         // The context is only touched on the UI thread, where the pointer is tested.
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [guard, d, done] {
-            if (guard)
-                done(d.ready, d.available, d.label);
-        }, Qt::QueuedConnection);
+        if (QCoreApplication* app = QCoreApplication::instance())
+            QMetaObject::invokeMethod(app, [guard, d, done] {
+                if (guard)
+                    done(d.ready, d.available, d.label);
+            }, Qt::QueuedConnection);
     });
 }
 
@@ -748,6 +790,7 @@ OptionTiles::OptionTiles(QWidget* parent) : QWidget(parent)
     sp.setHeightForWidth(true);
     setSizePolicy(sp);
     setProperty("fwRadius", radius::md);
+    setProperty("fwRole", "choice"); // one control to a screen reader, its value the current tile (V-13)
     m_hover = new motion::HoverFade(this, [this](int i) {
         if (i >= 0 && i < count())
             update(tileRect(i));
@@ -762,6 +805,7 @@ void OptionTiles::addTile(const QString& title, const QString& description, cons
     if (m_current < 0) {
         m_current = 0;
         setAccessibleDescription(FW_TR("Selected: %1").arg(title));
+        setProperty("fwChoiceValue", title); // its value to a screen reader (ui/Accessible.h, V-13)
     }
     m_hover->reset();
     updateGeometry();
@@ -786,6 +830,7 @@ void OptionTiles::setCurrentIndex(int i)
         return;
     m_current = i;
     setAccessibleDescription(FW_TR("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
+    setProperty("fwChoiceValue", m_items[size_t(i)].title);
     update();
     syncGlow();
     if (onChanged)
@@ -837,6 +882,53 @@ int OptionTiles::at(const QPoint& pt) const
     return -1;
 }
 
+// Top right, on the icon's centre line: the selected tile's check bubble, then
+// the tag before it. The tag says something the user needs ("Experimental"):
+// where both do not fit beside the icon (six tiles in one row), the bubble
+// goes; fill and border mark the selected tile anyway.
+OptionTiles::Marks OptionTiles::marks(int i, const QRectF& r) const
+{
+    Marks m;
+    if (i < 0 || i >= count())
+        return m;
+    const Item& it = m_items[size_t(i)];
+    const qreal centre = r.top() + 14 + 16; // the icon square: 32 px, 14 px in
+    const qreal leftLimit = r.left() + 14 + 32 + 8;
+    const qreal right = r.right() - 14;
+    const QRectF bubble(right - 20, centre - 10, 20, 20);
+    const bool sel = i == m_current;
+    if (it.tag.isEmpty()) {
+        if (sel)
+            m.check = bubble;
+        return m;
+    }
+    const qreal tw = badgeWidth(it.tag);
+    const auto tagAt = [&](qreal end) { return QRectF(end - tw, centre - size::badge / 2.0, tw, size::badge); };
+    if (sel && right - 28 - tw > leftLimit) {
+        m.check = bubble;
+        m.tag = tagAt(right - 28);
+    } else if (right - tw > leftLimit) {
+        m.tag = tagAt(right);
+    } else if (sel) {
+        m.check = bubble; // too narrow for the tag at all
+    }
+    return m;
+}
+
+QRect OptionTiles::tagRect(int i) const
+{
+    const QRectF tile = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+    const QRectF t = marks(i, mirrored(this, tile)).tag;
+    return t.isEmpty() ? QRect() : mirrored(this, t).toAlignedRect();
+}
+
+QRect OptionTiles::checkRect(int i) const
+{
+    const QRectF tile = QRectF(tileRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+    const QRectF c = marks(i, mirrored(this, tile)).check;
+    return c.isEmpty() ? QRect() : mirrored(this, c).toAlignedRect();
+}
+
 // The selected tile's soft glow lies outside the tile: its own widget draws it.
 void OptionTiles::syncGlow()
 {
@@ -879,16 +971,11 @@ void OptionTiles::paintEvent(QPaintEvent*)
         p.drawPixmap(vis(QRectF(ir.center().x() - 9, ir.center().y() - 9, 18, 18)).toRect(),
                      iconPixmap(it.icon, 18, sel ? color::on_accent : color::fg_2, dpr));
         // Check bubble and tag, top right, on the icon's centre line.
-        qreal right = r.right() - 14;
-        if (sel) {
-            paintCheckBubble(p, vis(QRectF(right - 20, ir.center().y() - 10, 20, 20)), dpr);
-            right -= 28;
-        }
-        if (!it.tag.isEmpty()) {
-            const qreal tw = badgeWidth(it.tag);
-            if (right - tw > ir.right() + 8)
-                paintBadge(p, vis(QRectF(right - tw, ir.center().y() - size::badge / 2.0, tw, size::badge)), it.tag, Tone::Info);
-        }
+        const Marks m = marks(i, r);
+        if (!m.check.isEmpty())
+            paintCheckBubble(p, vis(m.check), dpr);
+        if (!m.tag.isEmpty())
+            paintBadge(p, vis(m.tag), it.tag, Tone::Info);
         // Title and the description under it. Right to left, a Latin name that
         // ends in a sign keeps it at its end ("ShadowMount+", ui::bidiSafe).
         const bool rtl = isRightToLeft();

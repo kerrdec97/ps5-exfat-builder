@@ -4,8 +4,11 @@ name: Native (C++) Linux tests with sanitizers
 # automated test (the GUI tests use the offscreen platform). Complements the
 # Windows workflow: memory and undefined-behaviour bugs show up here first.
 
-# Started by hand (Actions > Run workflow) or by the release workflow. Builds on
-# every push are off until the workflow has been brought up to date with v5.
+# Started by hand only (Actions > Run workflow). Ubuntu 24.04 ships Qt 6.4, not
+# the Qt 6.10.3 the Windows release is built with: this job checks the code for
+# memory and undefined-behaviour bugs, it does not test the shipped Qt. It is
+# not run for pull requests until it has been brought up to date with v5 (last
+# green run: 2026-11-04).
 on:
   workflow_dispatch:
 
@@ -21,7 +24,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Install toolchain and Qt
         run: |
@@ -45,4 +50,5 @@ jobs:
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/native/tests/lsan.supp
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           FW_OFFLINE: '1'
+          FW_NO_POWER_ACTIONS: '1'
         run: ctest --test-dir build --output-on-failure --timeout 900

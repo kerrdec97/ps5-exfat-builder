@@ -8,6 +8,7 @@
 #include "app/MainWindow.h"
 #include "app/models/JobQueueModel.h"
 #include "app/models/LogModel.h"
+#include "app/pages/Page.h"
 #include "app/pages/Ps5ConnectPage.h"
 #include "app/pages/ps5/AutoloaderTab.h"
 #include "app/pages/ps5/ConsoleExtras.h"
@@ -33,6 +34,7 @@
 #include "core/FileUtil.h"
 #include "core/Log.h"
 #include "core/Tr.h"
+#include "engines/general/Module.h"
 #include "support/TestSupport.h"
 
 #include <QApplication>
@@ -61,6 +63,8 @@
 #include <QTcpServer>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
+#include <QThreadPool>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -156,6 +160,33 @@ pages::ConsoleToolTab::EndpointFn fakeConsole(quint16 port)
 }
 
 } // namespace
+
+// A PS5 tool whose work runs until the test releases it (or it is cancelled).
+class LatchedToolTab : public pages::ConsoleToolTab {
+public:
+    LatchedToolTab(AppContext& ctx, QWidget* parent)
+        : ConsoleToolTab(ctx, [] { return ps5::ConsoleEndpoint{}; }, QStringLiteral("latched"), parent)
+    {
+    }
+    std::atomic_bool release{false};
+    std::atomic_bool cancelled{false};
+    bool doneRan = false;
+    bool start()
+    {
+        return runLocal<bool>(
+            [this](const CancellationToken& token) -> Result<bool> {
+                while (!release.load()) {
+                    if (token.isCancelled()) {
+                        cancelled = true;
+                        return Error::cancelled();
+                    }
+                    QThread::msleep(10);
+                }
+                return true;
+            },
+            [this](const Result<bool>&) { doneRan = true; });
+    }
+};
 
 class TstAppShellPs5 : public QObject {
     Q_OBJECT
@@ -620,7 +651,7 @@ private slots:
         page.applyDemoState(QStringLiteral("ftp"));
         QCOMPARE(shownPrimaries(), QStringList{QStringLiteral("Upload files…")});
         const QHash<QString, QString> main{{QStringLiteral("manager"), QStringLiteral("Refresh")},
-                                           {QStringLiteral("klog"), QStringLiteral("Connect")},
+                                           {QStringLiteral("klog"), QStringLiteral("Start log")},
                                            {QStringLiteral("crashdumps"), QStringLiteral("Start watching")},
                                            {QStringLiteral("ampr"), QStringLiteral("Generate and upload")},
                                            {QStringLiteral("diagnostics"), QStringLiteral("Run diagnostics")}};
@@ -628,7 +659,21 @@ private slots:
             page.navigateWith({{QStringLiteral("tab"), it.key()}});
             QVERIFY2(shownPrimaries() == QStringList{it.value()}, qPrintable(it.key() + u':' + shownPrimaries().join(u',')));
         }
+        // V-05: under a connected console the kernel log's own state is not
+        // "Disconnected" with a second "Connect": the log is not started.
+        page.navigateWith({{QStringLiteral("tab"), QStringLiteral("klog")}});
+        QStringList badges;
+        for (auto* b : page.findChildren<ui::Badge*>())
+            if (b->isVisibleTo(&page))
+                badges << b->text();
+        QVERIFY2(badges.contains(QStringLiteral("Not started")) && !badges.contains(QStringLiteral("Disconnected")), qPrintable(badges.join(u',')));
+        // V-04: connected, the address field holds the address, not the placeholder.
+        QVERIFY(!page.hero()->hostEdit()->text().isEmpty()); // the settings' address, or the example one
         page.clearDemoState();
+        // V-04: empty, the field says it is an example, in the body font.
+        page.hero()->hostEdit()->clear();
+        QCOMPARE(page.hero()->hostEdit()->placeholderText(), QStringLiteral("e.g. 192.168.1.40"));
+        QCOMPARE(page.hero()->hostEdit()->font().family(), theme::font::body().family());
 
         // The address and the port are named above their fields.
         const auto buddyOf = [&page](QWidget* field) -> QString {
@@ -1326,6 +1371,213 @@ private slots:
         });
         QVERIFY(window.close());
         (void)m_ctx->settings().setValue(ps5::keys::kAutoloaderFolder, QString());
+    }
+
+    // Audit A2: closing while a PS5 tool writes asks first. "Keep the app
+    // open" keeps it; "Close when it is done" waits for the work, which ends
+    // on its own (its result is delivered), then the window closes.
+    void closingWaitsForABusyPs5Tool()
+    {
+        MainWindow window(*m_ctx);
+        window.resize(1300, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto* tab = new LatchedToolTab(*m_ctx, &window);
+        QVERIFY(tab->start());
+        QVERIFY(tab->isBusy());
+        QString sheetName;
+        onSheet(&window, [&](ui::Sheet* s) {
+            sheetName = s->objectName();
+            if (QPushButton* keep = buttonIn(s, QStringLiteral("Keep the app open")))
+                keep->click();
+        });
+        QVERIFY(!window.close());
+        QCOMPARE(sheetName, QStringLiteral("close-ps5-busy"));
+        QVERIFY(window.isVisible());
+        QVERIFY(tab->isBusy());
+        onSheet(&window, [&](ui::Sheet* s) {
+            if (QPushButton* go = buttonIn(s, QStringLiteral("Close when it is done")))
+                go->click();
+            QTimer::singleShot(300, tab, [tab] { tab->release = true; });
+        });
+        QVERIFY(window.close());
+        QVERIFY(tab->doneRan);
+        QVERIFY(!tab->cancelled.load());
+    }
+
+    // Audit A2: a tool that is still busy when the wait is over is stopped.
+    void closingStopsAPs5ToolThatDoesNotFinish()
+    {
+        MainWindow window(*m_ctx);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.setPs5CloseWaitForTests(300);
+        auto* tab = new LatchedToolTab(*m_ctx, &window);
+        QVERIFY(tab->start());
+        onSheet(&window, [&](ui::Sheet* s) {
+            if (QPushButton* go = buttonIn(s, QStringLiteral("Close when it is done")))
+                go->click();
+        });
+        QVERIFY(window.close());
+        QTRY_VERIFY_WITH_TIMEOUT(tab->cancelled.load(), 5000);
+    }
+
+    // Audit A4: a backport run that has not stopped when the close wait is
+    // over is not taken for stopped: the user keeps waiting or closes anyway.
+    void closingDoesNotTakeABackportRunForStopped()
+    {
+        MainWindow window(*m_ctx);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QList<int> waits;
+        window.setBackportHooksForTests({[] { return true; }, [] { return false; },
+                                         [&](int ms) {
+                                             waits << ms;
+                                             QTest::qWait(50);
+                                         }},
+                                        200);
+        QStringList asked;
+        // Cancel the run, then "Keep waiting" once, then "Close anyway".
+        std::function<void(ui::Sheet*)> answer = [&](ui::Sheet* s) {
+            const QString text = labelsOf(s);
+            asked << text;
+            if (QPushButton* b = buttonIn(s, QStringLiteral("Cancel and close"))) {
+                onSheet(&window, answer);
+                b->click();
+            } else if (text.contains(QStringLiteral("has not stopped yet")) && waits.size() == 1) {
+                onSheet(&window, answer);
+                if (QPushButton* keep = buttonIn(s, QStringLiteral("Keep waiting")))
+                    keep->click();
+            } else if (QPushButton* anyway = buttonIn(s, QStringLiteral("Close anyway"))) {
+                anyway->click();
+            }
+        };
+        onSheet(&window, answer);
+        QVERIFY(window.close());
+        QCOMPARE(waits, (QList<int>{200, 200}));
+        QCOMPARE(asked.size(), 3);
+        QVERIFY2(asked[1].contains(QStringLiteral("The backport run has not stopped yet")), qPrintable(asked[1]));
+    }
+
+    // Audit A5: a backport run that became busy while another close question
+    // was open (its destination checks ended meanwhile) is asked about before
+    // the window state is saved and the window goes.
+    void closingAsksAgainWhenABackportRunStartedMeanwhile()
+    {
+        MainWindow window(*m_ctx);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        int asks = 0;
+        bool cancelled = false;
+        window.setBackportHooksForTests({[&] { return ++asks > 1 && !cancelled; }, [] { return false; },
+                                         [&](int) { cancelled = true; }},
+                                        200);
+        QString asked;
+        onSheet(&window, [&](ui::Sheet* s) {
+            asked = labelsOf(s);
+            if (QPushButton* b = buttonIn(s, QStringLiteral("Cancel and close")))
+                b->click();
+        });
+        QVERIFY(window.close());
+        QVERIFY2(asked.contains(QStringLiteral("Cancel the backport run?")), qPrintable(asked));
+        QVERIFY(cancelled);
+    }
+
+    // Hypothesis H2 (Qt 6.10 on Windows does not close the window when the
+    // session ends): the session end is refused, with a reason, while work
+    // that would be cut off is running, and allowed again once it ended.
+    void sessionEndWaitsForWorkInProgress()
+    {
+        MainWindow window(*m_ctx);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        bool busy = false;
+        window.setBackportHooksForTests({[&] { return busy; }, [] { return false; }, [](int) {}});
+        QVERIFY(!window.sessionEndMustWait());
+        busy = true;
+        QVERIFY(window.sessionEndMustWait());
+        busy = false;
+        QVERIFY(!window.sessionEndMustWait());
+        auto* tab = new LatchedToolTab(*m_ctx, &window);
+        QVERIFY(tab->start());
+        QVERIFY(window.sessionEndMustWait());
+        tab->release = true;
+        QTRY_VERIFY_WITH_TIMEOUT(!tab->isBusy(), 5000);
+        QVERIFY(!window.sessionEndMustWait());
+    }
+
+    // V-01 (UI review 5.2): a backport run is not a queue job, yet the shell
+    // does not say "Ready" and "Queue idle" while one is in progress.
+    void shellSaysABackportRunIsInProgress()
+    {
+        MainWindow window(*m_ctx);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        bool busy = false;
+        window.setBackportHooksForTests({[&] { return busy; }, [] { return false; }, [](int) {}});
+        auto* header = window.findChild<ui::AppHeader*>();
+        auto* bar = window.findChild<ui::StatusBar*>();
+        QVERIFY(header && bar);
+        auto* page = window.findChild<pages::Page*>();
+        QVERIFY(page);
+        emit page->statusContextChanged();
+        QCOMPARE(header->queueChip()->text(), QStringLiteral("Queue idle"));
+        QVERIFY2(labelsOf(bar).contains(QStringLiteral("Ready")), qPrintable(labelsOf(bar)));
+        busy = true;
+        emit page->statusContextChanged(); // what the Backport page sends on each step of its run
+        QCOMPARE(header->queueChip()->text(), QStringLiteral("Backport running"));
+        QVERIFY2(labelsOf(bar).contains(QStringLiteral("Backport running")), qPrintable(labelsOf(bar)));
+        busy = false;
+        emit page->statusContextChanged();
+        QCOMPARE(header->queueChip()->text(), QStringLiteral("Queue idle"));
+    }
+
+    // V-19 (UI review 5.2): one ELF loader, one port in view; the ports of the
+    // two mount tools (as a rule the same) fold away under Advanced.
+    void toolElfPortsAreAdvanced()
+    {
+        const SettingDef* payload = m_ctx->schema().find(ps5::keys::kPayloadPort);
+        const SettingDef* smp = m_ctx->schema().find(ps5::keys::kShadowMountPort);
+        const SettingDef* mm = m_ctx->schema().find(ps5::keys::kMicroMountPort);
+        QVERIFY(payload && smp && mm);
+        QVERIFY(!payload->advanced);
+        QVERIFY(smp->advanced);
+        QVERIFY(mm->advanced);
+    }
+
+    // Audit A6: one free-space probe at a time on its own pool: a drive that
+    // does not answer does not collect a blocked thread per refresh, and the
+    // global pool the pages' other work needs is left alone.
+    void freeSpaceProbesDoNotPileUp()
+    {
+        std::atomic_int entered{0};
+        std::atomic_bool release{false};
+        pages::setDriveSpaceHookForTests([&](const QString&) {
+            ++entered;
+            QElapsedTimer t;
+            t.start();
+            while (!release.load() && t.elapsed() < 20000)
+                QThread::msleep(10);
+            return pages::DriveSpace{};
+        });
+        const auto restore = qScopeGuard([&] {
+            release = true;
+            pages::setDriveSpaceHookForTests({});
+            pages::drivePool().waitForDone(25000);
+        });
+        const int globalBefore = QThreadPool::globalInstance()->activeThreadCount();
+        MainWindow window(*m_ctx); // not shown: only the status bar asks
+        QTRY_COMPARE_WITH_TIMEOUT(entered.load(), 1, 5000);
+        for (int i = 0; i < 5; ++i)
+            (void)m_ctx->settings().setValue(general::keys::kDefaultOutputDir, fresh(QStringLiteral("space")));
+        QTest::qWait(300);
+        QCOMPARE(entered.load(), 1);
+        QVERIFY(QThreadPool::globalInstance()->activeThreadCount() <= globalBefore);
+        release = true;
+        QTRY_COMPARE_WITH_TIMEOUT(entered.load(), 2, 5000); // the refreshes that came meanwhile: once
+        QTest::qWait(200);
+        QCOMPARE(entered.load(), 2);
+        (void)m_ctx->settings().setValue(general::keys::kDefaultOutputDir, QString());
     }
 };
 

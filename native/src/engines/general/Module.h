@@ -33,6 +33,7 @@ inline const QString kKeepJobTemp = QStringLiteral("advanced.keepJobTempFolders"
 inline const QString kVerifyAfterBuild = QStringLiteral("verification.verifyAfterBuild");
 inline const QString kVerifyMode = QStringLiteral("verification.mode");
 inline const QString kAfterQueueAction = QStringLiteral("general.afterQueueAction");
+inline const QString kAfterQueueThisRunOnly = QStringLiteral("general.afterQueueThisRunOnly");
 inline const QString kAfterQueueDelay = QStringLiteral("general.afterQueueDelaySeconds");
 inline const QString kAfterQueueOnlyIfOk = QStringLiteral("general.afterQueueOnlyIfAllSucceeded");
 inline const QString kAutoRetryCount = QStringLiteral("general.autoRetryCount");

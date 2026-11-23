@@ -177,9 +177,10 @@ void registerModule(ModuleContext& ctx)
         d.group = QStringLiteral("Folder images (.ffpfs)");
         d.label = QStringLiteral("Compress files inside .ffpfs images");
         d.description = QStringLiteral(
-            "Compresses each large file of an .ffpfs on its own. Compressed files grow to a whole number of "
-            "blocks with zero bytes, which some games do not accept; leave this off unless you know the game "
-            "works with it. .ffpfsc images are always compressed.");
+            "Compresses each large file of an .ffpfs on its own. MkPFS 1.1.0 reports that the console reads such "
+            "files incorrectly even though the image verifies, and compressed files grow to a whole number of blocks "
+            "with zero bytes, which some games do not accept. Leave this off: for a smaller image, build an .ffpfsc, "
+            "which is always compressed.");
         d.type = SettingType::Bool;
         d.defaultValue = false;
         d.perJob = true;
@@ -357,14 +358,17 @@ void registerModule(ModuleContext& ctx)
             "The index is added to the image only; the dump is not changed.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("missing");
-        d.choices = {{QStringLiteral("missing"), QStringLiteral("Add when the dump has none"),
-                      QStringLiteral("What Lazy_MkPFS does.")},
-                     {QStringLiteral("auto"), QStringLiteral("When the game uses the AMPR emulator"),
+        // The choices in the order and words of the exFAT and FFPKG settings of
+        // the same name (V-07); the default stays what Lazy_MkPFS does, which
+        // its choice's description says.
+        d.choices = {{QStringLiteral("auto"), QStringLiteral("When the game uses the AMPR emulator"),
                       QStringLiteral("Adds the index when the dump has none and rebuilds one that no longer matches the "
                                      "game's files. A game with asset packs keeps its own index.")},
+                     {QStringLiteral("missing"), QStringLiteral("Add when the dump has none"),
+                      QStringLiteral("What Lazy_MkPFS does.")},
                      {QStringLiteral("refresh"), QStringLiteral("Always rebuild it"),
                       QStringLiteral("Replaces the dump's own index in the image (legacy Build page behaviour).")},
-                     {QStringLiteral("off"), QStringLiteral("Never add one"), {}}};
+                     {QStringLiteral("off"), QStringLiteral("Never add or change it"), {}}};
         d.perJob = true;
         d.order = order++;
         s.add(d);

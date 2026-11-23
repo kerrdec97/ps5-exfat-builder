@@ -13,7 +13,9 @@
 //   Image builds   image.exfat.build / image.ffpkg.build / image.pfs.build
 //                  {source, output (full file path), format ("ffpfsc" or "ffpfs" for PFS)}
 //                  image.build.zstd {source, output, format}: the same build with the
-//                  game's files in zstd packs first (ampr.zstdPack is on)
+//                  game's files in zstd packs first (ampr.zstdPack is on). The ZSTD
+//                  image (format "zstdimage" here) is this job with format "exfat"
+//                  and the output named <name>.zstd (GitHub #98)
 //   Packed folder  ampr.pack {source (folder | .zip), output (the new folder)}
 //                  the Build page's zstd output: the game's files in zstd packs, no image
 //                  (ampr.unpack is registered too; the UI unpacks through game.extract)
@@ -94,9 +96,19 @@ inline const QString kFormatFfpkg = QStringLiteral("ffpkg");
 inline const QString kFormatFfpfsc = QStringLiteral("ffpfsc");
 inline const QString kFormatFfpfs = QStringLiteral("ffpfs"); // uncompressed PFS (Build and Convert; image.pfs.build format=ffpfs)
 
-QString imageBuildKind(const QString& format);     // "image.exfat.build", ...
-QString imageKindForFile(const QString& path, const QString& op); // op = "verify" | "extract"; "" if unknown
-QString outputExtension(const QString& format);    // ".exfat", ".ffpkg", ".ffpfs", ".ffpfsc"
+// The ZSTD image (GitHub #98, experimental): one "<game>.zstd" file, an exFAT
+// image with the game's files in zstd packs, what Kraken Mount MOD mounts
+// (engines/integration/ZstdImage.h). Its own format on the Build page and in
+// the Library's bulk build; submitImageBuild queues image.build.zstd with
+// format "exfat", zstd packs on and the output named .zstd.
+inline const QString kFormatZstdImage = QStringLiteral("zstdimage");
+inline const QString kZstdImageExtension = QStringLiteral(".zstd");
+
+QString imageBuildKind(const QString& format);     // "image.exfat.build", ..., "image.build.zstd" (zstdimage)
+// op = "verify" | "extract"; "" if unknown. A .zstd is an exFAT image (its
+// content is checked when the job is submitted).
+QString imageKindForFile(const QString& path, const QString& op);
+QString outputExtension(const QString& format);    // ".exfat", ".ffpkg", ".ffpfs", ".ffpfsc", ".zstd" (zstdimage)
 
 bool isAvailable(const AppContext& ctx, const QString& kind);
 QStringList missingKinds(const AppContext& ctx, const QStringList& kinds);
@@ -175,7 +187,7 @@ Result<QString> submitLibraryRename(AppContext& ctx, const QString& mode, const 
                                     const QString& destination, const QJsonArray& items, const QString& undoLog);
 Result<QString> submitAmprIndexLocal(AppContext& ctx, const QString& folder, bool force, bool allowAssetPacks = false);
 Result<QString> submitAmprIndexFtp(AppContext& ctx, const QString& host, int port, const QString& remoteFolder);
-QString imageEditKind(const QString& image); // "image.exfat.edit" / "image.ffpkg.edit" / ""
+QString imageEditKind(const QString& image); // "image.exfat.edit" (.exfat, .zstd) / "image.ffpkg.edit" / ""
 
 // Kinds the Queue page hides (system jobs: update checks).
 bool isSystemKind(const QString& kind);
