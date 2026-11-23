@@ -97,6 +97,10 @@ QString alwaysLooseReason(const QString& relPath, qint64 size)
     const QString suf = suffixOf(name);
     if (suf == u"elf" || suf == u"self" || suf == u"prx" || suf == u"sprx")
         return QStringLiteral("executable or module");
+    // Settings stay editable on disk (dlc_emu.ini, which Kraken Mount and
+    // dlc_emu look for at the game root), as ps5-dump-forge 0.5.5 keeps them.
+    if (suf == u"ini")
+        return QStringLiteral("settings file (.ini)");
     if (parts.size() > 1) {
         const QString root = lower(parts.first());
         if (root == u"sce_sys" || root == u"sce_module")
@@ -168,14 +172,14 @@ QStringList knownPackProblemTitles()
 {
     return {QStringLiteral("Crimson Desert"),
             QStringLiteral("God of War Ragnarök"),
-            QStringLiteral("Sonic X Shadow Generations"),
             QStringLiteral("Forza Horizon 5"),
             QStringLiteral("Kingdom Come: Deliverance II"),
             QStringLiteral("Metal Gear Solid 4"),
             QStringLiteral("Ratchet & Clank: Rift Apart"),
             QStringLiteral("Marvel's Wolverine"),
             QStringLiteral("7 Days to Die"),
-            QStringLiteral("Astro Bot")};
+            QStringLiteral("Astro Bot"),
+            QStringLiteral("Control Resonant")};
 }
 
 } // namespace fw::ampr

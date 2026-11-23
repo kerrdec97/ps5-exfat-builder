@@ -35,7 +35,18 @@ struct RuntimeInfo {
     bool bundled = false; // byte-for-byte the bundled build
     QString describe() const; // "ampr-emu-ng 0.3.2", "ampr_emu 0.4.2.1", "an unknown libSceAmpr.sprx"
 };
-// Identifies a libSceAmpr.sprx by its contents.
+// Identifies a libSceAmpr.sprx by its contents: the 0.3.x string
+// "ampr-emu-ng 0.3.3" and the 0.4.x/0.5.x notice "ampr-emu-ng: v0.5.0 (zstd)
+// running" both give the version.
 RuntimeInfo identifyRuntime(const QByteArray& sprx);
+
+// Dotted version numbers compared part by part ("0.10.0" > "0.9.9", "0.4" ==
+// "0.4.0"): <0, 0 or >0. An empty or malformed version is unknown and
+// compares as 0 with everything.
+int compareVersions(const QString& a, const QString& b);
+
+// What a packed game needs from the mounter (English, for job warnings;
+// the setting's description says the same in the interface's language).
+QString packedGameMounterNote();
 
 } // namespace fw::ampr

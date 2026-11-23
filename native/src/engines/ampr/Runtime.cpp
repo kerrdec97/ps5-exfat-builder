@@ -9,6 +9,8 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 
+#include <algorithm>
+
 namespace fw::ampr {
 
 QString bundledRuntimePath()
@@ -105,7 +107,8 @@ RuntimeInfo identifyRuntime(const QByteArray& sprx)
     if (sprx.isEmpty())
         return info;
     info.bundled = QCryptographicHash::hash(sprx, QCryptographicHash::Sha256).toHex() == QByteArray(kBundledRuntimeSha256);
-    static const QRegularExpression ng(QStringLiteral("ampr-emu-ng ([0-9]+\\.[0-9]+\\.[0-9]+)"));
+    // 0.3.x: "ampr-emu-ng 0.3.3"; 0.4.x and 0.5.x: "ampr-emu-ng: v0.4.1 (zstd) running".
+    static const QRegularExpression ng(QStringLiteral("ampr-emu-ng:? v?([0-9]+\\.[0-9]+\\.[0-9]+)"));
     static const QRegularExpression up(QStringLiteral("([0-9]+\\.[0-9]+\\.[0-9]+(?:\\.[0-9]+)?) \\(c\\) Drakmor"));
     // The strings are ASCII inside the binary; Latin-1 keeps every byte.
     const QString text = QString::fromLatin1(sprx);
@@ -126,6 +129,28 @@ RuntimeInfo identifyRuntime(const QByteArray& sprx)
         info.version = QString::fromLatin1(kBundledRuntimeVersion);
     }
     return info;
+}
+
+int compareVersions(const QString& a, const QString& b)
+{
+    static const QRegularExpression dotted(QStringLiteral("^[0-9]+(\\.[0-9]+)*$"));
+    if (!dotted.match(a).hasMatch() || !dotted.match(b).hasMatch())
+        return 0;
+    const QStringList x = a.split(u'.'), y = b.split(u'.');
+    for (qsizetype i = 0; i < std::max(x.size(), y.size()); ++i) {
+        const qulonglong p = i < x.size() ? x[i].toULongLong() : 0, q = i < y.size() ? y[i].toULongLong() : 0;
+        if (p != q)
+            return p < q ? -1 : 1;
+    }
+    return 0;
+}
+
+QString packedGameMounterNote()
+{
+    return QStringLiteral(
+        "Packed games need ShadowMount+ with its emulator updates off ([emulators] update_enabled = off and "
+        "auto_update_ampr = off), or the runtime is replaced and the game cannot read its packs. Kraken Mount brings "
+        "its own ampr-emu-ng and mounts packed folders, not images.");
 }
 
 } // namespace fw::ampr

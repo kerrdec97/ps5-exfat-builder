@@ -9,6 +9,7 @@
 #include "engines/pfs/PfsVerify.h"
 
 #include "core/FileUtil.h"
+#include "engines/pfs/PfsDirentBlocks.h"
 #include "engines/pfs/PfsTestUtil.h"
 #include "support/TestSupport.h"
 
@@ -491,6 +492,86 @@ private slots:
         QVERIFY(r.error().isCancelled());
         QVERIFY(!QFileInfo::exists(tmp.filePath(QStringLiteral("x"))));
         QVERIFY(!QFileInfo::exists(tmp.filePath(QStringLiteral("x.part"))));
+    }
+
+    void largeFolderEntriesStayInsideBlocks_data()
+    {
+        QTest::addColumn<int>("blockSize");
+        QTest::newRow("64 KiB") << 65536;
+        QTest::newRow("16 KiB") << 16384;
+    }
+
+    // A folder of 3,000 files has more entries than one block holds. Every
+    // directory block parses on its own from its start (the package builders
+    // that read PFS images read them so), every name once; the image still
+    // round-trips and verifies. The Lazy_MkPFS layout (an entry crosses a
+    // block, as 5.0.3 wrote it) fails that parse and still reads and
+    // verifies with our reader.
+    void largeFolderEntriesStayInsideBlocks()
+    {
+        QFETCH(int, blockSize);
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString src = tmp.filePath(QStringLiteral("src"));
+        const QByteArray padding(40, 'n');
+        constexpr int kFiles = 3000;
+        QVERIFY(pfstest::writeFile(src + QStringLiteral("/eboot.bin"), QByteArray("EBOOT"), -1));
+        for (int i = 0; i < kFiles; ++i) {
+            const QString name = QStringLiteral("file_%1_%2.bin").arg(QLatin1String(padding)).arg(i, 4, 10, QLatin1Char('0'));
+            QVERIFY(pfstest::writeFile(src + QStringLiteral("/big/") + name, i % 2 ? QByteArray(1, char(i)) : QByteArray(), -1));
+        }
+        PlanOptions po = planOptions();
+        po.ampr = AmprMode::Off;
+        SourcePlan p = plan(src, po);
+        QCOMPARE(int(p.files.size()), kFiles + 1);
+        BuildInput in;
+        in.plan = p;
+
+        for (const bool lazy : {false, true}) {
+            BuildOptions o = options();
+            o.layout.blockSize = blockSize;
+            o.layout.lazyDirents = lazy;
+            const QString out = tmp.filePath(lazy ? QStringLiteral("lazy.img") : QStringLiteral("blocks.img"));
+            auto st = writeImage(in, OutputFormat::FolderImage, o, out, CancellationToken());
+            QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(errText(st.error())));
+
+            std::shared_ptr<FileByteSource> keep;
+            auto img = openImage(out, keep);
+            QVERIFY(img);
+            QVERIFY2(img->warnings().isEmpty(), qPrintable(img->warnings().join(u';')));
+            QCOMPARE(img->header().blockSize, blockSize);
+            QCOMPARE(img->files().size(), p.files.size());
+            for (const SourceFile& f : p.files) {
+                const PfsEntry* e = img->findFile(f.relPath);
+                QVERIFY2(e, f.relPath.constData());
+                QCOMPARE(readImageFile(*img, *e), f.generated ? f.content : pfstest::readAll(f.absPath));
+            }
+            VerifyExpectation ex;
+            ex.format = OutputFormat::FolderImage;
+            ex.kind = VerifyExpectation::Kind::Folder;
+            ex.plan = &p;
+            auto vr = verifyImage(out, ex, VerifyDepth::Full, CancellationToken());
+            QVERIFY2(vr.ok(), vr.ok() ? "" : qPrintable(errText(vr.error())));
+            QVERIFY2(vr->passed, qPrintable(vr->problems.join(u'\n')));
+
+            const pfstest::DirentBlockScan scan = pfstest::scanDirentBlocks(*img);
+            const PfsEntry* bigDir = nullptr;
+            for (const PfsEntry& d : img->dirs())
+                if (d.path == "big")
+                    bigDir = &d;
+            QVERIFY(bigDir);
+            const QMap<QByteArray, int> names = scan.names.value(bigDir->inode);
+            if (lazy) {
+                // The old layout is what a per-block reader cannot read.
+                QVERIFY2(!scan.problems.isEmpty() || names.size() != kFiles + 2, "the Lazy layout was expected to cross a block");
+                continue;
+            }
+            QVERIFY2(scan.problems.isEmpty(), qPrintable(scan.problems.join(u'\n')));
+            QCOMPARE(names.size(), kFiles + 2); // and . and ..
+            for (auto it = names.cbegin(); it != names.cend(); ++it)
+                QVERIFY2(it.value() == 1, it.key().constData());
+            QVERIFY(img->inodes()[bigDir->inode].blocks > 1);
+        }
     }
 
     // The output does not depend on the number of compression threads.

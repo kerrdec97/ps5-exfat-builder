@@ -13,6 +13,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 
 #include <array>
 #include <cstdint>
@@ -144,6 +145,25 @@ inline int direntSize(int nameLength)
 }
 // Appends one dirent (name must be ASCII; the caller checks).
 void appendDirent(QByteArray& out, quint32 inode, qint32 type, const QByteArray& name);
+// The same for a directory's entries, which never cross a block of
+// `blockSize` bytes: when the entry would, the previous one (at `lastEntryAt`,
+// -1 = none) grows to the end of its block (its ent_size and zero bytes), and
+// the entry starts the next block. Readers that parse each block from its
+// start (the LibProsperoPkg-based package builders) need this; Lazy_MkPFS and
+// MkPFS join the entries without it. A directory whose entries fit before
+// the first block boundary they would cross gets the same bytes either way.
+void appendDirentInBlock(QByteArray& out, int blockSize, qsizetype& lastEntryAt, quint32 inode, qint32 type,
+                         const QByteArray& name);
+
+struct ParsedDirent {
+    quint32 inode = 0;
+    qint32 type = 0;
+    QByteArray name;
+};
+// parse_image_dirents(strict=True): the entries of a directory payload (or of
+// one block of it) up to an all-zero entry; problems go to `errors`, prefixed
+// by `where`. Accepts an ent_size larger than the name needs (a padded entry).
+std::vector<ParsedDirent> parseDirents(const QByteArray& blob, QStringList& errors, const QString& where);
 
 // ---- header block ------------------------------------------------------------------------
 struct HeaderParams {

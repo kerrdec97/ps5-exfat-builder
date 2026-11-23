@@ -29,9 +29,10 @@ void registerSettings(SettingsSchema& s)
         d.label = QStringLiteral("Compress game files (zstd packs)");
         d.description = QStringLiteral(
             "A smaller image: the game's files go into zstd packs that ampr-emu-ng reads on the console. The bundled "
-            "runtime goes to fakelib/libSceAmpr.sprx; mount with ShadowMount+ with \"Update game fakelib emulators\" turned "
-            "off. Not "
-            "every game works packed yet: keep your original dump.");
+            "runtime goes to fakelib/libSceAmpr.sprx. Mount with ShadowMount+ with its emulator updates off "
+            "([emulators] update_enabled = off and auto_update_ampr = off), or use Kraken Mount, which brings its own "
+            "ampr-emu-ng and mounts packed folders, not images. Not every game works packed yet: keep your original "
+            "dump.");
         d.type = SettingType::Bool;
         d.defaultValue = false;
         d.perJob = true;
@@ -67,8 +68,8 @@ void registerSettings(SettingsSchema& s)
         d.group = group;
         d.label = QStringLiteral("What to pack");
         d.description = QStringLiteral(
-            "Everything: every file except executables, modules, sce_sys, sce_module and fakelib (the smallest; "
-            "ampr-emu-ng serves a fully packed game). Compatible: also keeps root files, containers (.pak, .utoc), "
+            "Everything: every file except executables, modules, settings files (.ini), sce_sys, sce_module and "
+            "fakelib (the smallest; ampr-emu-ng serves a fully packed game). Compatible: also keeps root files, containers (.pak, .utoc), "
             "configs, media and video folders loose, for games that do not start fully packed.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("everything");
@@ -229,8 +230,7 @@ public:
         outcome.outputs = {out};
         outcome.summary = QStringLiteral("zstd: %1").arg(r->summary());
         outcome.warnings = r->warnings;
-        outcome.warnings << QStringLiteral("Packed games need ShadowMount+ with \"Update game fakelib emulators\" turned off, or the "
-                                           "runtime is replaced and the game cannot read its packs.");
+        outcome.warnings << packedGameMounterNote();
         if (r->verifyCancelled) {
             // Cancel while the finished packs were checked (GitHub #97): the
             // folder is kept as with the check turned off, and not called verified.

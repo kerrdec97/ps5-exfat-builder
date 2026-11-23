@@ -176,14 +176,23 @@ Result<FolderLayout> buildFolderLayout(const SourcePlan& plan, const LayoutOptio
                              .arg(QString::fromLatin1(d.rel)));
         const quint32 self = quint32(d.inode);
         const quint32 parent = i == 0 ? self : quint32(L.dirs[size_t(d.parent)].inode);
-        appendDirent(d.blob, self, kDirentDot, QByteArrayLiteral("."));
-        appendDirent(d.blob, parent, kDirentDotDot, QByteArrayLiteral(".."));
+        // No entry crosses a block (appendDirentInBlock); the Lazy_MkPFS
+        // layout joins them anyway when the golden tests ask for it.
+        qsizetype last = -1;
+        const auto add = [&](quint32 inode, qint32 type, const QByteArray& name) {
+            if (options.lazyDirents)
+                appendDirent(d.blob, inode, type, name);
+            else
+                appendDirentInBlock(d.blob, bs, last, inode, type, name);
+        };
+        add(self, kDirentDot, QByteArrayLiteral("."));
+        add(parent, kDirentDotDot, QByteArrayLiteral(".."));
         for (int c : d.childDirs) {
-            appendDirent(d.blob, quint32(L.dirs[size_t(c)].inode), kDirentDirectory, L.dirs[size_t(c)].name);
+            add(quint32(L.dirs[size_t(c)].inode), kDirentDirectory, L.dirs[size_t(c)].name);
             inodes[size_t(d.inode)].nlink = quint16(inodes[size_t(d.inode)].nlink + 1);
         }
         for (int f : d.childFiles)
-            appendDirent(d.blob, quint32(L.fileInode[size_t(f)]), kDirentFile, plan.files[size_t(f)].name());
+            add(quint32(L.fileInode[size_t(f)]), kDirentFile, plan.files[size_t(f)].name());
     }
 
     // ---- flat_path_table + collision_resolver (make_fpt_and_collision_blob) ---------
@@ -216,6 +225,7 @@ Result<FolderLayout> buildFolderLayout(const SourcePlan& plan, const LayoutOptio
     }
 
     // ---- super root ----------------------------------------------------------------------
+    // Three short entries in its one block: they never reach a boundary.
     appendDirent(L.superBlob, quint32(L.fptInode), kDirentFile, QByteArrayLiteral("flat_path_table"));
     if (collision)
         appendDirent(L.superBlob, quint32(L.collisionInode), kDirentFile, QByteArrayLiteral("collision_resolver"));
