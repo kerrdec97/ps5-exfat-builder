@@ -180,7 +180,7 @@ void registerModule(ModuleContext& ctx)
         d.group = QStringLiteral("When the queue finishes");
         d.label = QStringLiteral("Then");
         d.description = QStringLiteral("What the computer does after the last job finishes, whether the jobs succeeded or failed "
-                                       "(the switch below can limit that). Nothing happens when every job was cancelled. A countdown "
+                                       "(\"Only if every job succeeded\" can limit that). Nothing happens when every job was cancelled. A countdown "
                                        "lets you cancel.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("none");

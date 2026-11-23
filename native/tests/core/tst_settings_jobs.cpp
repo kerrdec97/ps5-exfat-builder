@@ -1328,6 +1328,20 @@ private slots:
         QCOMPARE(w.dueAction(), power::Action::None);
     }
 
+    // "Then" says a switch can limit the action to runs that succeeded. Its
+    // text is also the Queue page's tooltip, where "Only after this run" is
+    // the switch beside it, so it names "Only if every job succeeded" rather
+    // than pointing at "the switch below".
+    void afterQueueActionNamesTheSwitchThatLimitsIt()
+    {
+        fwtest::Registry reg;
+        const SettingDef* then = reg.schema.find(general::keys::kAfterQueueAction);
+        const SettingDef* ok = reg.schema.find(general::keys::kAfterQueueOnlyIfOk);
+        QVERIFY(then && ok);
+        QVERIFY2(then->description.contains(u'"' + ok->label + u'"'), qPrintable(then->description));
+        QVERIFY(!then->description.contains(QStringLiteral("the switch below")));
+    }
+
     // Changing the choice during the countdown of a "this run only" action
     // takes it back: dueAction() follows the setting again.
     void aChoiceMadeAfterAThisRunOnlyActionWins()
