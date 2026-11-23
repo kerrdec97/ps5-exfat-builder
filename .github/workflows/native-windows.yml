@@ -62,9 +62,12 @@ jobs:
         shell: pwsh
         run: |
           # The build must use exactly the Qt the notices name, not whatever is cached or on PATH.
-          $cfg = Join-Path $env:QT_ROOT_DIR 'lib\cmake\Qt6Core\Qt6CoreConfigVersion.cmake'
-          if (-not (Test-Path $cfg)) { throw "Qt6Core was not found under QT_ROOT_DIR=$env:QT_ROOT_DIR" }
-          $m = Select-String -Path $cfg -Pattern 'set\(PACKAGE_VERSION "([0-9.]+)"\)' | Select-Object -First 1
+          # Qt keeps the number in Qt6CoreConfigVersionImpl.cmake; Qt6CoreConfigVersion.cmake only includes it.
+          $dir = Join-Path $env:QT_ROOT_DIR 'lib\cmake\Qt6Core'
+          if (-not (Test-Path $dir)) { throw "Qt6Core was not found under QT_ROOT_DIR=$env:QT_ROOT_DIR" }
+          $m = Get-ChildItem -Path $dir -Filter 'Qt6CoreConfigVersion*.cmake' |
+               Select-String -Pattern 'set\(PACKAGE_VERSION "([0-9.]+)"\)' | Select-Object -First 1
+          if (-not $m) { throw "No Qt version number was found in $dir" }
           $found = $m.Matches[0].Groups[1].Value
           "Qt $found at $env:QT_ROOT_DIR"
           if ($found -ne $env:QT_VERSION) { throw "Qt $found was installed, $env:QT_VERSION is required" }
