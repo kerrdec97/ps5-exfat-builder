@@ -40,6 +40,8 @@ ExfatSettings readSettings(const SettingsValues& s);
 // The title ID of a game folder: sce_sys/param.json "titleId", else a
 // CUSA/PPSA/PPLH id in the folder or output name. Empty when none.
 QString detectTitleId(const QString& sourceDir, const QString& outputPath);
+// The same from param.json's contents and the names to look in, in order.
+QString detectTitleIdFrom(const QByteArray& paramJson, const QStringList& names);
 
 // `output` may be a file or an existing folder (the image is then named
 // after the source folder).

@@ -2,7 +2,9 @@
 #include "core/ArchiveSource.h"
 
 #include "core/FileUtil.h"
+#include "core/ArchiveStream.h"
 #include "engines/exfat/ExfatAmpr.h"
+#include "engines/exfat/ExfatArchive.h"
 #include "engines/exfat/ExfatExtract.h"
 #include "engines/exfat/ExfatFormat.h"
 #include "engines/exfat/ExfatReader.h"
@@ -20,6 +22,7 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <optional>
 
 namespace fw::exfat {
 
@@ -57,7 +60,7 @@ ExfatSettings readSettings(const SettingsValues& s)
     return x;
 }
 
-QString detectTitleId(const QString& sourceDir, const QString& outputPath)
+QString detectTitleIdFrom(const QByteArray& paramJson, const QStringList& names)
 {
     static const QRegularExpression re(QStringLiteral("(CUSA|PPSA|PPLH)[-_ ]?(\\d{5})"),
                                        QRegularExpression::CaseInsensitiveOption);
@@ -65,17 +68,25 @@ QString detectTitleId(const QString& sourceDir, const QString& outputPath)
         const auto m = re.match(s);
         return m.hasMatch() ? m.captured(1).toUpper() + m.captured(2) : QString();
     };
-    QFile f(sourceDir + QStringLiteral("/sce_sys/param.json"));
-    if (f.size() > 0 && f.size() < 4 * kMiB && f.open(QIODevice::ReadOnly)) {
-        const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    if (!paramJson.isEmpty()) {
+        const QJsonObject o = QJsonDocument::fromJson(paramJson).object();
         const QString id = pick(o.value(QStringLiteral("titleId")).toString());
         if (!id.isEmpty())
             return id;
     }
-    for (const QString& s : {QFileInfo(sourceDir).fileName(), QFileInfo(outputPath).fileName()})
+    for (const QString& s : names)
         if (const QString id = pick(s); !id.isEmpty())
             return id;
     return {};
+}
+
+QString detectTitleId(const QString& sourceDir, const QString& outputPath)
+{
+    QByteArray json;
+    QFile f(sourceDir + QStringLiteral("/sce_sys/param.json"));
+    if (f.size() > 0 && f.size() < 4 * kMiB && f.open(QIODevice::ReadOnly))
+        json = f.readAll();
+    return detectTitleIdFrom(json, {QFileInfo(sourceDir).fileName(), QFileInfo(outputPath).fileName()});
 }
 
 QString resolveBuildOutput(const QString& source, const QString& output)
@@ -204,18 +215,19 @@ public:
         return {QStringLiteral("Scanning"), QStringLiteral("Writing image"), QStringLiteral("Verifying")};
     }
     // The verification's share follows the settings (none when it is off).
-    QList<double> phaseWeights() const override { return threePhaseWeights(zipSource(), true, true); }
+    // An archive is streamed into the image: no unpacking step in Scanning.
+    QList<double> phaseWeights() const override { return threePhaseWeights(false, true, true); }
     QList<double> phaseWeights(const SettingsValues& settings) const override
     {
         const ExfatSettings x = readSettings(settings);
-        return threePhaseWeights(zipSource(), x.verify, x.fullVerify);
+        return threePhaseWeights(false, x.verify, x.fullVerify);
     }
     QJsonObject parameters() const override { return m_p; }
 
     Status validate(const SettingsValues& settings) const override
     {
         const ExfatSettings x = readSettings(settings);
-        const bool zip = archive::isZipSource(m_source); // #67: a zipped dump, unpacked in run()
+        const bool zip = archive::isZipSource(m_source); // #67, #37: an archived dump, streamed in run()
         if (zip)
             FW_TRY(archive::checkZipSource(m_source));
         else
@@ -240,15 +252,28 @@ public:
         return success();
     }
 
-    QString volumeLabel(const ExfatSettings& x) const
+    QString volumeLabel(const ExfatSettings& x, const archive::GameListing* game, const CancellationToken& token) const
     {
         if (m_hasLabel)
             return m_label;
         if (x.labelPolicy == u"none")
             return {};
-        if (x.labelPolicy == u"titleId")
-            if (const QString id = detectTitleId(m_source, m_output); !id.isEmpty())
+        if (x.labelPolicy == u"titleId") {
+            QString id;
+            if (game) {
+                // param.json out of the archive (in a solid one, what is stored before it is decoded too).
+                QByteArray json;
+                const int at = game->find(QStringLiteral("sce_sys/param.json"));
+                if (at >= 0 && game->items[size_t(at)].size > 0 && game->items[size_t(at)].size < 4 * kMiB)
+                    if (auto read = archive::readGameFile(*game, QStringLiteral("sce_sys/param.json"), 4 * kMiB, token); read.ok())
+                        json = read.value();
+                id = detectTitleIdFrom(json, {game->rootName(), QFileInfo(m_output).fileName()});
+            } else {
+                id = detectTitleId(m_source, m_output);
+            }
+            if (!id.isEmpty())
                 return id;
+        }
         return x.label;
     }
 
@@ -258,25 +283,41 @@ public:
         // Before anything is counted (the unpacking of a zipped dump is the
         // first step of Scanning), so the shares never change under the bar.
         ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
-        if (archive::isZipSource(m_source)) {
-            const QString zip = m_source;
-            FW_TRY(validate(ctx.settings));
-            FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
-            m_zip = zip;
-            ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
-        }
         FW_TRY(validate(ctx.settings));
         QElapsedTimer timer;
         timer.start();
+        // An archived dump (#37) is built straight from the archive: its list
+        // gives the tree, one pass through it the files' data. Nothing is
+        // unpacked to disk.
+        std::optional<archive::GameListing> game;
+        ctx.progress->beginPhase(0, 0);
+        if (archive::isZipSource(m_source)) {
+            m_zip = m_source;
+            ctx.log.info(archive::streamingLogLine(m_source));
+            FW_TRY_ASSIGN(game, archive::listArchiveGame(m_source, ctx.token));
+            if (x.requireEboot && !game->hasEboot)
+                return Error(ErrorCode::NotFound,
+                             QStringLiteral("There is no eboot.bin at the top of the game in %1. Choose an archive of the "
+                                            "game's top folder (the one that contains eboot.bin).")
+                                 .arg(QFileInfo(m_source).fileName()));
+        }
 
         // Scan.
-        ctx.progress->beginPhase(0, 0);
         ScanRules rules = x.rules;
         rules.excludePatterns += m_excludes;
-        FW_TRY_ASSIGN(SourceTree tree, scanSource(m_source, rules, ctx.token, ctx.progress));
-        ctx.log.info(QStringLiteral("Scanned %1: %2 files, %3 folders, %4; %5 left out")
-                         .arg(native(m_source), formatCount(tree.fileCount), formatCount(tree.dirCount),
-                              formatBytes(tree.totalBytes), formatCount(tree.excludedCount)));
+        SourceTree tree;
+        if (game) {
+            FW_TRY_ASSIGN(tree, treeFromArchive(*game, rules, QDateTime::currentDateTime(), ctx.token));
+            if (game->links > 0)
+                ctx.log.info(QStringLiteral("%1 symbolic or hard links in the archive are left out, as unpacking leaves them out.")
+                                 .arg(formatCount(game->links)));
+        } else {
+            FW_TRY_ASSIGN(tree, scanSource(m_source, rules, ctx.token, ctx.progress));
+        }
+        ctx.log.info(QStringLiteral("%1 %2: %3 files, %4 folders, %5; %6 left out")
+                         .arg(game ? QStringLiteral("Listed") : QStringLiteral("Scanned"), native(m_source),
+                              formatCount(tree.fileCount), formatCount(tree.dirCount), formatBytes(tree.totalBytes),
+                              formatCount(tree.excludedCount)));
         if (!tree.excludedSamples.isEmpty())
             ctx.log.debug(QStringLiteral("Left out: %1").arg(tree.excludedSamples.join(QStringLiteral(", "))));
         JobOutcome o;
@@ -284,7 +325,13 @@ public:
 
         // ampr_emu.index: a new one is a file in the job's temporary folder
         // that takes the root entry's place in the tree; the dump is not written.
-        FW_TRY_ASSIGN(const AmprPlacement ampr, applyAmprIndex(tree, x.ampr, ctx.tempDir));
+        // From an archive, the dump's own index is read out of it when it has to be compared.
+        NodeContents fromArchive;
+        if (game)
+            fromArchive = [&](const SourceNode& n) -> Result<QByteArray> {
+                return archive::readGameFile(*game, n.relativePath, std::max<qint64>(n.size + 1, 1), ctx.token);
+            };
+        FW_TRY_ASSIGN(const AmprPlacement ampr, applyAmprIndex(tree, x.ampr, ctx.tempDir, fromArchive));
         if (const QString line = pfs::amprActionLogLine(ampr.action); !line.isEmpty())
             ctx.log.info(line);
         if (const QString line = pfs::amprLeftOutLogLine(ampr.leftOut); !line.isEmpty())
@@ -292,7 +339,7 @@ public:
 
         // Plan.
         WriterOptions w = x.writer;
-        w.label = volumeLabel(x);
+        w.label = volumeLabel(x, game ? &*game : nullptr, ctx.token);
         FW_TRY_ASSIGN(ImagePlan plan, planImage(tree, w));
         const qint64 volume = plan.geo.volumeBytes();
         ctx.log.info(QStringLiteral("Image: %1, cluster %2, sector %3 bytes, label \"%4\"")
@@ -317,7 +364,18 @@ public:
 
         // Write.
         ctx.progress->beginPhase(1, tree.totalBytes, tree.fileCount);
-        FW_TRY_ASSIGN(WriteStats ws, writeImage(tree, plan, part.partPath(), w, ctx.token, ctx.progress, &ctx.log));
+        WriteStats ws;
+        std::vector<quint64> digests;
+        if (game) {
+            FW_TRY_ASSIGN(ArchiveWriteStats as, writeImageFromArchive(tree, plan, *game, part.partPath(), w, ctx.token,
+                                                                      ctx.progress, &ctx.log));
+            ws.bytesWritten = as.metadata.bytesWritten + as.stream.bytes;
+            ws.filesWritten = as.metadata.filesWritten;
+            ws.elapsedMs = as.metadata.elapsedMs + as.stream.elapsedMs;
+            digests = std::move(as.stream.digests);
+        } else {
+            FW_TRY_ASSIGN(ws, writeImage(tree, plan, part.partPath(), w, ctx.token, ctx.progress, &ctx.log));
+        }
         ctx.log.info(QStringLiteral("Wrote %1 in %2 ms (%3)")
                          .arg(formatBytes(ws.bytesWritten))
                          .arg(ws.elapsedMs)
@@ -328,7 +386,12 @@ public:
             ctx.progress->beginPhase(2, 0);
             // The folder is scanned again and compared with the image; the
             // index the build made is expected in place of the folder's.
+            // From an archive there is no folder: every file the pass wrote
+            // is read back and compared with the digest taken while writing it.
             auto checked = [&]() -> Result<VerifyReport> {
+                if (game)
+                    return verifyImage(part.partPath(), expectedFromArchive(tree, digests), verifyOptions(x, ctx, 2), ctx.token,
+                                       ctx.progress);
                 FW_TRY_ASSIGN(SourceTree expected, scanSource(m_source, rules, ctx.token, ctx.progress));
                 if (!ampr.indexFile.isEmpty())
                     placeAmprIndex(expected, ampr.indexFile);
@@ -366,7 +429,6 @@ public:
         // Delete the source only after a full content-verified pass (audit C2).
         if (x.deleteSource) {
             if (!m_zip.isEmpty()) {
-                // m_source is the unpacked copy in the job's temporary folder.
                 o.warnings << QStringLiteral("The ZIP %1 was kept: only folders are deleted after a build.").arg(native(m_zip));
             } else if (o.verification != Verification::Passed || !x.fullVerify) {
                 o.warnings << QStringLiteral("The source folder was kept: it is deleted only after a full byte-for-byte "
@@ -405,11 +467,9 @@ public:
     }
 
 private:
-    bool zipSource() const { return !m_zip.isEmpty() || archive::isZipSource(m_source); }
-
     QJsonObject m_p;
     QString m_source, m_output, m_label;
-    QString m_zip; // the zipped dump m_source was unpacked from, if any
+    QString m_zip; // the archived dump the image was streamed from, if any
     bool m_hasLabel = false;
     QStringList m_excludes;
 };

@@ -57,7 +57,7 @@ QByteArray amprIndexFor(const SourceTree& tree)
     return pfs::buildAmprIndex(pfs::amprToolRows(amprFiles(tree)).rows);
 }
 
-pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mode)
+pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mode, const NodeContents& contents)
 {
     // A folder of that name is in the way of the file: the game stays as it is.
     if (mode == pfs::AmprMode::Off || tree.nodes.empty() || rootIndexNode(tree, true) >= 0)
@@ -81,6 +81,8 @@ pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mod
     };
     const auto dumpIndex = [&]() -> Result<QByteArray> {
         const SourceNode& n = tree.nodes[size_t(own)];
+        if (n.absolutePath.isEmpty() && contents)
+            return contents(n);
         QFile f(toLongPath(n.absolutePath));
         if (!f.open(QIODevice::ReadOnly))
             return Error(ErrorCode::IoError, QStringLiteral("Could not read %1.").arg(QDir::toNativeSeparators(n.absolutePath)),
@@ -103,6 +105,7 @@ void placeAmprIndex(SourceTree& tree, const QString& indexFile)
         SourceNode& n = tree.nodes[size_t(own)];
         tree.totalBytes += fi.size() - n.size;
         n.absolutePath = fi.absoluteFilePath();
+        n.archiveItem = -1; // the new file's bytes, not the archive's
         n.size = fi.size();
         n.modified = n.accessed = fi.lastModified();
         return;
@@ -131,10 +134,11 @@ void placeAmprIndex(SourceTree& tree, const QString& indexFile)
     tree.nodes.push_back(std::move(n));
 }
 
-Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const QString& tempDir)
+Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const QString& tempDir,
+                                     const NodeContents& contents)
 {
     AmprPlacement out;
-    const pfs::AmprIndexDecision d = decideAmprIndex(tree, mode);
+    const pfs::AmprIndexDecision d = decideAmprIndex(tree, mode, contents);
     out.action = d.action;
     if (!pfs::amprActionChangesImage(d.action))
         return out;

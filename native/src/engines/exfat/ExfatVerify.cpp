@@ -1,5 +1,6 @@
 #include "engines/exfat/ExfatVerify.h"
 
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 
 #include <QDir>
@@ -110,6 +111,32 @@ std::optional<Mismatch> compareContent(const ContentJob& job, ImageFileStream& i
     const ImageEntry& e = *job.entry;
     const ExpectedFile& x = *job.expected;
     std::unique_ptr<QFile> local;
+    if (x.hasDigest) {
+        // Nothing to read beside the image: its bytes are digested.
+        archive::ContentDigest d;
+        for (qint64 off = 0; off < e.size;) {
+            if (!token.checkpoint()) {
+                cancelled = true;
+                return std::nullopt;
+            }
+            const qint64 n = std::min(qint64(b.size()), e.size - off);
+            auto r = image.read(e, off, b.data(), n);
+            if (!r.ok() || r.value() != n)
+                return Mismatch{x.path, QStringLiteral("unreadable"),
+                                QStringLiteral("the image could not be read at byte %1%2")
+                                    .arg(off)
+                                    .arg(r.ok() ? QString() : QStringLiteral(" (") + r.error().message + u')')};
+            d.add(b.data(), n);
+            off += n;
+            bytes.fetch_add(n, std::memory_order_relaxed);
+            if (progress)
+                progress->advance(n);
+        }
+        if (d.value() != x.digest)
+            return Mismatch{x.path, QStringLiteral("content"),
+                            QStringLiteral("the contents differ from what was decoded from the archive")};
+        return std::nullopt;
+    }
     if (!x.localPath.isEmpty()) {
         local = std::make_unique<QFile>(toLongPath(x.localPath));
         if (!local->open(QIODevice::ReadOnly))

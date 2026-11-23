@@ -50,6 +50,11 @@ struct ExpectedFile {
     // Exactly one source for the content of a file (full mode):
     QString localPath;         // a file on disk
     const ImageEntry* imageEntry = nullptr; // a file in another image
+    // Builds that stream an archive: the digest (archive::ContentDigest) of
+    // the bytes that were decoded and written; the image is read back and
+    // digested the same way.
+    bool hasDigest = false;
+    quint64 digest = 0;
     // >= 0: the content is this image's own and was not touched (in-place
     // edits); the entry must still start at this cluster.
     qint64 unchangedFirstCluster = -1;

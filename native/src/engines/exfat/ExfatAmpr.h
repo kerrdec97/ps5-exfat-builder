@@ -13,14 +13,21 @@
 #include "engines/exfat/SourceScan.h"
 #include "engines/pfs/AmprIndex.h"
 
+#include <functional>
+
 namespace fw::exfat {
 
 // The index of the files `tree` holds, by the rules of the AMPR index tool
 // (pfs::amprToolRows). Empty when there is nothing to list.
 QByteArray amprIndexFor(const SourceTree& tree);
 
-// What `mode` makes of the scanned game (pfs::decideAmprIndex).
-pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mode);
+// The contents of a node that is not a file on disk (a build from an
+// archive reads the dump's own index out of the archive).
+using NodeContents = std::function<Result<QByteArray>(const SourceNode&)>;
+
+// What `mode` makes of the scanned game (pfs::decideAmprIndex). `contents`
+// reads the dump's own index when it has no absolutePath.
+pfs::AmprIndexDecision decideAmprIndex(const SourceTree& tree, pfs::AmprMode mode, const NodeContents& contents = {});
 
 // Makes `indexFile` (a file on disk) the root's ampr_emu.index in `tree`: in
 // place of the dump's own entry, or as a new entry where Windows would list it.
@@ -33,7 +40,8 @@ struct AmprPlacement {
 };
 // Decides and, when the image gets a new index, writes it into `tempDir` and
 // places it in `tree`.
-Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const QString& tempDir);
+Result<AmprPlacement> applyAmprIndex(SourceTree& tree, pfs::AmprMode mode, const QString& tempDir,
+                                     const NodeContents& contents = {});
 
 // For a verification against a folder: when `image` holds the index of the
 // folder's files (`tree`) and the folder has none or another one, the image's

@@ -61,6 +61,10 @@ struct WriterOptions {
     quint32 serial = 0;            // 0 = derived from the current time
     bool syncToDisk = true;        // flush the image to the device before returning
     NodeOpener opener;             // empty: read SourceNode::absolutePath from disk
+    // Builds that stream an archive (ExfatArchive.h): the clusters of nodes
+    // with an archiveItem are left as they are (zeros), for the archive pass
+    // to fill in afterwards.
+    bool leaveArchiveData = false;
 };
 
 struct NodePlacement {
