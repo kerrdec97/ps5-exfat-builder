@@ -2,14 +2,17 @@
 
 // Build (Main artboard): one page for every output the app makes.
 //
-//   Source       drop zone → game strip. A folder for every format; a zipped
-//                dump for the images and the packed folder; with FPKG also an
+//   Source       drop zone → game strip. A folder or an archived dump (.zip,
+//                .7z, .rar; unpacked by the job) for every format; with FPKG also an
 //                .exfat / .ffpfs / .ffpfsc / .ffpkg image or a .gp5 project.
 //                A wrapper folder is searched for the game folder below it.
-//   Format       five tiles (exFAT, FFPKG, PFS, FPKG, Packed folder) and, under
-//                them, the two or three settings people change for that output.
-//                Packed folder is no image: the game folder with its files in
-//                zstd packs (ampr.pack), for a USB drive or an FTP upload.
+//   Format       six tiles (exFAT, FFPKG, PFS, FPKG, Packed folder, ZSTD image)
+//                and, under them, the two or three settings people change for
+//                that output. Packed folder is no image: the game folder with
+//                its files in zstd packs (ampr.pack), for a USB drive or an FTP
+//                upload. ZSTD image (experimental, GitHub #98) is one .zstd
+//                file: an exFAT image with the game in zstd packs, for Kraken
+//                Mount MOD (image.build.zstd, format exfat).
 //   Package      FPKG only: package type (App, Add-on, Update, Backport),
 //                content ID, title, version, add-on / update fields, and the
 //                backport updates (4.xx / 5.xx+ backport files, folder or ZIP):
@@ -31,6 +34,7 @@
 #include "core/FileUtil.h"
 
 #include <QComboBox>
+#include <QEventLoop>
 #include <QElapsedTimer>
 #include <QHash>
 #include <QPointer>
@@ -38,6 +42,8 @@
 
 #include "core/Cancellation.h"
 
+#include <atomic>
+#include <functional>
 #include <memory>
 
 class QMenu;
@@ -69,7 +75,8 @@ public:
 
     void setSource(const QString& path);
     QString source() const;
-    // "exfat", "ffpkg", "ffpfsc", "ffpfs" (PFS tile, uncompressed), "fpkg" or "zstd" (packed folder).
+    // "exfat", "ffpkg", "ffpfsc", "ffpfs" (PFS tile, uncompressed), "fpkg", "zstd" (packed folder)
+    // or "zstdimage" (jobs::kFormatZstdImage, the .zstd file).
     void setFormat(const QString& format);
     QString format() const;
     // Image formats: the file name with its extension; FPKG: the expected package name; packed folder: the folder name.
@@ -91,6 +98,16 @@ public:
     QStringList gameRootChoices() const { return m_rootChoices; }
     // The largest single file the output can have (what a FAT32 drive limits); 0 = no such limit known.
     qint64 largestOutputFileBytes() const;
+    // The ZSTD image tile's note: what loads a .zstd and that it is experimental.
+    QWidget* zstdImageNote() const { return m_zstdImageNote; }
+    // FPKG: "Title for all languages" (GitHub #94, default on).
+    ui::Switch* titleAllLanguagesSwitch() const { return m_titleAll; }
+    // A fresh answer from the output drive, waited for at most this long
+    // before a job starts (A16; tests shorten it).
+    void setSpaceWaitForTests(int ms) { m_spaceWaitMs = ms; }
+    // Called on the probe's worker before the drive is asked (tests block in it
+    // to play a drive that does not answer); an empty function removes it.
+    static void setSpaceProbeHookForTests(std::function<void(const QString&)> hook);
 
 protected:
     Result<QString> submit(bool buildNow) override;
@@ -98,7 +115,7 @@ protected:
 
 private:
     struct FormatOptions {
-        QString tile; // exfat / ffpkg / ffpfsc / fpkg / zstd
+        QString tile; // exfat / ffpkg / ffpfsc / fpkg / zstd / zstdimage
         ui::JobOptionsPanel* panel = nullptr;
         QWidget* essentials = nullptr; // in the Format card
         QWidget* advanced = nullptr;   // in the Advanced section
@@ -145,6 +162,7 @@ private:
     QString tile() const;
     bool isFpkg() const { return tile() == kFormatFpkg; }
     bool isZstdFolder() const { return tile() == kFormatZstdFolder; }
+    bool isZstdImage() const;           // the ZSTD image tile (an exFAT image with zstd packs, .zstd)
     QString sourceKind() const; // folder / zip / exfat / ffpfsc / ffpkg / gp5
     QString outputFolder() const; // where the output goes (resolved defaults)
     QString expectedPackagePath() const;
@@ -174,6 +192,7 @@ private:
     ui::Segmented* m_pfsKind = nullptr;
     QWidget* m_pfsKindRow = nullptr;
     QWidget* m_toolsRow = nullptr;
+    QWidget* m_zstdImageNote = nullptr; // ZSTD image essentials: who mounts it, experimental
     ui::Badge* m_toolsBadge = nullptr;
     QLabel* m_toolsDetail = nullptr;
     ui::Link* m_toolsLink = nullptr;
@@ -188,6 +207,8 @@ private:
     ui::PathField* m_basePackage = nullptr;
     QWidget* m_addonField = nullptr;
     QWidget* m_titleRow = nullptr;
+    QWidget* m_titleAllRow = nullptr;    // "Title for all languages" (#94)
+    ui::Switch* m_titleAll = nullptr;
     QWidget* m_dlcEmuRow = nullptr;      // App builds of a game with dlc_emu.ini: its DLC data goes along
     QWidget* m_backportField = nullptr;  // the two backport pickers + note
     ui::PathField* m_backport4 = nullptr;
@@ -230,12 +251,19 @@ private:
     // The free-space check of the output folder; validateForm() refuses to
     // start on Insufficient and Unavailable, but only on a fresh answer: it
     // asks the drive again unless the last answer is positive and recent.
-    enum class SpaceCheck { Unknown, Checking, Ok, Warn, Insufficient, Unavailable };
+    enum class SpaceCheck { Unknown, Checking, Ok, Warn, Insufficient, Unavailable, NoAnswer };
     SpaceCheck m_spaceState = SpaceCheck::Unknown;
     QElapsedTimer m_spaceChecked; // since the last answer
     QTimer* m_spaceTimer = nullptr; // the check waits for a pause in typing the folder
     void applySpaceCheck(const Result<DiskSpace>& ds, const Result<QStringList>& vol, const QString& folder, qint64 needed, bool pkg, bool exists);
     quint64 m_spaceGen = 0;
+    // m_spaceGen for the probe threads: a probe superseded before it started
+    // never asks the drive (A16).
+    std::shared_ptr<std::atomic<quint64>> m_spaceLatest = std::make_shared<std::atomic<quint64>>(0);
+    quint64 nextSpaceGen(); // a new check: answers of the ones before are dropped
+    void startSpaceProbe(const QString& folder, quint64 gen);
+    QPointer<QEventLoop> m_spaceWait; // checkSpaceNow() is waiting in it
+    int m_spaceWaitMs = 2000;
     bool m_spaceOk = true;
     QString m_spaceProblem;
     bool m_demo = false;

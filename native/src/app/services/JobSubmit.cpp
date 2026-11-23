@@ -7,6 +7,7 @@
 #include "core/Paths.h"
 #include "core/Tr.h"
 #include "engines/ampr/Module.h"
+#include "engines/integration/ZstdImage.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -21,11 +22,15 @@ QString imageBuildKind(const QString& format)
         return QStringLiteral("image.ffpkg.build");
     if (format == kFormatFfpfsc || format == kFormatFfpfs)
         return QStringLiteral("image.pfs.build");
+    if (format == kFormatZstdImage)
+        return QStringLiteral("image.build.zstd");
     return QStringLiteral("image.exfat.build");
 }
 
 QString outputExtension(const QString& format)
 {
+    if (format == kFormatZstdImage)
+        return kZstdImageExtension;
     if (format == kFormatFfpkg)
         return QStringLiteral(".ffpkg");
     if (format == kFormatFfpfsc)
@@ -38,7 +43,7 @@ QString outputExtension(const QString& format)
 QString imageKindForFile(const QString& path, const QString& op)
 {
     const QString ext = QFileInfo(path).suffix().toLower();
-    if (ext == QLatin1String("exfat"))
+    if (ext == QLatin1String("exfat") || ext == QLatin1String("zstd")) // a .zstd single file is an exFAT image
         return QStringLiteral("image.exfat.") + op;
     if (ext == QLatin1String("ffpkg"))
         return QStringLiteral("image.ffpkg.") + op;
@@ -133,6 +138,14 @@ Result<QString> submitImageBuild(AppContext& ctx, const QString& format, const Q
     QJsonObject p = extra;
     p.insert(QStringLiteral("source"), source);
     p.insert(QStringLiteral("output"), QDir(outputDir).filePath(fileName));
+    // The ZSTD image: an exFAT image with zstd packs, named .zstd. The packs are
+    // what this output is, whatever the global "zstd packs" switch says.
+    if (format == kFormatZstdImage) {
+        QVariantMap o = overrides;
+        o.insert(ampr::keys::kZstdPack, true);
+        p.insert(QStringLiteral("format"), kFormatExfat);
+        return enqueue(ctx, imageBuildKind(format), p, o);
+    }
     // "Compress game files (zstd packs)": the game is packed first, then built.
     const QString zstdKey = ampr::keys::kZstdPack;
     const bool zstd = overrides.contains(zstdKey) ? overrides.value(zstdKey).toBool() : ctx.settings().value(zstdKey).toBool();
@@ -158,11 +171,20 @@ Result<QString> submitPackFolder(AppContext& ctx, const QString& source, const Q
     return enqueue(ctx, ampr::kPackJob, p, o);
 }
 
+// A .zstd is opened only when it holds an exFAT image (the refusal names what it is).
+static Status checkImageContent(const QString& image)
+{
+    if (integration::isZstdImageName(image))
+        return integration::checkZstdImage(image);
+    return success();
+}
+
 Result<QString> submitVerify(AppContext& ctx, const QString& imageOrPackage, const QVariantMap& overrides)
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("verify"));
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file."));
+        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .zstd, .ffpkg, .ffpfs, .ffpfsc or .pkg file."));
+    FW_TRY(checkImageContent(imageOrPackage));
     QJsonObject p;
     if (kind.startsWith(QLatin1String("fpkg."))) {
         p.insert(QStringLiteral("package"), imageOrPackage);
@@ -186,7 +208,8 @@ Result<QString> submitExtract(AppContext& ctx, const QString& imageOrPackage, co
 {
     const QString kind = imageKindForFile(imageOrPackage, QStringLiteral("extract"));
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs, .ffpfsc or .pkg file."));
+        return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .zstd, .ffpkg, .ffpfs, .ffpfsc or .pkg file."));
+    FW_TRY(checkImageContent(imageOrPackage));
     QJsonObject p;
     if (kind.startsWith(QLatin1String("fpkg."))) {
         p.insert(QStringLiteral("package"), imageOrPackage);
@@ -221,6 +244,9 @@ Result<QString> submitFpkgBuild(AppContext& ctx, const QString& sourceType, cons
     for (const char* k : {"contentId", "contentVersion", "title", "basePackage", "baseFolder", "exactSource", "updateOutput"})
         if (details.contains(QLatin1String(k)) && !details.value(QLatin1String(k)).toVariant().toString().isEmpty())
             p.insert(QLatin1String(k), details.value(QLatin1String(k)));
+    // "Title for all languages" (GitHub #94): the engine's default is on.
+    if (details.contains(QStringLiteral("titleAllLanguages")))
+        p.insert(QStringLiteral("titleAllLanguages"), details.value(QStringLiteral("titleAllLanguages")).toBool(true));
     return enqueue(ctx, QStringLiteral("fpkg.build"), p, overrides);
 }
 
@@ -329,7 +355,7 @@ QStringList newestCrashFiles(const QStringList& crashFiles)
 QString imageEditKind(const QString& image)
 {
     const QString ext = QFileInfo(image).suffix().toLower();
-    if (ext == QLatin1String("exfat"))
+    if (ext == QLatin1String("exfat") || ext == QLatin1String("zstd"))
         return QStringLiteral("image.exfat.edit");
     if (ext == QLatin1String("ffpkg"))
         return QStringLiteral("image.ffpkg.edit");
@@ -407,13 +433,15 @@ Result<QString> submitImageEdit(AppContext& ctx, const QString& image, const QJs
 {
     const QString kind = imageEditKind(image);
     if (kind.isEmpty())
-        return Error(ErrorCode::Unsupported, QStringLiteral("Only .exfat and .ffpkg images can be edited."));
+        return Error(ErrorCode::Unsupported, QStringLiteral("Only .exfat, .zstd and .ffpkg images can be edited."));
+    FW_TRY(checkImageContent(image));
     return enqueue(ctx, kind, QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("operations"), operations}}, overrides);
 }
 
 Result<QString> submitConvert(AppContext& ctx, const QString& image, const QString& format, const QString& output,
                               const QVariantMap& overrides, const QString& method, bool replaceExisting)
 {
+    FW_TRY(checkImageContent(image));
     QJsonObject p{{QStringLiteral("image"), image}, {QStringLiteral("format"), format}, {QStringLiteral("output"), output}};
     if (!method.isEmpty())
         p.insert(QStringLiteral("method"), method);

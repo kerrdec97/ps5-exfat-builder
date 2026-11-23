@@ -47,6 +47,7 @@ struct ImageSummary {
 };
 
 // "exfat" / "ffpkg" / "ffpfs" / "ffpfsc" ("pkg" too when `withPackages`), "" otherwise.
+// A .zstd single file is "exfat" (its content is checked when it is read).
 QString imageFormatOf(const QString& path, bool withPackages = false);
 QString imageFormatName(const QString& format);
 QString imageFormatIcon(const QString& format); // icon name for strips and chips

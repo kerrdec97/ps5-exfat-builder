@@ -802,7 +802,10 @@ void LibraryPage::buildSelected()
     fmt->addSegment(QStringLiteral("FFPKG"), QStringLiteral("package"), jobs::kFormatFfpkg);
     fmt->addSegment(QStringLiteral("FFPFSC"), QStringLiteral("compress"), jobs::kFormatFfpfsc);
     fmt->addSegment(FW_TR("Packed folder"), QStringLiteral("archive"), pages::kFormatZstdFolder);
-    fmt->setToolTip(FW_TR("Packed folder: no image, the game folder with its files in zstd packs (Build image › Packed folder)."));
+    fmt->addSegment(FW_TR("ZSTD image"), QStringLiteral("compress"), jobs::kFormatZstdImage);
+    fmt->setToolTip(FW_TR("Packed folder: no image, the game folder with its files in zstd packs (Build image › Packed folder).")
+                    + u' '
+                    + FW_TR("ZSTD image (experimental): one .zstd file, an exFAT image with the game in zstd packs, for Kraken Mount MOD."));
     fmt->setCurrentIndex(0);
     s->body()->addWidget(field(FW_TR("Format"), fmt, {}, s));
     auto* out = new PathField(PathField::Mode::Directory, s);
@@ -838,7 +841,9 @@ void LibraryPage::buildSelected()
         nf.firmware = fwOverride.isEmpty() || fwOverride == QLatin1String("auto") ? gameinfo::firmwareMajor(info.requiredFw) : fwOverride;
         nf.sdk = info.sdk;
         nf.type = format == jobs::kFormatExfat ? QStringLiteral("exFAT") : format == jobs::kFormatFfpkg ? QStringLiteral("ffpkg")
-                : format == pages::kFormatZstdFolder ? QStringLiteral("zstd") : QStringLiteral("PFS");
+                : format == pages::kFormatZstdFolder ? QStringLiteral("zstd")
+                : format == jobs::kFormatZstdImage   ? QStringLiteral("ZSTD")
+                                                     : QStringLiteral("PFS");
         nf.folderName = QFileInfo(f).fileName();
         QString name = gameinfo::renderImageName(preset, st.value(gameinfo::keys::kNameTemplate).toString(), nf);
         Result<QString> r = Error(ErrorCode::Internal, FW_TR("Nothing to build."));
@@ -1221,6 +1226,9 @@ void LibraryPage::rebuildImages()
         it.coverId = s->titleId;
         it.icon = imageFormatIcon(s->format);
         it.chips = {s->formatName()};
+        // The .zstd single file (an exFAT image named for Kraken Mount MOD) says so.
+        if (QFileInfo(s->path).suffix().compare(QLatin1String("zstd"), Qt::CaseInsensitive) == 0)
+            it.chips << QStringLiteral(".zstd");
         if (!s->inner.isEmpty())
             it.chips << imageFormatName(imageFormatOf(s->inner));
         if (!s->error.isEmpty()) {
