@@ -278,6 +278,11 @@ public:
     std::function<void(int)> onChanged;
     // Where tile `i` is, left to right (tests).
     QRect tileRect(int i) const;
+    // Where tile `i` draws its badge and its check bubble (tests); empty when
+    // it draws none. The badge is always drawn; the bubble of the selected
+    // tile only where the badge leaves room for it.
+    QRect tagRect(int i) const;
+    QRect checkRect(int i) const;
 
     bool hasHeightForWidth() const override { return true; }
     int heightForWidth(int w) const override;
@@ -301,6 +306,12 @@ private:
     int columns(int w) const;
     int at(const QPoint& pt) const;
     void syncGlow();
+    // The check bubble and the badge of tile `i`, laid out left to right
+    // inside `r` (the tile as drawn); empty rectangles for what is not drawn.
+    struct Marks {
+        QRectF check, tag;
+    };
+    Marks marks(int i, const QRectF& r) const;
     std::vector<Item> m_items;
     int m_current = -1;
     ui::motion::HoverFade* m_hover; // which tile the pointer is over; the tint fades

@@ -119,8 +119,7 @@ static QRect headerArrowRect(const QStyleOptionHeader* h, const QWidget* widget,
     section.sortIndicator = QStyleOptionHeader::None;
     const QRect label = view->style()->subElementRect(QStyle::SE_HeaderLabel, &section, view);
     // The label's font: the QHeaderView::section rule of the style sheet (12 px, 600).
-    QFont f = font::caption();
-    f.setWeight(QFont::DemiBold);
+    const QFont f = FwStyle::headerFont();
     const int s = size::iconSm;
     const int textW = QFontMetrics(f).horizontalAdvance(h->text);
     if (!label.isValid() || textW + space::xs + s > label.width())
@@ -417,6 +416,13 @@ void FwStyle::polish(QWidget* widget)
     }
     if (auto* view = qobject_cast<QAbstractItemView*>(widget))
         useAppItemDelegate(view);
+}
+
+QFont FwStyle::headerFont()
+{
+    QFont f = font::caption(); // the QHeaderView rule of the style sheet: 12 px, 600
+    f.setWeight(QFont::DemiBold);
+    return f;
 }
 
 // ---------------------------------------------------------------------------

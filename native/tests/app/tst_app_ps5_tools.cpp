@@ -525,6 +525,27 @@ private slots:
         m_ctx->queue().clearFinished();
     }
 
+    // V-08 (UI review 5.2): the ShadowMount+ settings "send" changes (not
+    // "push", version-control jargon) and each switch row says under its name
+    // what it changes on the console.
+    void shadowMountTabSpeaksPlainly()
+    {
+        pages::ShadowMountTab tab(*m_ctx, fakeConsole(fwtest::refusedPort()));
+        tab.resize(1100, 900);
+        QStringList buttons;
+        for (auto* b : tab.findChildren<QPushButton*>())
+            buttons << b->text();
+        QVERIFY2(buttons.contains(QStringLiteral("Send changes")), qPrintable(buttons.join(u',')));
+        for (const QString& b : buttons)
+            QVERIFY2(!b.contains(QStringLiteral("Push")), qPrintable(b));
+        for (const char* key : {"debug", "quiet_mode", "library_sync_notification"}) {
+            auto* help = tab.findChild<QLabel*>(QStringLiteral("smp-help-%1").arg(QLatin1String(key)));
+            QVERIFY2(help && !help->text().isEmpty(), key);
+        }
+        auto* quiet = tab.findChild<QLabel*>(QStringLiteral("smp-help-quiet_mode"));
+        QCOMPARE(quiet->text(), QStringLiteral("Shows fewer notifications on the console."));
+    }
+
     // ShadowMount+ settings: load a 1.7 flat config, change one value, push
     // only that line; unknown keys and comments stay, kstuff_* go.
     void shadowMountTabPushesOnlyChangedKeys()

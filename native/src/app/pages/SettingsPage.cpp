@@ -9,6 +9,7 @@
 #include "app/ui/Motion.h"
 #include "app/ui/Sheet.h"
 #include "connect/ps5/Module.h"
+#include "core/BuildInfo.h"
 #include "core/FileUtil.h"
 #include "core/Paths.h"
 #include "core/Tr.h"
@@ -519,7 +520,7 @@ SettingRow* SettingsPage::addRow(const SettingDef& def, QWidget* parent, QVBoxLa
         if (!edit && w)
             edit = w->findChild<QLineEdit*>();
         if (edit && edit->placeholderText().isEmpty())
-            edit->setPlaceholderText(QStringLiteral("192.168.1.40"));
+            edit->setPlaceholderText(FW_TR("e.g. %1").arg(QStringLiteral("192.168.1.40"))); // not taken for an address entered (V-04)
     }
     m_rows.insert(def.key, row);
     const QString key = def.key;
@@ -726,7 +727,7 @@ void SettingsPage::buildSection(const QString& section)
     } else if (!depIds.isEmpty()) {
         auto* card = new Card(m_cards);
         card->body()->setSpacing(0);
-        auto* again = button(FW_TR("Detect again"), ButtonVariant::Subtle, QStringLiteral("refresh"), card);
+        auto* again = button(FW_TR("Check again"), ButtonVariant::Subtle, QStringLiteral("refresh"), card); // the Tools card's word (V-17)
         setButtonSmall(again, true);
         card->setTitle(FW_TR("Tools this section uses"), again);
         auto* list = new DependencyList(m_ctx, depIds, card);
@@ -794,7 +795,7 @@ StorageLocations storageLocations(const AppContext& ctx, const QString& temp)
     if (qApp->property("fwScreenshotMode").toBool()) {
         const QString local = QStringLiteral("C:/Users/you/AppData/Local/kerrdec97/");
         l.launcherExe = QStringLiteral("C:/Users/you/Downloads/exFAT Image Builder.exe");
-        l.program = local + QStringLiteral("exFAT Image Builder/runtime/5.0.2-0f3a9c21d4b7");
+        l.program = local + QStringLiteral("exFAT Image Builder/runtime/%1-0f3a9c21d4b7").arg(QLatin1String(build::kVersion)); // this build's version (V-23)
         l.data = QStringLiteral("C:/Users/you/AppData/Roaming/kerrdec97/exFAT Image Builder Farewell");
         l.logs = local + QStringLiteral("exFAT Image Builder Farewell/logs");
         l.temp = local + QStringLiteral("exFAT Image Builder Farewell/temp");
@@ -1295,7 +1296,8 @@ void SettingsPage::importLegacyFrom(const QString& path)
     rebuild();
     const QString title = r.value() == 1 ? FW_TR("%1 value imported").arg(r.value()) : FW_TR("%1 values imported").arg(r.value());
     if (changed.isEmpty())
-        Sheet::message(window(), title, FW_TR("Every imported value already matched the current settings, so nothing changed."), Sheet::Icon::Info);
+        // Nothing to read twice: a toast, not a sheet to dismiss (V-22).
+        emit toastRequested(Tone::Ok, title, FW_TR("Every imported value already matched the current settings, so nothing changed."));
     else
     {
         // A long list is cut so the button stays on screen.

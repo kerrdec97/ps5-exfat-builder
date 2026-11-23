@@ -358,14 +358,17 @@ void registerModule(ModuleContext& ctx)
             "The index is added to the image only; the dump is not changed.");
         d.type = SettingType::Enum;
         d.defaultValue = QStringLiteral("missing");
-        d.choices = {{QStringLiteral("missing"), QStringLiteral("Add when the dump has none"),
-                      QStringLiteral("What Lazy_MkPFS does.")},
-                     {QStringLiteral("auto"), QStringLiteral("When the game uses the AMPR emulator"),
+        // The choices in the order and words of the exFAT and FFPKG settings of
+        // the same name (V-07); the default stays what Lazy_MkPFS does, which
+        // its choice's description says.
+        d.choices = {{QStringLiteral("auto"), QStringLiteral("When the game uses the AMPR emulator"),
                       QStringLiteral("Adds the index when the dump has none and rebuilds one that no longer matches the "
                                      "game's files. A game with asset packs keeps its own index.")},
+                     {QStringLiteral("missing"), QStringLiteral("Add when the dump has none"),
+                      QStringLiteral("What Lazy_MkPFS does.")},
                      {QStringLiteral("refresh"), QStringLiteral("Always rebuild it"),
                       QStringLiteral("Replaces the dump's own index in the image (legacy Build page behaviour).")},
-                     {QStringLiteral("off"), QStringLiteral("Never add one"), {}}};
+                     {QStringLiteral("off"), QStringLiteral("Never add or change it"), {}}};
         d.perJob = true;
         d.order = order++;
         s.add(d);

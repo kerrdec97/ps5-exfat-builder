@@ -147,7 +147,8 @@ ConsoleHero::ConsoleHero(AppContext& ctx, QWidget* parent) : QWidget(parent), m_
     ch->setVerticalSpacing(space::xs);
     m_hostLabel = label(FW_TR("Address"), TextStyle::Overline, color::fg_4, m_controls);
     m_portLabel = label(FW_TR("Port"), TextStyle::Overline, color::fg_4, m_controls);
-    m_host = textInput(QStringLiteral("192.168.1.40"), true, m_controls);
+    // "e.g." and the body font: an empty field does not pass for a filled-in one (V-04).
+    m_host = textInput(FW_TR("e.g. %1").arg(QStringLiteral("192.168.1.40")), true, m_controls);
     m_host->setMinimumWidth(150);
     m_host->setMaximumWidth(200);
     m_host->setAccessibleName(FW_TR("Console IP"));

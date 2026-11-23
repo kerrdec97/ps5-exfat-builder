@@ -116,6 +116,7 @@ public:
         setAttribute(Qt::WA_Hover);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         setAccessibleName(FW_TR("Action"));
+        setProperty("fwRole", "choice"); // one control to a screen reader, its value the current action (V-13)
         m_hover = new motion::HoverFade(this, [this](int i) {
             if (i >= 0 && i < int(m_items.size()))
                 update(tile(i));
@@ -143,6 +144,7 @@ public:
             return;
         m_current = i;
         setAccessibleDescription(FW_TR("Selected: %1").arg(m_items[size_t(i)].title)); // the tiles are painted, not widgets
+        setProperty("fwChoiceValue", m_items[size_t(i)].title);
         update();
         syncGlow();
         if (onChanged)

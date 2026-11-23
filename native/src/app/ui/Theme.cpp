@@ -358,7 +358,10 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; 
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 
 /* ---- tables and trees ---------------------------------------------------------- */
-QHeaderView { background: transparent; }
+/* The font also on the header itself: in the ::section rule alone it reached
+   only the headers that were given a font in code, the others kept the view's
+   13 px body font (V-06). Style.cpp FwStyle::headerFont() is the same font. */
+QHeaderView { background: transparent; font-size: 12px; font-weight: 600; }
 QHeaderView::section {
     background: transparent; color: {fg_4}; padding: 0 10px; min-height: 31px;
     border: none; border-bottom: 1px solid {border_2}; font-size: 12px; font-weight: 600;

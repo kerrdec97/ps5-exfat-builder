@@ -252,7 +252,7 @@ QueuePage::QueuePage(AppContext& ctx, JobQueueModel& queueModel, LogModel& logMo
     m_filter = new Segmented(card);
     for (const auto& s : {FW_TR("All"), FW_TR("Running"), FW_TR("Queued"), FW_TR("Done"), FW_TR("Not finished")})
         m_filter->addSegment(s);
-    m_filter->setAccessibleName(QStringLiteral("Filter jobs"));
+    m_filter->setAccessibleName(FW_TR("Filter jobs"));
     h->addWidget(m_filter);
     // The time left takes the rest of the row, at its end: one line while it
     // fits ("Running job: about 3 min left" wrapped after "3" when it had only
