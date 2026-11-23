@@ -1701,12 +1701,13 @@ QString BuildImagePage::archiveNote() const
                          .arg(formatBytes(s.bytes));
     const bool zstd = f == jobs::kFormatZstdImage || (fo && fo->panel->effectiveValue(ampr::keys::kZstdPack).toBool());
     if (zstd)
-        return zip ? FW_TR("Nothing is unpacked: the game is packed straight from the archive, and only its zstd packs are "
-                           "written to disk before the image is built from them (at most %1).")
+        return zip ? FW_TR("Nothing is unpacked: the game is packed straight from the archive, and only the zstd packs and "
+                           "the files kept loose are written to disk before the image is built from them (at most %1).")
                          .arg(formatBytes(s.bytes))
-                   : FW_TR("Nothing is unpacked: the game is packed straight from the archive, and only its zstd packs are "
-                           "written to disk before the image is built from them. A 7z or RAR gives its files in its own "
-                           "order, so their packed data waits in the temporary folder first (at most %1 each).")
+                   : FW_TR("Nothing is unpacked: the game is packed straight from the archive, and only the zstd packs and "
+                           "the files kept loose are written to disk before the image is built from them. A 7z or RAR "
+                           "gives its files in its own order, so their packed data waits in the temporary folder first "
+                           "(at most %1 each).")
                          .arg(formatBytes(s.bytes));
     const bool streams = f == jobs::kFormatExfat || f == jobs::kFormatFfpkg
                          || (f == jobs::kFormatFfpfs && !(fo && fo->panel->effectiveValue(pfs::keys::kCompressFiles).toBool()))
