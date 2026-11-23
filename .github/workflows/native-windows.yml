@@ -115,21 +115,9 @@ jobs:
           ctest --test-dir build --timeout 900 --output-junit "$PWD\ci-out\ctest-junit.xml" 2>&1 | Tee-Object ci-out\ctest.txt
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            # Show every failing test's own output (PowerShell piping hides it above).
-            $failed = Select-String -Path ci-out\ctest.txt -Pattern '\d+ - (\S+) \(' | ForEach-Object { $_.Matches[0].Groups[1].Value }
-            foreach ($t in $failed) {
-              Write-Host "===== $t ====="
-              $exe = Get-ChildItem -Recurse build\tests -Filter "$t.exe" | Select-Object -First 1
-              if ($exe) {
-                $log = Join-Path $PWD "ci-out\$t.log"
-                Push-Location $exe.DirectoryName
-                & $exe.FullName -o "$log,txt" -maxwarnings 0 | Out-Null
-                $rc = $LASTEXITCODE
-                Pop-Location
-                Get-Content $log | Where-Object { $_ -notmatch '^PASS' } | Out-Host
-                Write-Host "exit code: $rc"
-              }
-            }
+            # Show every failing test's own output, run again by CTest so it has the
+            # same environment (FW_AMPR_RUNTIME, isolated data folders) as the first run.
+            ctest --test-dir build --timeout 900 --rerun-failed --output-on-failure 2>&1 | Tee-Object ci-out\ctest-failed.txt
             throw "ctest failed ($code)"
           }
 
