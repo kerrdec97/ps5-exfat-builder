@@ -12,3 +12,10 @@ if(TARGET tst_format_matrix)
     # heavy programs and keep it off the disk while they run.
     set_tests_properties(tst_format_matrix PROPERTIES TIMEOUT 1800 RESOURCE_LOCK fw_heavy_disk LABELS heavy)
 endif()
+
+# tst_archive_stream makes 7z archives with libarchive's writer and reads the
+# RAR samples of libarchive's test suite (as tst_archive_source).
+if(TARGET tst_archive_stream)
+    target_link_libraries(tst_archive_stream PRIVATE fw_libarchive_write)
+    target_compile_definitions(tst_archive_stream PRIVATE FW_LIBARCHIVE_TEST_DATA="${FW_LIBARCHIVE_TEST_DATA}")
+endif()
