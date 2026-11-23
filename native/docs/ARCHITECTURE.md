@@ -186,12 +186,15 @@ Qt sockets only work on threads Qt started (the queue's `QThreadPool`,
 
 `core/ArchiveSource.h`: a build job's `source` may be a `.zip`, `.7z` or `.rar` of a dump (the first bytes decide
 the reader, not the name). `validate()` lists the archive (nothing is unpacked) and checks it holds exactly one
-game. The exFAT and FFPKG builds then **stream** the archive (GitHub #37, `core/ArchiveStream.h`): the image is
+game. The exFAT, FFPKG and uncompressed PFS builds then **stream** the archive (GitHub #37, `core/ArchiveStream.h`): the image is
 planned from the list alone (`listArchiveGame`), its metadata written, and one pass through the archive writes every
 file's bytes where the plan put them, checksums verified while decoded and each file digested for the read-back
 verification; nothing of the game is written to disk outside the image, and the image is byte for byte the one the
-unpacked folder gives (`engines/EXFAT.md`, *Building from an archive*). PFS, zstd-pack and packed-folder builds
-and FPKG still unpack first (the log says which and why): `run()` unpacks only the game into `<tempDir>/zip-source`
+unpacked folder gives (`engines/EXFAT.md`, *Building from an archive*, which has the table of every build). An
+`.ffpfsc` streams from a ZIP; zstd-pack and packed-folder builds feed the packer in one pass (`visitGameFiles`,
+`ampr::packGameFromArchive`; from a 7z or RAR through a spool of compressed chunks in the temp folder). An `.ffpfsc`
+from a 7z or RAR, per-file PFS compression, an archive of a packed game and FPKG still unpack first (the log says
+which and why): `run()` unpacks only the game into `<tempDir>/zip-source`
 in one pass, after a free-space check from the listed sizes, with every checksum verified and file times kept, then
 builds from that folder. ZIP uses the app's own reader
 (`core/Zip.*`); 7z and RAR use libarchive 3.8.11 with liblzma 5.8.4 (`core/ArchiveReader.*`,

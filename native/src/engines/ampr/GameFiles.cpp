@@ -172,6 +172,41 @@ std::shared_ptr<RandomAccess> itemAccess(std::shared_ptr<GameFiles> files, int i
     return std::make_shared<ItemAccess>(std::move(files), index);
 }
 
+// ---- ArchiveGame -------------------------------------------------------------------------
+
+ArchiveGame::ArchiveGame(archive::GameListing listing, qint64 noTime) : m_listing(std::move(listing))
+{
+    m_items.reserve(m_listing.items.size());
+    m_source.reserve(m_listing.items.size());
+    for (size_t i = 0; i < m_listing.items.size(); ++i) {
+        const archive::GameItem& it = m_listing.items[i];
+        GameItem g;
+        g.path = it.path;
+        g.isDir = it.isDir;
+        g.size = it.isDir ? 0 : it.size;
+        if (!it.isDir)
+            g.mtime = it.modified.isValid() ? it.modified.toSecsSinceEpoch() : noTime;
+        m_index.insert(g.path, int(m_items.size()));
+        m_items.push_back(std::move(g));
+        m_source.push_back(int(i));
+    }
+}
+
+QString ArchiveGame::describe() const
+{
+    return QStringLiteral("archive %1").arg(QFileInfo(m_listing.archive).fileName());
+}
+
+Result<qint64> ArchiveGame::read(int, qint64, char*, qint64)
+{
+    return Error(ErrorCode::Internal, QStringLiteral("%1 is read in one pass, not file by file.").arg(QFileInfo(m_listing.archive).fileName()));
+}
+
+QStringList ArchiveGame::warnings() const
+{
+    return {};
+}
+
 QString packKindName(PackKind kind)
 {
     switch (kind) {

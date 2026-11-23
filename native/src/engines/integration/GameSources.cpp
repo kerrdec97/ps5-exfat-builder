@@ -223,15 +223,34 @@ public:
     Result<JobOutcome> run(JobContext& ctx) override
     {
         FW_TRY(validate(ctx.settings));
+        QString src = QFileInfo(source()).absoluteFilePath();
+        // An archived dump (#37) is packed in one pass through it, with no
+        // copy of the game on disk: only the packed folder the image is then
+        // built from (packs and loose files), as from a folder. A game that is
+        // itself packed in the archive is unpacked first.
+        std::shared_ptr<ampr::ArchiveGame> fromArchive;
+        if (archive::isZipSource(src)) {
+            FW_TRY_ASSIGN(archive::GameListing listed, archive::listArchiveGame(src, ctx.token));
+            auto game = std::make_shared<ampr::ArchiveGame>(std::move(listed), QDateTime::currentSecsSinceEpoch());
+            m_unpackFirst = !ampr::archivePackProblem(*game).isEmpty();
+            if (!m_unpackFirst)
+                fromArchive = std::move(game);
+        }
         const QStringList ph = phases();
         ctx.progress->setPhases(ph, phaseWeights(ctx.settings));
         ctx.progress->beginPhase(0, 0);
-
-        QString src = QFileInfo(source()).absoluteFilePath();
-        if (archive::isZipSource(src)) {
-            ctx.log.info(archive::unpackFirstLogLine(
-                src, QStringLiteral("the zstd packer reads the game's files from a folder, in the order it packs them, and the "
-                                    "image is then built from the packed folder")));
+        // The name the game's folder gets in the work folder: the one it
+        // would have unpacked (the archive's game folder, or "zip-source" for
+        // an archive of the game's contents).
+        QString gameName;
+        if (fromArchive) {
+            ctx.log.info(archive::packingLogLine(src, fromArchive->listing().zip));
+            gameName = fromArchive->listing().rootName();
+            if (gameName.isEmpty())
+                gameName = QStringLiteral("zip-source");
+        } else if (archive::isZipSource(src)) {
+            FW_TRY_ASSIGN(archive::GameListing listed, archive::listArchiveGame(src, ctx.token));
+            ctx.log.info(archive::unpackFirstLogLine(src, ampr::archivePackProblem(ampr::ArchiveGame(std::move(listed), 0))));
             FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
             // The unpacking was a step inside Preparing; Preparing goes on from there.
@@ -244,30 +263,37 @@ public:
         const QString work = QDir(outDir).filePath(QStringLiteral(".fw-zstd-%1").arg(randomHex(8)));
         FW_TRY(fpkg::createTrackedWorkFolder(work));
         fpkg::TrackedWorkFolder guard(work);
-        QString gameName = QFileInfo(src).fileName();
+        if (gameName.isEmpty())
+            gameName = QFileInfo(src).fileName();
         if (gameName.isEmpty())
             gameName = QStringLiteral("game"); // a game at the root of a drive
         const QString staged = QDir(work).filePath(gameName);
 
         const ampr::PackSettings ps = ampr::readPackSettings(ctx.settings, m_p);
-        FW_TRY_ASSIGN(auto files, ampr::openFolderGame(src, ctx.token));
+        std::shared_ptr<ampr::GameFiles> files = fromArchive;
+        if (!fromArchive) {
+            FW_TRY_ASSIGN(files, ampr::openFolderGame(src, ctx.token));
+        }
         ampr::PackGameOptions o;
         o.level = ps.level;
         o.threads = ps.threads;
         o.strategy = ps.strategy;
         o.verify = ps.verify;
-        o.linkFromFolder = src;
+        if (!fromArchive)
+            o.linkFromFolder = src;
         o.packPhase = 1;
         o.verifyPhase = ps.verify ? 2 : -1;
         o.freeSpaceMarginBytes = qint64(ctx.settings.integer(general::keys::kFreeSpaceMarginMiB)) * 1024 * 1024;
-        o.exclude = excluder(ctx.settings, src);
+        o.exclude = excluder(ctx.settings, fromArchive ? QString() : src);
         ctx.log.info(QStringLiteral("Packing %1 with zstd level %2 (%3) for .%4; work folder %5")
                          .arg(native(src))
                          .arg(ps.level)
                          .arg(ps.strategy == ampr::PackStrategy::Compatible ? QStringLiteral("compatible: containers, configs and media stay loose")
                                                                             : QStringLiteral("everything except system files"),
                               format(), native(work)));
-        FW_TRY_ASSIGN(ampr::PackGameReport rep, ampr::packGame(files, staged, o, ctx.token, ctx.progress, ctx.log));
+        FW_TRY_ASSIGN(ampr::PackGameReport rep,
+                      fromArchive ? ampr::packGameFromArchive(fromArchive, staged, o, ctx.tempDir, ctx.token, ctx.progress, ctx.log)
+                                  : ampr::packGame(files, staged, o, ctx.token, ctx.progress, ctx.log));
         // A cancel while the packs are checked stops the job: the image, the
         // job's real work, is not made yet.
         if (ctx.token.isCancelled())
@@ -350,7 +376,8 @@ private:
     // 0.3), the rest is scaled down.
     QList<double> weights(const QList<double>& child, bool checkPacks) const
     {
-        const double prepare = archive::isZipSource(source()) ? 0.3 : 0.02;
+        // An archive streams in Packing (#37); one that holds a packed game is unpacked here.
+        const double prepare = m_unpackFirst && archive::isZipSource(source()) ? 0.3 : 0.02;
         const double scale = (1.0 - prepare) / 0.98;
         QList<double> w = checkPacks ? QList<double>{prepare, 0.5 * scale, 0.06 * scale} : QList<double>{prepare, 0.56 * scale, 0.0};
         const double build = 0.42 * scale;
@@ -430,13 +457,22 @@ private:
             const QString name = rel.section(u'/', -1);
             if (isDir)
                 return matcher->excludesDir(name, rel);
-            const bool hidden = hiddenRule && QFileInfo(QDir(root).filePath(rel)).isHidden();
+            // From an archive (no root) a file is hidden only where unpacking
+            // would make it so: by a leading dot, outside Windows (as treeFromArchive).
+#ifdef Q_OS_WIN
+            const bool archiveHidden = false;
+#else
+            const bool archiveHidden = name.startsWith(u'.');
+#endif
+            const bool hidden = hiddenRule && (root.isEmpty() ? archiveHidden : QFileInfo(QDir(root).filePath(rel)).isHidden());
             return matcher->excludesFile(name, rel, hidden);
         };
     }
 
     QJsonObject m_p;
     const JobFactory* m_factory;
+    // run(): the archive holds a packed game and is unpacked in Preparing.
+    bool m_unpackFirst = false;
 };
 
 // ---- game.extract -----------------------------------------------------------------------

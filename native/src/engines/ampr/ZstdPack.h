@@ -177,6 +177,51 @@ Result<ZstdPackResult> writeZstdPack(std::vector<PackInput> files, const ZstdPac
 Status verifyWrittenZstdPack(const QString& outDir, const ZstdPackResult& result, const CancellationToken& token,
                              ProgressReporter* progress = nullptr);
 
+// The packer for files that are pushed to it, for a game read in one pass
+// through an archive (GitHub #37) instead of opened file by file. The pack it
+// writes is byte for byte the one writeZstdPack() writes for the same files
+// and options (records, chunks, volumes and index alike).
+//
+//  * Without a spool file the files must come in record order
+//    (recordOrder(), as a ZIP can be read) and the volumes are written as
+//    they come: nothing is written but the pack.
+//  * With `spoolPath` they may come in any order (a solid 7z or RAR gives
+//    them in its own): every chunk is compressed as its file comes and its
+//    stored bytes go to the spool file; finish() then writes the volumes in
+//    record order from it and removes it. The spool grows to the pack's
+//    stored size (at most the files' size: a chunk is stored raw when zstd
+//    does not make it smaller), so the drive holds about twice the pack while
+//    the volumes are written.
+//
+// Every frame is decoded again before it is kept (roundTripCheck), as by
+// writeZstdPack(); a spooled chunk is checked against its CRC when it is read
+// back. A file larger or smaller than given fails. Memory: two batches of
+// chunks, as writeZstdPack(). Progress advances by input bytes. Destroyed
+// before finish() succeeded, it removes the volumes and the spool it wrote.
+class ZstdPackStream {
+public:
+    // `files` as for writeZstdPack() (their `open` is not used).
+    static Result<std::unique_ptr<ZstdPackStream>> create(std::vector<PackInput> files, const ZstdPackOptions& options,
+                                                          const QString& outDir, const QString& spoolPath = {},
+                                                          ProgressReporter* progress = nullptr);
+    ~ZstdPackStream();
+    ZstdPackStream(const ZstdPackStream&) = delete;
+    ZstdPackStream& operator=(const ZstdPackStream&) = delete;
+
+    // The inputs (indices into `files` as given) in record order.
+    const std::vector<int>& recordOrder() const;
+    Status begin(int input);
+    Status data(const char* p, qint64 n);
+    Status end();
+    // Once every file has been given: the volumes, their headers and the index.
+    Result<ZstdPackResult> finish(const CancellationToken& token);
+
+private:
+    ZstdPackStream();
+    struct Impl;
+    std::unique_ptr<Impl> d;
+};
+
 // ---- reading -------------------------------------------------------------------------
 
 class RandomAccess {

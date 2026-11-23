@@ -344,6 +344,7 @@ struct Slot {
     quint8 codec = 0;
     quint32 crc = 0;
     int file = -1;
+    quint32 chunk = 0; // ZstdPackStream: the chunk's number in the index
     QString error;
 };
 
@@ -560,17 +561,17 @@ private:
 
 } // namespace
 
-Result<ZstdPackResult> writeZstdPack(std::vector<PackInput> files, const ZstdPackOptions& o, const QString& outDir,
-                                     const CancellationToken& token, ProgressReporter* progress)
+namespace {
+
+// The pack's records, in (hash, path) order, with their chunk numbers; `files`
+// is put in the same order. `order[k]` is the input index of record k.
+Status planPack(std::vector<PackInput>& files, const ZstdPackOptions& o, ZstdPackResult& res, std::vector<int>& order)
 {
-    QElapsedTimer timer;
-    timer.start();
     if (o.level < kZstdMinLevel || o.level > kZstdMaxLevel)
         return Error(ErrorCode::InvalidArgument, QStringLiteral("The zstd level must be 1 to 22."));
     if (o.volumeLimit < kZstdVolumeHeaderBytes + kZstdChunkBytes || o.volumeLimit > kZstdVolumeLimit)
         return Error(ErrorCode::InvalidArgument, QStringLiteral("Invalid pack volume size."));
 
-    ZstdPackResult res;
     ZstdIndex& ix = res.index;
     ix.level = quint8(o.level);
     ix.archiveId = o.archiveId;
@@ -582,7 +583,7 @@ Result<ZstdPackResult> writeZstdPack(std::vector<PackInput> files, const ZstdPac
 
     // Records in (hash, path) order; reject bad and duplicate paths and a file
     // that is also a folder of another.
-    std::vector<int> order(files.size());
+    order.assign(files.size(), 0);
     ix.files.resize(files.size());
     for (size_t i = 0; i < files.size(); ++i) {
         const QString problem = zstdPathProblem(files[i].path);
@@ -636,10 +637,24 @@ Result<ZstdPackResult> writeZstdPack(std::vector<PackInput> files, const ZstdPac
     }
     ix.chunks.assign(size_t(chunkTotal), 0);
     res.chunkCrcs.assign(size_t(chunkTotal), 0);
-
     int threads = o.threads > 0 ? o.threads : int(std::max(1u, std::thread::hardware_concurrency()));
-    threads = std::clamp(threads, 1, 64);
-    res.threads = threads;
+    res.threads = std::clamp(threads, 1, 64);
+    return success();
+}
+
+} // namespace
+
+Result<ZstdPackResult> writeZstdPack(std::vector<PackInput> files, const ZstdPackOptions& o, const QString& outDir,
+                                     const CancellationToken& token, ProgressReporter* progress)
+{
+    QElapsedTimer timer;
+    timer.start();
+    ZstdPackResult res;
+    ZstdIndex& ix = res.index;
+    std::vector<int> order;
+    FW_TRY(planPack(files, o, res, order));
+    const quint64 chunkTotal = ix.chunks.size();
+    const int threads = res.threads;
     const int batchChunks = std::max(8, threads * 4);
     const size_t outCap = ZSTD_compressBound(size_t(kZstdChunkBytes));
     std::vector<Slot> batches[2];
@@ -816,6 +831,279 @@ Status verifyWrittenZstdPack(const QString& outDir, const ZstdPackResult& r, con
         }
     }
     return success();
+}
+
+// ---- packing files that come in another order -------------------------------------------
+
+struct ZstdPackStream::Impl {
+    ZstdPackOptions options;
+    QString outDir;
+    ProgressReporter* progress = nullptr;
+    QElapsedTimer timer;
+    ZstdPackResult res;
+    std::vector<PackInput> files;    // in record order
+    std::vector<int> recordOrder;    // input index of each record
+    std::vector<int> recordOf;       // record of each input
+    std::vector<char> done;          // per record
+    std::unique_ptr<CompressPool> pool;
+    std::vector<Slot> batches[2];
+    int batchChunks = 8;
+    int cur = 0;
+    int count = 0;          // slots of batches[cur] filled
+    bool filling = false;   // batches[cur][count] holds part of a chunk
+    bool inFlight = false;  // batches[1 - cur] is being compressed
+    int inFlightCount = 0;
+    // The file being fed.
+    int record = -1;
+    int lastRecord = -1;    // direct: the last record begun
+    qint64 pos = 0;
+    quint32 nextChunk = 0;  // in record order (direct), else the next one compressed is counted
+    qint64 chunksSeen = 0;
+    // Direct: the volumes, written as the chunks come. Spooled: every chunk's
+    // stored bytes in the spool file first, and where.
+    std::unique_ptr<VolumeWriter> vw;
+    bool committed = false;
+    QString spoolPath;
+    QFile spool;
+    qint64 spoolEnd = 0;
+    std::vector<qint64> spoolAt;
+
+    ~Impl()
+    {
+        pool.reset();
+        if (vw && !committed)
+            vw->removeAll();
+        if (spool.isOpen())
+            spool.close();
+        if (!spoolPath.isEmpty())
+            QFile::remove(spoolPath);
+    }
+
+    bool direct() const { return spoolPath.isEmpty(); }
+
+    Status drain(std::vector<Slot>& b, int n)
+    {
+        for (int i = 0; i < n; ++i) {
+            Slot& s = b[size_t(i)];
+            if (!s.error.isEmpty())
+                return Error(ErrorCode::VerificationFailed,
+                             QStringLiteral("Packing %1 failed: %2.").arg(QString::fromUtf8(files[size_t(s.file)].path), s.error));
+            ZstdChunk c;
+            c.codec = s.codec;
+            c.stored = quint32(s.outLen);
+            const char* data = s.codec ? s.out.data() : s.in.data();
+            if (direct()) {
+                if (s.chunk != nextChunk)
+                    return Error(ErrorCode::Internal, QStringLiteral("The pack's chunks came out of order."));
+                FW_TRY(vw->put(data, s.outLen, c));
+                ++nextChunk;
+            } else {
+                spoolAt[s.chunk] = spoolEnd;
+                for (qint64 written = 0; written < s.outLen;) {
+                    const qint64 w = spool.write(data + written, s.outLen - written);
+                    if (w <= 0)
+                        return Error(ErrorCode::IoError,
+                                     QStringLiteral("Could not write the temporary file %1. The drive may be full.")
+                                         .arg(QDir::toNativeSeparators(spoolPath)),
+                                     spool.errorString());
+                    written += w;
+                }
+                spoolEnd += s.outLen;
+            }
+            res.index.chunks[s.chunk] = c.encode();
+            res.chunkCrcs[s.chunk] = s.crc;
+            res.storedBytes += s.outLen;
+            (s.codec ? res.zstdChunks : res.rawChunks) += 1;
+            ++chunksSeen;
+            if (progress)
+                progress->advance(s.inLen);
+        }
+        return success();
+    }
+
+    // Hands the filled batch to the workers and takes back the one before.
+    Status submit()
+    {
+        if (inFlight) {
+            pool->wait();
+            inFlight = false;
+            FW_TRY(drain(batches[1 - cur], inFlightCount));
+        }
+        if (count == 0)
+            return success();
+        pool->start(batches[cur].data(), count);
+        inFlight = true;
+        inFlightCount = count;
+        cur = 1 - cur;
+        count = 0;
+        return success();
+    }
+};
+
+ZstdPackStream::ZstdPackStream() : d(std::make_unique<Impl>()) {}
+ZstdPackStream::~ZstdPackStream() = default;
+
+Result<std::unique_ptr<ZstdPackStream>> ZstdPackStream::create(std::vector<PackInput> files, const ZstdPackOptions& options,
+                                                               const QString& outDir, const QString& spoolPath,
+                                                               ProgressReporter* progress)
+{
+    std::unique_ptr<ZstdPackStream> s(new ZstdPackStream);
+    Impl& m = *s->d;
+    m.timer.start();
+    m.options = options;
+    m.outDir = outDir;
+    m.progress = progress;
+    const size_t inputs = files.size();
+    FW_TRY(planPack(files, options, m.res, m.recordOrder));
+    m.files = std::move(files);
+    m.recordOf.assign(inputs, -1);
+    for (size_t k = 0; k < m.recordOrder.size(); ++k)
+        m.recordOf[size_t(m.recordOrder[k])] = int(k);
+    m.done.assign(m.files.size(), 0);
+    m.batchChunks = std::max(8, m.res.threads * 4);
+    const size_t outCap = ZSTD_compressBound(size_t(kZstdChunkBytes));
+    for (auto& b : m.batches) {
+        b.resize(size_t(m.batchChunks));
+        for (auto& slot : b) {
+            slot.in.resize(size_t(kZstdChunkBytes));
+            slot.out.resize(outCap);
+        }
+    }
+    if (progress && options.setProgressTotal)
+        progress->setTotal(qint64(m.res.index.totalLogical));
+    m.vw = std::make_unique<VolumeWriter>(outDir, options.volumeLimit);
+    if (!spoolPath.isEmpty()) {
+        m.spoolPath = spoolPath;
+        m.spool.setFileName(toLongPath(spoolPath));
+        if (!m.spool.open(QIODevice::ReadWrite | QIODevice::Truncate))
+            return Error(ErrorCode::IoError,
+                         QStringLiteral("Could not create the temporary file %1.").arg(QDir::toNativeSeparators(spoolPath)),
+                         m.spool.errorString());
+        m.spoolAt.assign(m.res.index.chunks.size(), -1);
+    }
+    m.pool = std::make_unique<CompressPool>(m.res.threads, options.level, options.roundTripCheck);
+    return s;
+}
+
+const std::vector<int>& ZstdPackStream::recordOrder() const { return d->recordOrder; }
+
+Status ZstdPackStream::begin(int input)
+{
+    if (input < 0 || size_t(input) >= d->recordOf.size() || d->record >= 0)
+        return Error(ErrorCode::Internal, QStringLiteral("No such file to pack."));
+    const int r = d->recordOf[size_t(input)];
+    if (d->done[size_t(r)])
+        return Error(ErrorCode::Internal, QStringLiteral("%1 was packed twice.").arg(QString::fromUtf8(d->files[size_t(r)].path)));
+    if (d->direct() && d->res.index.files[size_t(r)].size > 0) {
+        // Direct: in record order (empty files have no chunks to place);
+        // finish() checks that none was left out.
+        if (r <= d->lastRecord)
+            return Error(ErrorCode::Internal, QStringLiteral("The files to pack came out of order."));
+        d->lastRecord = r;
+    }
+    d->record = r;
+    d->pos = 0;
+    if (d->progress)
+        d->progress->setCurrentItem(QString::fromUtf8(d->files[size_t(r)].path));
+    return success();
+}
+
+Status ZstdPackStream::data(const char* p, qint64 n)
+{
+    Impl& m = *d;
+    if (m.record < 0)
+        return Error(ErrorCode::Internal, QStringLiteral("No file is being packed."));
+    const ZstdFileRecord& f = m.res.index.files[size_t(m.record)];
+    if (n > qint64(f.size) - m.pos)
+        return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than listed.").arg(QString::fromUtf8(f.path)));
+    while (n > 0) {
+        Slot& s = m.batches[m.cur][size_t(m.count)];
+        const quint32 k = quint32(m.pos >> kZstdChunkShift);
+        if (!m.filling) {
+            s.inLen = 0;
+            s.file = m.record;
+            s.chunk = f.firstChunk + k;
+            m.filling = true;
+        }
+        const qint64 chunkLen = std::min<qint64>(kZstdChunkBytes, qint64(f.size) - (qint64(k) << kZstdChunkShift));
+        const qint64 take = std::min(n, chunkLen - s.inLen);
+        std::memcpy(s.in.data() + s.inLen, p, size_t(take));
+        s.inLen += take;
+        m.pos += take;
+        p += take;
+        n -= take;
+        if (s.inLen == chunkLen) {
+            m.filling = false;
+            if (++m.count == m.batchChunks)
+                FW_TRY(m.submit());
+        }
+    }
+    return success();
+}
+
+Status ZstdPackStream::end()
+{
+    Impl& m = *d;
+    if (m.record < 0)
+        return Error(ErrorCode::Internal, QStringLiteral("No file is being packed."));
+    const ZstdFileRecord& f = m.res.index.files[size_t(m.record)];
+    if (m.pos != qint64(f.size) || m.filling)
+        return Error(ErrorCode::CorruptData, QStringLiteral("%1 is shorter than listed.").arg(QString::fromUtf8(f.path)));
+    m.done[size_t(m.record)] = 1;
+    m.record = -1;
+    return success();
+}
+
+Result<ZstdPackResult> ZstdPackStream::finish(const CancellationToken& token)
+{
+    Impl& m = *d;
+    if (m.record >= 0)
+        return Error(ErrorCode::Internal, QStringLiteral("A file is still being packed."));
+    FW_TRY(m.submit()); // the last batch
+    FW_TRY(m.submit()); // and back
+    for (size_t r = 0; r < m.files.size(); ++r)
+        if (!m.done[r])
+            return Error(ErrorCode::Internal, QStringLiteral("%1 was never packed.").arg(QString::fromUtf8(m.files[r].path)));
+    ZstdIndex& ix = m.res.index;
+    if (quint64(m.chunksSeen) != ix.chunks.size())
+        return Error(ErrorCode::Internal, QStringLiteral("The pack is incomplete."));
+    if (!m.direct()) {
+        // The volumes in record order, from the spool: the bytes the volumes of
+        // a pack written in record order hold (writeZstdPack).
+        if (!m.spool.flush())
+            return Error(ErrorCode::IoError, QStringLiteral("Could not write the temporary file."), m.spool.errorString());
+        QByteArray buf;
+        for (size_t i = 0; i < ix.chunks.size(); ++i) {
+            if ((i % 16) == 0 && !token.checkpoint())
+                return Error::cancelled();
+            ZstdChunk c = ZstdChunk::decode(ix.chunks[i]);
+            buf.resize(qsizetype(c.stored));
+            if (m.spoolAt[i] < 0 || !m.spool.seek(m.spoolAt[i]) || m.spool.read(buf.data(), c.stored) != qint64(c.stored))
+                return Error(ErrorCode::IoError, QStringLiteral("Could not read the temporary file %1.").arg(QDir::toNativeSeparators(m.spoolPath)),
+                             m.spool.errorString());
+            if (crc32(buf.constData(), c.stored) != m.res.chunkCrcs[i])
+                return Error(ErrorCode::IoError, QStringLiteral("The temporary file %1 did not read back as written.")
+                                                     .arg(QDir::toNativeSeparators(m.spoolPath)));
+            FW_TRY(m.vw->put(buf.constData(), c.stored, c));
+            ix.chunks[i] = c.encode();
+        }
+        m.spool.close();
+        QFile::remove(m.spoolPath);
+    }
+    FW_TRY(m.vw->close());
+    ix.volumeSizes = m.vw->sizes();
+    if (ix.volumeSizes.empty() && !ix.files.empty())
+        return Error(ErrorCode::Internal, QStringLiteral("No pack volume was written."));
+    FW_TRY(m.vw->writeHeaders(ix.archiveId));
+    const QByteArray encoded = encodeZstdIndex(ix);
+    FW_TRY(writeFileAtomic(QDir(m.outDir).filePath(kZstdIndexName), encoded));
+    auto check = decodeZstdIndex(encoded);
+    if (!check.ok())
+        return Error(ErrorCode::Internal, QStringLiteral("The pack index did not validate."), check.error().message);
+    m.res.volumes = m.vw->names();
+    m.res.elapsedMs = m.timer.elapsed();
+    m.committed = true;
+    return m.res;
 }
 
 // ---- reading -------------------------------------------------------------------------

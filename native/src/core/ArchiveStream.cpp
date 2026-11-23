@@ -35,6 +35,17 @@ QString streamingLogLine(const QString& archive)
         .arg(QDir::toNativeSeparators(archive));
 }
 
+QString packingLogLine(const QString& archive, bool zip)
+{
+    return zip ? QStringLiteral("Building straight from %1 (one pass through the archive, read in the packs' order; nothing "
+                                "is unpacked to disk: the files go straight into the zstd packs and the loose files)")
+                     .arg(QDir::toNativeSeparators(archive))
+               : QStringLiteral("Building straight from %1 (one pass through the archive; the game is not unpacked: the "
+                                "zstd packs' compressed chunks wait in the job's temporary folder until the packs are "
+                                "written in their own order)")
+                     .arg(QDir::toNativeSeparators(archive));
+}
+
 QString unpackFirstLogLine(const QString& archive, const QString& why)
 {
     return QStringLiteral("Unpacking %1 into the job's temporary folder first: %2")
@@ -154,6 +165,92 @@ Status checkPlacements(const GameListing& game, const std::vector<Placement>& pl
 
 } // namespace
 
+Status visitGameFiles(const GameListing& game, const std::vector<int>& wanted, const GameFileVisitor& visitor,
+                      const CancellationToken& token)
+{
+    const QString archiveName = QFileInfo(game.archive).fileName();
+    std::vector<char> want(game.items.size(), 0);
+    for (const int i : wanted) {
+        if (i < 0 || size_t(i) >= game.items.size() || game.items[size_t(i)].isDir || want[size_t(i)])
+            return Error(ErrorCode::Internal, QStringLiteral("The list of files to read is inconsistent."));
+        want[size_t(i)] = 1;
+    }
+    std::vector<bool> done(game.items.size(), false);
+    int item = -1;
+    qint64 produced = 0;
+    qint64 files = 0;
+    const auto begin = [&](int i) -> Status {
+        if (done[size_t(i)])
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 lists %2 twice.").arg(archiveName, game.items[size_t(i)].entry));
+        item = i;
+        produced = 0;
+        return visitor.begin(i);
+    };
+    const auto feed = [&](const char* data, qint64 n) -> Status {
+        const GameItem& listed = game.items[size_t(item)];
+        if (n > listed.size - produced)
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(listed.entry));
+        produced += n;
+        return visitor.data(data, n);
+    };
+    const auto end = [&]() -> Status {
+        const GameItem& listed = game.items[size_t(item)];
+        if (produced != listed.size)
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 is damaged in %2.").arg(listed.entry, archiveName),
+                         QStringLiteral("%1 of %2 bytes").arg(produced).arg(listed.size));
+        done[size_t(item)] = true;
+        item = -1;
+        FW_TRY(visitor.end());
+        // At least every 100 files, however small they are.
+        if ((++files % 64) == 0 && !token.checkpoint())
+            return Error::cancelled();
+        return success();
+    };
+
+    if (game.zip) {
+        // Any order: the caller's.
+        zip::Reader r;
+        FW_TRY(r.open(game.archive));
+        for (const int i : wanted) {
+            const GameItem& it = game.items[size_t(i)];
+            if (it.source < 0 || size_t(it.source) >= r.entries().size() || r.entries()[size_t(it.source)].name != it.entry)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 changed while the image was being built.").arg(archiveName));
+            const zip::Entry& e = r.entries()[size_t(it.source)];
+            if (qint64(e.uncompressedSize) != it.size)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 changed while the image was being built.").arg(archiveName));
+            FW_TRY(begin(i));
+            // The reader checks the CRC-32 and the size at the end of the entry.
+            FW_TRY(r.read(e, [&](const QByteArray& chunk) { return feed(chunk.constData(), chunk.size()); }, token));
+            FW_TRY(end());
+            if (!token.checkpoint())
+                return Error::cancelled();
+        }
+    } else {
+        if (!game.listing)
+            return Error(ErrorCode::Internal, QStringLiteral("The archive's list of files is missing."));
+        QHash<QString, int> byEntry;
+        for (size_t i = 0; i < game.items.size(); ++i)
+            if (!game.items[i].isDir)
+                byEntry.insert(game.items[i].entry, int(i));
+        ArchiveVisitor v;
+        v.begin = [&](const ArchiveEntry& listed, const QDateTime&) -> Result<bool> {
+            const auto it = byEntry.constFind(listed.name);
+            if (it == byEntry.cend() || !want[size_t(*it)])
+                return false;
+            FW_TRY(begin(*it));
+            return true;
+        };
+        v.data = feed;
+        v.end = end;
+        FW_TRY(visitArchive(*game.listing, game.rootPrefix, v, token));
+    }
+    for (const int i : wanted)
+        if (!done[size_t(i)])
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 does not match its own list of files (%2 is missing).")
+                                                     .arg(archiveName, game.items[size_t(i)].path));
+    return success();
+}
+
 Result<StreamStats> streamGameInto(const GameListing& game, const std::vector<Placement>& placements, const QString& image,
                                    qint64 bufferBytes, const CancellationToken& token, ProgressReporter* progress)
 {
@@ -167,21 +264,31 @@ Result<StreamStats> streamGameInto(const GameListing& game, const std::vector<Pl
     ImageWriter writer(out, bufferBytes);
     StreamStats stats;
     stats.digests.assign(game.items.size(), 0);
-    std::vector<bool> done(game.items.size(), false);
-    const QString archiveName = QFileInfo(game.archive).fileName();
     Current cur;
 
-    const auto begin = [&](int item) {
+    // A ZIP, which can be read in any order, is read in the image's, so the
+    // image is written front to back; a 7z or RAR in its own.
+    std::vector<int> order;
+    for (size_t i = 0; i < placements.size(); ++i)
+        if (placements[i].write)
+            order.push_back(int(i));
+    const auto firstByte = [&](int i) {
+        const auto& x = placements[size_t(i)].extents;
+        return x.empty() ? qint64(-1) : x.front().imageOffset;
+    };
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return firstByte(a) < firstByte(b); });
+
+    GameFileVisitor v;
+    v.begin = [&](int item) -> Status {
         cur = Current();
         cur.item = item;
         cur.listed = &game.items[size_t(item)];
         cur.place = &placements[size_t(item)];
         if (progress)
             progress->setCurrentItem(cur.listed->path);
+        return success();
     };
-    const auto feed = [&](const char* data, qint64 n) -> Status {
-        if (n > cur.listed->size - cur.produced)
-            return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(cur.listed->entry));
+    v.data = [&](const char* data, qint64 n) -> Status {
         cur.digest.add(data, n);
         const qint64 total = n;
         while (n > 0) {
@@ -200,69 +307,15 @@ Result<StreamStats> streamGameInto(const GameListing& game, const std::vector<Pl
             progress->advance(total);
         return success();
     };
-    const auto end = [&]() -> Status {
-        if (cur.produced != cur.listed->size)
-            return Error(ErrorCode::CorruptData, QStringLiteral("%1 is damaged in %2.").arg(cur.listed->entry, archiveName),
-                         QStringLiteral("%1 of %2 bytes").arg(cur.produced).arg(cur.listed->size));
+    v.end = [&]() -> Status {
         stats.digests[size_t(cur.item)] = cur.digest.value();
-        done[size_t(cur.item)] = true;
         ++stats.files;
         if (progress)
             progress->advanceFiles(1);
         cur = Current();
         return success();
     };
-
-    if (game.zip) {
-        // Any order: the image's, so the image is written front to back.
-        zip::Reader r;
-        FW_TRY(r.open(game.archive));
-        std::vector<int> order;
-        for (size_t i = 0; i < placements.size(); ++i)
-            if (placements[i].write)
-                order.push_back(int(i));
-        const auto firstByte = [&](int i) {
-            const auto& x = placements[size_t(i)].extents;
-            return x.empty() ? qint64(-1) : x.front().imageOffset;
-        };
-        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return firstByte(a) < firstByte(b); });
-        for (const int i : order) {
-            const GameItem& it = game.items[size_t(i)];
-            if (it.source < 0 || size_t(it.source) >= r.entries().size() || r.entries()[size_t(it.source)].name != it.entry)
-                return Error(ErrorCode::CorruptData, QStringLiteral("%1 changed while the image was being built.").arg(archiveName));
-            const zip::Entry& e = r.entries()[size_t(it.source)];
-            if (qint64(e.uncompressedSize) != it.size)
-                return Error(ErrorCode::CorruptData, QStringLiteral("%1 changed while the image was being built.").arg(archiveName));
-            begin(i);
-            // The reader checks the CRC-32 and the size at the end of the entry.
-            FW_TRY(r.read(e, [&](const QByteArray& chunk) { return feed(chunk.constData(), chunk.size()); }, token));
-            FW_TRY(end());
-            if (!token.checkpoint())
-                return Error::cancelled();
-        }
-    } else {
-        if (!game.listing)
-            return Error(ErrorCode::Internal, QStringLiteral("The archive's list of files is missing."));
-        QHash<QString, int> byEntry;
-        for (size_t i = 0; i < game.items.size(); ++i)
-            if (!game.items[i].isDir)
-                byEntry.insert(game.items[i].entry, int(i));
-        ArchiveVisitor v;
-        v.begin = [&](const ArchiveEntry& listed, const QDateTime&) -> Result<bool> {
-            const auto it = byEntry.constFind(listed.name);
-            if (it == byEntry.cend() || !placements[size_t(*it)].write)
-                return false;
-            begin(*it);
-            return true;
-        };
-        v.data = feed;
-        v.end = end;
-        FW_TRY(visitArchive(*game.listing, game.rootPrefix, v, token));
-    }
-    for (size_t i = 0; i < placements.size(); ++i)
-        if (placements[i].write && !done[i])
-            return Error(ErrorCode::CorruptData, QStringLiteral("%1 does not match its own list of files (%2 is missing).")
-                                                     .arg(archiveName, game.items[i].path));
+    FW_TRY(visitGameFiles(game, order, v, token));
     FW_TRY(writer.flush());
     if (!out.flush())
         return Error(ErrorCode::IoError, QStringLiteral("Could not write the image."), out.errorString());

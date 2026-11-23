@@ -332,6 +332,11 @@ bool isZipSource(const QString& path)
     return isArchiveSource(path);
 }
 
+bool isZipFormatArchive(const QString& path)
+{
+    return isArchiveSource(path) && !readWithLibarchive(path);
+}
+
 Result<ArchiveGame> inspectArchive(const QString& path, const CancellationToken& token)
 {
     if (readWithLibarchive(path)) {

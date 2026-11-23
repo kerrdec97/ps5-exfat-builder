@@ -9,6 +9,8 @@
 
 #include "engines/pfs/AmprIndex.h"
 #include "core/FolderAccess.h"
+#include "core/Zip.h"
+#include "engines/pfs/PfsIo.h"
 #include "engines/pfs/PfsFormat.h"
 
 #include <QDateTime>
@@ -18,6 +20,8 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <functional>
+#include <map>
 #include <set>
 
 namespace fw::pfs {
@@ -98,26 +102,33 @@ struct RawFile {
     QString abs;
     qint64 size = 0;
     qint64 mtime = 0;
+    int archiveItem = -1; // planArchive(): the item in GameListing::items
 };
 
-struct Walker {
-    const CancellationToken& token;
-    std::vector<Exclude> excludes;
+// What a walk of the source found, before the plan is made of it.
+struct Walked {
     std::vector<RawFile> files;
     QStringList emptyDirs; // relative paths of folders with nothing included
     QStringList nonAscii;
-    std::set<QString> visited; // canonical paths (symlink loops)
     int excludedFiles = 0;
     int excludedFolders = 0;
     QStringList excludedSamples;
-    qint64 seen = 0;
-    std::set<QString> ancestors; // identities of the folders being walked (junction loops)
 
     void noteExcluded(const QString& rel)
     {
         if (excludedSamples.size() < 10)
             excludedSamples << rel;
     }
+};
+
+struct Walker : Walked {
+    Walker(const CancellationToken& t, std::vector<Exclude> ex) : token(t), excludes(std::move(ex)) {}
+
+    const CancellationToken& token;
+    std::vector<Exclude> excludes;
+    std::set<QString> visited; // canonical paths (symlink loops)
+    qint64 seen = 0;
+    std::set<QString> ancestors; // identities of the folders being walked (junction loops)
 
     Status walk(const QString& absDir, const QString& relDir)
     {
@@ -179,6 +190,76 @@ struct Walker {
     }
 };
 
+// The walk of Walker over the game an archive lists: the folder the game
+// unpacks to holds exactly these files and folders (links are never
+// unpacked), in the same folders, so the same rules give the same result.
+struct ArchiveWalker : Walked {
+    ArchiveWalker(const archive::GameListing& g, const CancellationToken& t, std::vector<Exclude> ex, qint64 time)
+        : game(g), token(t), excludes(std::move(ex)), noTime(time)
+    {
+        for (size_t i = 0; i < game.items.size(); ++i) {
+            const QString& p = game.items[i].path;
+            const qsizetype slash = p.lastIndexOf(u'/');
+            children[slash < 0 ? QString() : p.left(slash).toLower()].push_back(int(i));
+        }
+        // A folder's entries in name order, as a folder lists them.
+        for (auto& [dir, list] : children)
+            std::sort(list.begin(), list.end(), [&](int a, int b) { return nameOf(a) < nameOf(b); });
+    }
+
+    QString nameOf(int i) const { return game.items[size_t(i)].path.section(u'/', -1); }
+
+    Status walk(const QString& relDir)
+    {
+        int included = 0;
+        const auto it = children.find(relDir.toLower());
+        if (it != children.end()) {
+            for (const int i : it->second) {
+                if ((++seen & 0xFF) == 0 && !token.checkpoint())
+                    return Error::cancelled();
+                const archive::GameItem& item = game.items[size_t(i)];
+                const QString name = nameOf(i);
+                const QString& rel = item.path;
+                if (isExcluded(excludes, rel, name)) {
+                    if (item.isDir) {
+                        ++excludedFolders;
+                        noteExcluded(rel + u'/');
+                    } else {
+                        ++excludedFiles;
+                        noteExcluded(rel);
+                    }
+                    continue;
+                }
+                ++included;
+                if (item.isDir) {
+                    FW_TRY(walk(rel));
+                    continue;
+                }
+                if (!isAscii(rel)) {
+                    nonAscii << rel;
+                    continue;
+                }
+                RawFile f;
+                f.rel = rel;
+                f.size = item.size;
+                f.mtime = item.modified.isValid() ? item.modified.toSecsSinceEpoch() : noTime;
+                f.archiveItem = i;
+                files.push_back(std::move(f));
+            }
+        }
+        if (included == 0)
+            emptyDirs << relDir;
+        return success();
+    }
+
+    const archive::GameListing& game;
+    const CancellationToken& token;
+    std::vector<Exclude> excludes;
+    qint64 noTime = 0;
+    std::map<QString, std::vector<int>> children; // folder (lower case) -> items in it
+    qint64 seen = 0;
+};
+
 bool samePath(const QByteArray& a, const char* b)
 {
 #ifdef Q_OS_WIN
@@ -188,18 +269,13 @@ bool samePath(const QByteArray& a, const char* b)
 #endif
 }
 
-} // namespace
+// The dump's own ampr_emu.index (the plan's entry for it), read when the
+// AMPR decision needs its bytes.
+using IndexReader = std::function<Result<QByteArray>(const SourceFile& existing)>;
 
-Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, const CancellationToken& token)
+Result<SourcePlan> finishPlan(const QString& root, const QString& shownRoot, Walked w, const PlanOptions& options,
+                              const IndexReader& readIndex)
 {
-    const QFileInfo rootInfo(root);
-    if (!rootInfo.exists() || !rootInfo.isDir())
-        return Error(ErrorCode::NotFound,
-                     QStringLiteral("The folder %1 does not exist.").arg(QDir::toNativeSeparators(root)));
-
-    Walker w{token, compileExcludes(options.excludes), {}, {}, {}, {}, 0, 0, {}, 0};
-    FW_TRY(w.walk(rootInfo.absoluteFilePath(), QString()));
-
     if (!w.nonAscii.isEmpty()) {
         QStringList shown = w.nonAscii.mid(0, 8);
         for (QString& s : shown)
@@ -213,10 +289,10 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
     }
     if (w.files.empty())
         return Error(ErrorCode::InvalidArgument,
-                     QStringLiteral("%1 contains no files to pack.").arg(QDir::toNativeSeparators(root)));
+                     QStringLiteral("%1 contains no files to pack.").arg(shownRoot));
 
     SourcePlan plan;
-    plan.root = rootInfo.absoluteFilePath();
+    plan.root = root;
     plan.excludedFiles = w.excludedFiles;
     plan.excludedFolders = w.excludedFolders;
     plan.excludedSamples = w.excludedSamples;
@@ -227,6 +303,7 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
         f.absPath = r.abs;
         f.size = r.size;
         f.mtime = r.mtime;
+        f.archiveItem = r.archiveItem;
         plan.files.push_back(std::move(f));
     }
 
@@ -285,13 +362,7 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
             leftOut = rows.skippedRuntime;
             return buildAmprIndex(rows.rows);
         };
-        const auto dumpIndex = [&]() -> Result<QByteArray> {
-            QFile f(existing->absPath);
-            if (!f.open(QIODevice::ReadOnly))
-                return Error(ErrorCode::IoError, QStringLiteral("Could not read %1.").arg(QDir::toNativeSeparators(existing->absPath)),
-                             f.errorString());
-            return f.read(existing->size + 1);
-        };
+        const auto dumpIndex = [&]() -> Result<QByteArray> { return readIndex(*existing); };
         AmprIndexDecision decision = decideAmprIndex(options.ampr, state, fresh, dumpIndex);
         plan.amprAction = decision.action;
         if (amprActionChangesImage(decision.action)) {
@@ -322,6 +393,49 @@ Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, c
 
     for (const SourceFile& f : plan.files)
         plan.totalBytes += f.size;
+    return plan;
+}
+
+} // namespace
+
+Result<SourcePlan> planFolder(const QString& root, const PlanOptions& options, const CancellationToken& token)
+{
+    const QFileInfo rootInfo(root);
+    if (!rootInfo.exists() || !rootInfo.isDir())
+        return Error(ErrorCode::NotFound,
+                     QStringLiteral("The folder %1 does not exist.").arg(QDir::toNativeSeparators(root)));
+
+    Walker w(token, compileExcludes(options.excludes));
+    FW_TRY(w.walk(rootInfo.absoluteFilePath(), QString()));
+    return finishPlan(rootInfo.absoluteFilePath(), QDir::toNativeSeparators(root), std::move(w), options,
+                      [](const SourceFile& existing) -> Result<QByteArray> {
+                          QFile f(existing.absPath);
+                          if (!f.open(QIODevice::ReadOnly))
+                              return Error(ErrorCode::IoError,
+                                           QStringLiteral("Could not read %1.").arg(QDir::toNativeSeparators(existing.absPath)),
+                                           f.errorString());
+                          return f.read(existing.size + 1);
+                      });
+}
+
+Result<SourcePlan> planArchive(const archive::GameListing& game, const PlanOptions& options, const CancellationToken& token)
+{
+    ArchiveWalker w(game, token, compileExcludes(options.excludes), options.time);
+    FW_TRY(w.walk(QString()));
+    FW_TRY_ASSIGN(SourcePlan plan, finishPlan(game.archive, QFileInfo(game.archive).fileName(), std::move(w), options,
+                                              [&game, &token](const SourceFile& existing) -> Result<QByteArray> {
+                                                  // In a 7z or RAR archive what is stored before it is decoded too.
+                                                  return archive::readGameFile(game, QString::fromLatin1(existing.relPath),
+                                                                               existing.size + 1, token);
+                                              }));
+    auto files = std::make_shared<ArchiveFiles>();
+    files->game = game;
+    if (game.zip) {
+        zip::Reader r;
+        FW_TRY(r.open(game.archive));
+        files->zipEntries = r.entries();
+    }
+    plan.archive = std::move(files);
     return plan;
 }
 

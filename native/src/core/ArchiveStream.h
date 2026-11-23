@@ -29,6 +29,7 @@
 
 #include <QString>
 
+#include <functional>
 #include <vector>
 
 namespace fw::archive {
@@ -70,6 +71,22 @@ struct StreamStats {
     qint64 elapsedMs = 0;
 };
 
+// One pass through the game's files, for a build that does something else
+// with the bytes than writing them into an image (the zstd packer, GamePack.h).
+// `wanted` lists items of game.items (files), each once; a ZIP is read in that
+// order, a 7z or RAR in the order it stores them. Every wanted item is
+// delivered exactly once: begin(item), its bytes in order through data(), then
+// end(). The checks are streamGameInto()'s: checksums verified while decoded,
+// an entry larger or smaller than listed, missing, unlisted or listed twice
+// fails the pass (CorruptData); items not wanted are passed over.
+struct GameFileVisitor {
+    std::function<Status(int item)> begin;
+    std::function<Status(const char* data, qint64 size)> data;
+    std::function<Status()> end;
+};
+Status visitGameFiles(const GameListing& game, const std::vector<int>& wanted, const GameFileVisitor& visitor,
+                      const CancellationToken& token);
+
 // Writes the game's files into `image`, an existing file that already has its
 // full length (the builder's metadata pass made it). Placements are indexed
 // like game.items. Runs of zeros of 1 MiB or more are left as they are (the
@@ -81,6 +98,12 @@ Result<StreamStats> streamGameInto(const GameListing& game, const std::vector<Pl
 // What a build log says about a streamed archive: "Building straight from
 // Game.7z (one pass, nothing is unpacked to disk)".
 QString streamingLogLine(const QString& archive);
+// What the log of a build with zstd packs says (packGameFromArchive): from a
+// ZIP nothing is written but the packs and the loose files; from a 7z or RAR
+// (`zip` false) the packs' compressed chunks wait in the job's temporary
+// folder until the packs are written in their own order. Starts like
+// streamingLogLine().
+QString packingLogLine(const QString& archive, bool zip);
 // What it says when the archive is unpacked first, and why.
 QString unpackFirstLogLine(const QString& archive, const QString& why);
 

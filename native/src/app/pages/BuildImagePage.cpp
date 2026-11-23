@@ -622,6 +622,8 @@ void BuildImagePage::buildFormatCard()
         if (!m_nameEdited)
             renderFileName();
         updateOutput();
+        if (m_sourceMsg && sourceKind() == QLatin1String("zip"))
+            refreshSourceState(); // an .ffpfsc from a 7z or RAR is unpacked first, an .ffpfs is not
     });
 
     // FPKG: the user's own Sony Publishing Tools, one compact row.
@@ -1674,6 +1676,45 @@ void BuildImagePage::onSummary(const GameSummary& s)
     emit statusContextChanged();
 }
 
+// What the build does with an archived dump (#37), for the note under the
+// source. It streams wherever the job does: exFAT and FFPKG, an uncompressed
+// .ffpfs (files stored raw) from any archive, an .ffpfsc from a ZIP; with zstd
+// packs the game is packed in one pass and only the packs (and the loose
+// files) are written, plus, from a 7z or RAR, the packs' data in the
+// temporary folder until the packs are laid out. FPKG, an .ffpfsc from a 7z
+// or RAR and per-file PFS compression unpack it first.
+QString BuildImagePage::archiveNote() const
+{
+    const GameSummary& s = m_summary;
+    const QString f = format();
+    const QString t = tile();
+    const FormatOptions* fo = current();
+    const bool zip = archive::isZipFormatArchive(m_sourcePath);
+    const QString unpacks = FW_TR("The archive is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
+                                .arg(formatBytes(s.bytes));
+    if (t == kFormatFpkg)
+        return unpacks;
+    if (t == kFormatZstdFolder)
+        return zip ? FW_TR("The packed folder is made straight from the archive: nothing is unpacked to disk.")
+                   : FW_TR("The packed folder is made straight from the archive: nothing is unpacked, but a 7z or RAR gives its "
+                           "files in its own order, so their packed data waits in the temporary folder first (at most %1).")
+                         .arg(formatBytes(s.bytes));
+    const bool zstd = f == jobs::kFormatZstdImage || (fo && fo->panel->effectiveValue(ampr::keys::kZstdPack).toBool());
+    if (zstd)
+        return zip ? FW_TR("Nothing is unpacked: the game is packed straight from the archive, and only the zstd packs and "
+                           "the files kept loose are written to disk before the image is built from them (at most %1).")
+                         .arg(formatBytes(s.bytes))
+                   : FW_TR("Nothing is unpacked: the game is packed straight from the archive, and only the zstd packs and "
+                           "the files kept loose are written to disk before the image is built from them. A 7z or RAR "
+                           "gives its files in its own order, so their packed data waits in the temporary folder first "
+                           "(at most %1 each).")
+                         .arg(formatBytes(s.bytes));
+    const bool streams = f == jobs::kFormatExfat || f == jobs::kFormatFfpkg
+                         || (f == jobs::kFormatFfpfs && !(fo && fo->panel->effectiveValue(pfs::keys::kCompressFiles).toBool()))
+                         || (f == jobs::kFormatFfpfsc && zip);
+    return streams ? FW_TR("The image is built straight from the archive: nothing is unpacked to disk.") : unpacks;
+}
+
 void BuildImagePage::refreshSourceState()
 {
     const GameSummary& s = m_summary;
@@ -1727,16 +1768,7 @@ void BuildImagePage::refreshSourceState()
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Warn));
         } else if (kind == QLatin1String("zip")) {
             m_stripTile->setTone(Tone::Ok);
-            // exFAT and FFPKG are built straight from the archive (#37); a
-            // build with zstd packs, PFS and FPKG need the files on disk first.
-            const QString f = format();
-            const FormatOptions* fo = current();
-            const bool streams = (f == jobs::kFormatExfat || f == jobs::kFormatFfpkg) && fo
-                                 && !fo->panel->effectiveValue(ampr::keys::kZstdPack).toBool();
-            m_sourceMsg->set(streams ? FW_TR("The image is built straight from the archive: nothing is unpacked to disk.")
-                                     : FW_TR("The archive is unpacked to a temporary folder when the build starts (it needs %1 of free space there).")
-                                           .arg(formatBytes(s.bytes)),
-                             Tone::Neutral);
+            m_sourceMsg->set(archiveNote(), Tone::Neutral);
             m_sourceBadge->set(FW_TR("Ready"), Tone::Ok);
             m_sourceBadge->setIconName(defaultBadgeIcon(Tone::Ok));
         } else if (file && !isFpkg()) {

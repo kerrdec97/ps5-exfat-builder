@@ -297,7 +297,7 @@ into the dump).
 
 | Kind | Parameters | Phases |
 |---|---|---|
-| `image.pfs.build` | `source` (folder, image file, or an archived dump `.zip` / `.7z` / `.rar`, unpacked to the job's temp folder first: a PFS image is written front to back and an `.ffpfsc` is compressed block by block as it goes, so the build needs the files in the image's order, not the archive's; the log says so; exFAT and FFPKG builds stream instead, `EXFAT.md`), `output`, `format` (`ffpfsc` \| `ffpfs`; default from the extension, `.ffpfs` → folder image), `replaceExisting` (false), `timestamp` (seconds; default now), `title`, `findGameRoot` (true), `innerName` (file source: its plain ASCII name inside the container; default the file's own name) | Scanning → Compressing and writing → Verifying |
+| `image.pfs.build` | `source` (folder, image file, or an archived dump `.zip` / `.7z` / `.rar`: an `.ffpfs` with files stored raw is built straight from any of them and an `.ffpfsc` straight from a ZIP, with no copy of the game on disk; an `.ffpfsc` from a 7z or RAR and an `.ffpfs` with per-file compression unpack it to the job's temp folder first; see [Building from an archive](#building-from-an-archive-github-37); the log says which), `output`, `format` (`ffpfsc` \| `ffpfs`; default from the extension, `.ffpfs` → folder image), `replaceExisting` (false), `timestamp` (seconds; default now), `title`, `findGameRoot` (true), `innerName` (file source: its plain ASCII name inside the container; default the file's own name) | Scanning → Compressing and writing → Verifying |
 | `image.pfs.verify` | `image`, `source` (folder or file, optional), `depth` (`full` \| `structure`; default full with a source, structure without), `findGameRoot` (true), `innerName` (as for the build) | Verifying |
 | `image.pfs.extract` | `image`, `output` (folder), `deep` (true: unpack the nested `pfs_image.dat`, MkPFS `unpack --deep`), `overwrite` (false) | Extracting |
 
@@ -340,6 +340,61 @@ deleted then. `pfs.deleteSourceAfterConvert` deletes an image source only after
 **full** verification passed; folders are never deleted. Outcome details carry
 the statistics (files, compressed files, source/stored/image bytes, MB/s,
 threads, timestamp).
+
+### Building from an archive (GitHub #37)
+
+An archived dump is planned from the archive's list alone: `planArchive()`
+gives the plan `planFolder()` makes of the game unpacked to a folder
+(`unpackArchiveSource`): the same walk (exclusions, the ASCII rule, empty
+folders and their `.pfskeep` markers), the same order and the same AMPR
+index decision. A file keeps the time the archive lists (the build's time
+when it lists none, where unpacking would give it the time it was
+unpacked); the dump's own `ampr_emu.index` is read out of the archive only
+when the decision needs its bytes (in a solid 7z or RAR that decodes what is
+stored before it). Links are left out, as unpacking leaves them out.
+
+* **`.ffpfs`, files stored raw (the default), from a ZIP, 7z or RAR:**
+  `writeFolderImageFromArchive()` lays the image out as `writeImage()` does
+  for that plan, writes everything but the archive's files (header, inode
+  table, super root, FPT, collision resolver, directories, generated files)
+  at the offsets of the folder image, sets the image's length, and then one
+  pass through the archive (`archive::streamGameInto`, as exFAT) writes each
+  file into its blocks in the archive's order (a ZIP in the image's). The
+  bytes not written read as zeros, which is what the format pads with. No
+  hash or signature covers the blocks (unsigned images only: see the
+  header's 0x368 marker), so there is nothing to compute in a second pass.
+  Verification compares each file read back from the image with the digest
+  taken while it was written (`SourceFile::hasDigest`; full mode) and
+  checks that the padding after it is zero.
+* **`.ffpfsc` from a ZIP:** the nested folder image is compressed front to
+  back as for a folder; its files are read out of the ZIP in the image's
+  order (`zip::EntryReader`, decoded as they are read, the CRC-32 checked
+  once a file's last byte is read). A container that does not shrink is
+  written raw over the attempt, as Lazy does, by reading the ZIP a second
+  time. Verification reads each file out of the ZIP again and compares it
+  byte for byte, as with a folder.
+* **Unpacked first:** an `.ffpfsc` from a 7z or RAR (the nested image is
+  compressed front to back, and a solid archive gives its files only in its
+  own order), and an `.ffpfs` with per-file compression (a file's place in
+  the image depends on how the files before it compressed). The log says
+  so (`unpackFirstLogLine`).
+
+Every entry's checksum is verified while it is decoded; an entry that is
+damaged, larger or smaller than listed, missing or listed twice fails the
+job and removes the `.fw.part`; a cancel does too. The image is byte for
+byte the image the same build makes of the unpacked folder (`tst_archive_stream_more`:
+ZIP stored and deflated, solid 7z LZMA2, stored and PPMd, the RAR 4 and RAR 5
+samples of libarchive, contents and game-folder archives, exclusions, no
+markers, 16 KiB blocks, archive order unlike image order). The archive is
+never deleted (`pfs.deleteSourceAfterConvert` deletes only an image source).
+
+Not done: an `.ffpfsc` straight from a 7z or RAR. A correct way exists: each
+64 KiB block of the nested image is compressed on its own, so the blocks
+could be compressed in the archive's order into a spool in the temporary
+folder (about the compressed size) and the container written from it in the
+image's order; with PFS blocks under 64 KiB a compressed block can span files
+that arrive far apart, which needs those blocks held until complete. It is
+not implemented; such a build unpacks first.
 
 ### Verification
 
@@ -563,6 +618,7 @@ threaded (30 vs 6 MB/s); level 9 is the legacy default.
 | `tst_pfs_hostile` | crafted images: separator / NUL / dot entry names → `CorruptData` and nothing extracted; names a drive cannot store renamed on extraction and reported, nothing written outside the folder; size without blocks and size beyond the blocks → `CorruptData` (verification and extraction fail); a PFSC header declaring a 16 GiB block table in a small file is refused without allocating it; the path-safety helpers |
 | `tst_pfs_pipeline` | the read-ahead pipeline: a source cut short after planning is an `IoError` and a cancel from the progress callback stops the build, with 1 and 4 threads, folder image and container; repeated builds with 1, 2, 3, 8 and 16 threads give the same bytes |
 | `tst_pfs_benchmark` | MB/s native (1 and N threads) vs Lazy_MkPFS on the same input; outputs identical; then extraction (decompression) and full verification of the image just built |
+| `tst_archive_stream_more` (integration) | `.ffpfs` from ZIP, 7z and RAR and `.ffpfsc` from ZIP byte for byte the unpacked folder's image; the jobs stream or unpack first as documented above, with no game-sized data in the temp folder when they stream; damaged entries, a size unlike the list, a cancel in the pass; the digest check finding a changed byte |
 
 The benchmark honours `FW_PFS_BENCH_MIB`, `FW_PFS_BENCH_LEVEL`, `FW_PFS_BENCH_REPEAT`,
 `FW_PFS_BENCH_SINGLE=0` (no one-thread build) and the Performance settings

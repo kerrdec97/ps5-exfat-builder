@@ -717,6 +717,157 @@ Status Reader::read(const Entry& entry, const std::function<Status(const QByteAr
     return success();
 }
 
+// ---- EntryReader ----------------------------------------------------------------
+
+struct EntryReader::Impl {
+    QString path;
+    Entry entry;
+    QFile f;
+    z_stream zs{};
+    bool inflating = false;
+    bool zActive = false;
+    bool streamEnd = false;
+    bool checked = false;
+    quint64 remaining = 0; // compressed bytes not read yet
+    quint64 produced = 0;
+    quint32 crc = 0;
+    QByteArray in;
+
+    ~Impl()
+    {
+        if (zActive)
+            inflateEnd(&zs);
+    }
+    Error damaged() const { return Error(ErrorCode::CorruptData, QStringLiteral("%1 is damaged in the archive.").arg(entry.name)); }
+    Error truncated() const { return Error(ErrorCode::CorruptData, QStringLiteral("%1 is truncated in the archive.").arg(entry.name)); }
+    Error larger() const { return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(entry.name)); }
+
+    // More compressed input when the decoder has used up what it had.
+    Status refill()
+    {
+        if (zs.avail_in > 0 || remaining == 0)
+            return success();
+        const qint64 want = qint64(std::min<quint64>(remaining, quint64(kChunk)));
+        in.resize(qsizetype(want));
+        if (f.read(in.data(), want) != want)
+            return truncated();
+        remaining -= quint64(want);
+        zs.next_in = reinterpret_cast<Bytef*>(in.data());
+        zs.avail_in = uInt(want);
+        return success();
+    }
+
+    // Inflates into [dst, dst + cap); returns the bytes made.
+    Result<qint64> inflateInto(char* dst, qint64 cap)
+    {
+        zs.next_out = reinterpret_cast<Bytef*>(dst);
+        zs.avail_out = uInt(cap);
+        while (zs.avail_out > 0 && !streamEnd) {
+            FW_TRY(refill());
+            const uInt before = zs.avail_out;
+            const int rc = inflate(&zs, Z_NO_FLUSH);
+            if (rc == Z_STREAM_END)
+                streamEnd = true;
+            else if (rc != Z_OK && !(rc == Z_BUF_ERROR && zs.avail_in == 0))
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 is damaged in the archive.").arg(entry.name),
+                             QStringLiteral("inflate %1").arg(rc));
+            if (!streamEnd && zs.avail_in == 0 && remaining == 0 && zs.avail_out == before)
+                return truncated(); // input exhausted without the end of the stream
+        }
+        return qint64(cap) - qint64(zs.avail_out);
+    }
+
+    // After the last byte: nothing more in the stream, and the checksum.
+    Status check()
+    {
+        if (inflating && !streamEnd) {
+            char extra = 0;
+            FW_TRY_ASSIGN(const qint64 n, inflateInto(&extra, 1));
+            if (n > 0)
+                return larger();
+            if (!streamEnd)
+                return truncated();
+        }
+        if (!inflating && remaining != 0)
+            return larger();
+        if (produced != entry.uncompressedSize || crc != entry.crc32)
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 failed its checksum in the archive.").arg(entry.name),
+                         QStringLiteral("crc %1/%2 size %3/%4").arg(crc, 8, 16).arg(entry.crc32, 8, 16).arg(produced).arg(entry.uncompressedSize));
+        checked = true;
+        return success();
+    }
+};
+
+EntryReader::EntryReader() = default;
+EntryReader::~EntryReader() = default;
+
+Status EntryReader::open(const QString& zipPath, const Entry& entry)
+{
+    d = std::make_unique<Impl>();
+    d->path = zipPath;
+    d->entry = entry;
+    if (entry.encrypted)
+        return Error(ErrorCode::Unsupported,
+                     QStringLiteral("%1 is password-protected in %2. Unpack the archive with its password first.")
+                         .arg(entry.name, QFileInfo(zipPath).fileName()));
+    if (entry.method != Method::Store && entry.method != Method::Deflate)
+        return Error(ErrorCode::Unsupported, QStringLiteral("%1 uses an unsupported compression method.").arg(entry.name));
+    d->f.setFileName(toLongPath(zipPath));
+    if (!d->f.open(QIODevice::ReadOnly) || !d->f.seek(qint64(entry.localHeaderOffset)))
+        return ioError(QStringLiteral("Could not read %1.").arg(QFileInfo(zipPath).fileName()), d->f);
+    const QByteArray lh = d->f.read(30);
+    if (lh.size() < 30 || get32(lh.constData()) != kLocalSig)
+        return d->damaged();
+    const qint64 dataStart = qint64(entry.localHeaderOffset) + 30 + get16(lh.constData() + 26) + get16(lh.constData() + 28);
+    if (!d->f.seek(dataStart))
+        return d->damaged();
+    d->remaining = entry.compressedSize;
+    d->inflating = entry.method == Method::Deflate;
+    if (d->inflating) {
+        if (inflateInit2(&d->zs, -MAX_WBITS) != Z_OK)
+            return Error(ErrorCode::Internal, QStringLiteral("Decompression could not start."));
+        d->zActive = true;
+    }
+    return success();
+}
+
+Result<qint64> EntryReader::read(char* dst, qint64 max)
+{
+    if (!d)
+        return Error(ErrorCode::Internal, QStringLiteral("No ZIP entry is open."));
+    Impl& m = *d;
+    if (m.produced == m.entry.uncompressedSize) {
+        if (!m.checked)
+            FW_TRY(m.check());
+        return qint64(0);
+    }
+    // Never more than the listed size; zlib takes 32-bit lengths.
+    const qint64 want = qint64(std::min<quint64>({quint64(std::max<qint64>(max, 0)), m.entry.uncompressedSize - m.produced,
+                                                  quint64(1) << 30}));
+    if (want == 0)
+        return qint64(0);
+    qint64 n = 0;
+    if (m.inflating) {
+        FW_TRY_ASSIGN(n, m.inflateInto(dst, want));
+        if (n == 0 && m.streamEnd)
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 failed its checksum in the archive.").arg(m.entry.name),
+                         QStringLiteral("size %1/%2").arg(m.produced).arg(m.entry.uncompressedSize));
+    } else {
+        const qint64 take = qint64(std::min<quint64>(quint64(want), m.remaining));
+        if (take <= 0)
+            return m.truncated();
+        n = m.f.read(dst, take);
+        if (n != take)
+            return m.truncated();
+        m.remaining -= quint64(n);
+    }
+    m.crc = quint32(::crc32(m.crc, reinterpret_cast<const Bytef*>(dst), uInt(n)));
+    m.produced += quint64(n);
+    if (m.produced == m.entry.uncompressedSize)
+        FW_TRY(m.check()); // the checksum as soon as the last byte is read
+    return n;
+}
+
 Result<QByteArray> Reader::readAll(const Entry& entry, qint64 maxBytes)
 {
     // Compared unsigned: a declared size of 2^63 or more must not pass as negative.

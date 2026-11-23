@@ -4,4 +4,7 @@
 if(TARGET tst_build_page)
     target_compile_definitions(tst_build_page PRIVATE FW_FAKE_PUBCMD="$<TARGET_FILE:fw_fake_pubcmd>")
     add_dependencies(tst_build_page fw_fake_pubcmd)
+    # The note under an archived dump (#37) differs for a 7z: the test makes one
+    # with libarchive's writer (never linked into the application).
+    target_link_libraries(tst_build_page PRIVATE fw_libarchive_write)
 endif()
