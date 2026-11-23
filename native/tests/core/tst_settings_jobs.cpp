@@ -1482,8 +1482,8 @@ private slots:
     void afterQueueActionNamesTheSwitchThatLimitsIt()
     {
         fwtest::Registry reg;
-        const SettingDef* then = reg.schema.find(general::keys::kAfterQueueAction);
-        const SettingDef* ok = reg.schema.find(general::keys::kAfterQueueOnlyIfOk);
+        const SettingDef* then = reg.schema->find(general::keys::kAfterQueueAction);
+        const SettingDef* ok = reg.schema->find(general::keys::kAfterQueueOnlyIfOk);
         QVERIFY(then && ok);
         QVERIFY2(then->description.contains(u'"' + ok->label + u'"'), qPrintable(then->description));
         QVERIFY(!then->description.contains(QStringLiteral("the switch below")));
