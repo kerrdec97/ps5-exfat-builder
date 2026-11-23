@@ -9,6 +9,7 @@
 #include "engines/ampr/Runtime.h"
 #include "engines/general/Module.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonObject>
@@ -182,17 +183,29 @@ public:
         const PackSettings ps = readPackSettings(ctx.settings, m_p);
         ctx.progress->beginPhase(0, 0);
         QString src = QFileInfo(source()).absoluteFilePath();
+        // An archived dump (#37) is packed in one pass through it; only a game
+        // that is itself packed in the archive is unpacked first.
+        std::shared_ptr<ArchiveGame> fromArchive;
         if (isZip()) {
-            ctx.log.info(archive::unpackFirstLogLine(
-                src, QStringLiteral("the zstd packer reads the game's files from a folder, in the order it packs them")));
-            FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
-            ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
-            // The unpack was a step of the first stage, which goes on (the
-            // stages and their weights are declared again, as they were).
-            ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
-            ctx.progress->beginPhase(0, 0);
+            FW_TRY_ASSIGN(archive::GameListing listed, archive::listArchiveGame(src, ctx.token));
+            auto game = std::make_shared<ArchiveGame>(std::move(listed), QDateTime::currentSecsSinceEpoch());
+            if (const QString why = archivePackProblem(*game); !why.isEmpty()) {
+                ctx.log.info(archive::unpackFirstLogLine(src, why));
+                FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
+                ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
+                // The unpack was a step of the first stage, which goes on (the
+                // stages and their weights are declared again, as they were).
+                ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
+                ctx.progress->beginPhase(0, 0);
+            } else {
+                ctx.log.info(archive::packingLogLine(src, game->listing().zip));
+                fromArchive = std::move(game);
+            }
         }
-        FW_TRY_ASSIGN(auto files, openFolderGame(src, ctx.token));
+        std::shared_ptr<GameFiles> files = fromArchive;
+        if (!fromArchive) {
+            FW_TRY_ASSIGN(files, openFolderGame(src, ctx.token));
+        }
         PackGameOptions o;
         o.level = ps.level;
         o.threads = ps.threads;
@@ -214,7 +227,8 @@ public:
                          .arg(ps.strategy == PackStrategy::Compatible ? QStringLiteral("compatible: containers, configs and media stay loose")
                                                                       : QStringLiteral("everything except system files"),
                               native(out)));
-        auto r = packGame(files, staged->path(), o, ctx.token, ctx.progress, ctx.log);
+        auto r = fromArchive ? packGameFromArchive(fromArchive, staged->path(), o, ctx.tempDir, ctx.token, ctx.progress, ctx.log)
+                             : packGame(files, staged->path(), o, ctx.token, ctx.progress, ctx.log);
         if (!r.ok())
             return r.takeError();
         const bool checked = ps.verify && !r->verifyCancelled;
