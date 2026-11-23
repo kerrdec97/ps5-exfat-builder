@@ -19,3 +19,9 @@ if(TARGET tst_archive_stream)
     target_link_libraries(tst_archive_stream PRIVATE fw_libarchive_write)
     target_compile_definitions(tst_archive_stream PRIVATE FW_LIBARCHIVE_TEST_DATA="${FW_LIBARCHIVE_TEST_DATA}")
 endif()
+
+# tst_archive_stream_more: the PFS and zstd-pack builds that stream (#37), the same way.
+if(TARGET tst_archive_stream_more)
+    target_link_libraries(tst_archive_stream_more PRIVATE fw_libarchive_write)
+    target_compile_definitions(tst_archive_stream_more PRIVATE FW_LIBARCHIVE_TEST_DATA="${FW_LIBARCHIVE_TEST_DATA}")
+endif()
