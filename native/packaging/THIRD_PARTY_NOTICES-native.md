@@ -62,16 +62,23 @@ game built with zstd packs; it runs on the console, not on the PC.
 
 ## Bundled separate program: PS5 Backport engine
 
-`engines/backport/PS5BackportGUI.exe` is the unmodified release 0.3.4 of
-**PS5 Backport GUI by Deckerr97** (https://github.com/kerrdec97/PS5-Backport-GUI,
-SHA-256 `cf8eaa884f087a78f57ba1ae32cb28231393e622a0626a42ef4f1bd00804cf42`).
+`engines/backport/PS5BackportGUI.exe` is the unmodified testing build
+0.3.5-test4 of **PS5 Backport GUI by Deckerr97**
+(https://github.com/kerrdec97/PS5-Backport-GUI, release `v0.3.5-test4`,
+SHA-256 `68d09ea57cdcea8676d297e01ef2ce55a270184982fbc8dbd1657cf1addde6f4`;
+a build made with `-DFW_BACKPORT_ENGINE_VERSION=0.3.4` carries the release
+0.3.4 instead, SHA-256
+`cf8eaa884f087a78f57ba1ae32cb28231393e622a0626a42ef4f1bd00804cf42`).
 It is a separate program by the same author, distributed under its own terms
-(see that repository's LICENSE.txt, NOTICE.md and THIRD_PARTY_NOTICES.txt),
-and is not covered by the licence of this application. The Backport tab
-starts it as a child process (`--worker job.json`) and exchanges JSON over
-its standard streams; no code is linked. The libraries it carries and their
-provenance are listed in its own notices (for example drakmor's ampr_emu,
-GPL-3.0, redistributed unchanged).
+(see that repository's LICENSE.txt, NOTICE.md and THIRD_PARTY_NOTICES.txt;
+the 0.3.5-test4 release also publishes THIRD_PARTY_NOTICES.txt and
+licenses.zip), and is not covered by the licence of this application. The
+Backport tab starts it as a child process (`--worker job.json`) and exchanges
+JSON over its standard streams; no code is linked. The libraries it carries
+and their provenance are listed in its own notices (for example drakmor's
+ampr_emu, GPL-3.0, redistributed unchanged; 0.3.5-test4 also lists the
+Unicorn CPU emulator, GPL-2.0, and ps5-payload-dev's klogsrv and ftpsrv,
+GPL-3.0).
 
 <!-- public-edition: make-release.ps1 leaves this part out of a private build -->
 No Sony software is included in the application itself. FPKG packages are

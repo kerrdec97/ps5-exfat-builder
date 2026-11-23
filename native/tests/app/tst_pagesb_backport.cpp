@@ -17,13 +17,16 @@
 #include "app/MainWindow.h"
 #include "app/backport/BackportCore.h"
 #include "app/backport/BackportHost.h"
+#include "app/pages/AboutPage.h"
 #include "app/pages/BackportPage.h"
+#include "app/pages/DumpCheckSheet.h"
 #include "app/ui/Sheet.h"
 #include "app/ui/Theme.h"
 #include "app/ui/Widgets.h"
 #include "core/Paths.h"
 #include "support/TestSupport.h"
 
+#include <QAbstractButton>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QDir>
@@ -44,7 +47,10 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <atomic>
+#include <chrono>
 #include <functional>
+#include <thread>
 
 using namespace fw;
 
@@ -134,6 +140,36 @@ class TstPagesbBackport : public QObject {
         return proxy ? qobject_cast<pages::BackportGameModel*>(proxy->sourceModel()) : nullptr;
     }
     int rows() { return model() ? model()->rowCount() : -1; }
+    pages::BackportRow* rowOf(const QString& titleId)
+    {
+        if (!model())
+            return nullptr;
+        for (auto& r : model()->rows())
+            if (r.game.titleId == titleId)
+                return &r;
+        return nullptr;
+    }
+    // Only these games are ticked.
+    void tickOnly(const QStringList& titleIds)
+    {
+        for (auto& r : model()->rows())
+            r.checked = titleIds.contains(r.game.titleId);
+        model()->allChanged();
+    }
+    QComboBox* sdkBox()
+    {
+        for (auto* c : page()->findChildren<QComboBox*>())
+            if (c->accessibleName() == QLatin1String("Target SDK"))
+                return c;
+        return nullptr;
+    }
+    QAbstractButton* offlineSwitch()
+    {
+        for (auto* b : page()->findChildren<QAbstractButton*>())
+            if (b->accessibleName() == QLatin1String("Offline mode (skip PSN sign-in)"))
+                return b;
+        return nullptr;
+    }
     int starts() { return int(readAll(m_startsLog).count('\n')); }
     QPushButton* headerButton(const QString& text)
     {
@@ -594,6 +630,283 @@ private slots:
         o = readJson(m_settingsFile);
         QCOMPARE(o.value(QStringLiteral("output_dir")).toString(), QDir::toNativeSeparators(m_out));
         QCOMPARE(o.value(QStringLiteral("backup_dir")).toString(), QDir::toNativeSeparators(m_bak));
+    }
+
+    // BP-01: the standalone PS5 Backport GUI shares the engine's work folder,
+    // which every job clears. While it runs, no job starts here: not a run, not
+    // a batch tool; started during a run, the next game is not started.
+    void aStandaloneEngineHoldsBackEveryJob()
+    {
+        tickOnly({QStringLiteral("PPSA10001"), QStringLiteral("PPSA10002")});
+        std::atomic_bool foreign{true};
+        bp::setForeignEngineCheckForTests([&foreign] { return foreign.load(); });
+        const auto unhook = qScopeGuard([] { bp::setForeignEngineCheckForTests({}); });
+        const int before = starts();
+        m_sheetsSeen.clear();
+        page()->primaryAction();
+        QTRY_VERIFY_WITH_TIMEOUT(m_sheetsSeen.join(u'\n').contains(QStringLiteral("PS5 Backport GUI is running. Close it, or let it finish, "
+                                                                                 "before starting a backport.")),
+                                 5000);
+        QVERIFY(!page()->isBusy());
+        clickLater(headerButton(QStringLiteral("Switch AMPR / PlayGo\u2026")));
+        QTRY_VERIFY_WITH_TIMEOUT(m_sheetsSeen.join(u'\n').contains(QStringLiteral("before this job.")), 5000);
+        QTest::qWait(300);
+        QCOMPARE(starts(), before);
+        QVERIFY(!page()->isBusy());
+
+        // Not running at the start, started during the first game.
+        foreign = false;
+        QVERIFY(fwtest::writeTextFile(m_root.filePath(QStringLiteral("engine/hold.flag")), "1"));
+        page()->primaryAction();
+        QTRY_COMPARE_WITH_TIMEOUT(starts(), before + 1, 30000);
+        foreign = true;
+        QVERIFY(fwtest::writeTextFile(m_root.filePath(QStringLiteral("engine/go.flag")), "1")); // the first game ends
+        QVERIFY(waitIdle());
+        QTest::qWait(300);
+        QCOMPARE(starts(), before + 1); // the second game was not started
+        QCOMPARE(rowOf(QStringLiteral("PPSA10002"))->status, QStringLiteral("Cancelled"));
+    }
+
+    // BP-03: a Target SDK above a game's own SDK is said in the list and
+    // before the run (the worker refuses it at once); the others still build.
+    void aTargetSdkAboveTheGameIsSaidBeforeTheRun()
+    {
+        const QString folder = m_root.filePath(QStringLiteral("sdk-games/PPSA30001 Sdk Five"));
+        makeGame(folder);
+        QVERIFY(fwtest::writeTextFile(folder + QStringLiteral("/sce_sys/param.json"),
+                                      R"({"titleId":"PPSA30001","contentVersion":"01.000.000","sdkVersion":"0x0500000000000000",)"
+                                      R"("localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Sdk Five"}}})"));
+        page()->navigateWith({{QStringLiteral("folder"), QFileInfo(folder).absolutePath()}});
+        QTRY_COMPARE_WITH_TIMEOUT(rows(), kMany + 4, 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(headerButton(QStringLiteral("Switch AMPR / PlayGo\u2026"))->isEnabled(), 30000);
+        const auto gone = qScopeGuard([this, folder] {
+            sdkBox()->setCurrentIndex(sdkBox()->findData(4));
+            QDir(QFileInfo(folder).absolutePath()).removeRecursively();
+            page()->refresh();
+            QTRY_COMPARE_WITH_TIMEOUT(rows(), kMany + 3, 60000);
+            QTRY_VERIFY_WITH_TIMEOUT(headerButton(QStringLiteral("Switch AMPR / PlayGo\u2026"))->isEnabled(), 30000);
+        });
+        QCOMPARE(rowOf(QStringLiteral("PPSA30001"))->game.sdk, QStringLiteral("5.00"));
+        auto shown = [this] {
+            const int i = model()->indexOfKey(rowOf(QStringLiteral("PPSA30001"))->game.key);
+            return model()->index(i, pages::BackportGameModel::StatusCol).data().toString();
+        };
+        QCOMPARE(shown(), QStringLiteral("Ready"));
+        sdkBox()->setCurrentIndex(sdkBox()->findData(7));
+        QCOMPARE(shown(), QStringLiteral("Needs SDK \u2264 5"));
+        sdkBox()->setCurrentIndex(sdkBox()->findData(5));
+        QCOMPARE(shown(), QStringLiteral("Ready")); // allowed again
+        sdkBox()->setCurrentIndex(sdkBox()->findData(7));
+
+        const int before = starts();
+        tickOnly({QStringLiteral("PPSA30001")});
+        m_sheetsSeen.clear();
+        page()->primaryAction();
+        QTRY_VERIFY_WITH_TIMEOUT(m_sheetsSeen.join(u'\n').contains(QStringLiteral("1 of 1 ticked games cannot be built with Target SDK 7")), 5000);
+        QVERIFY(!page()->isBusy());
+        // With a game it allows: asked whether to build the others ("No" here).
+        tickOnly({QStringLiteral("PPSA30001"), QStringLiteral("PPSA10001")});
+        page()->primaryAction();
+        QTRY_VERIFY_WITH_TIMEOUT(m_sheetsSeen.join(u'\n').contains(QStringLiteral("1 of 2 ticked games cannot be built")), 5000);
+        QVERIFY(m_sheetsSeen.last().contains(QStringLiteral("Build the others?")));
+        QTest::qWait(300);
+        QCOMPARE(starts(), before);
+        QVERIFY(!page()->isBusy());
+    }
+
+    // BP-09: Offline mode (PS5 Backport GUI 0.3.5) reaches the job only when
+    // it is ticked; a job without it is the job of before.
+    void offlineModeReachesTheJobOnlyWhenTicked()
+    {
+        if (!pages::BackportPage::engineHasOfflineMode())
+            QSKIP("the bundled engine is 0.3.4: no Offline mode");
+        QAbstractButton* offline = offlineSwitch();
+        QVERIFY(offline && offline->isVisible());
+        QVERIFY(!offline->isChecked()); // off at every start
+        tickOnly({QStringLiteral("PPSA10001")});
+        for (const bool on : {true, false}) {
+            offline->setChecked(on);
+            const int before = starts();
+            page()->primaryAction();
+            QTRY_COMPARE_WITH_TIMEOUT(starts(), before + 1, 30000);
+            const QJsonObject options = readJson(m_root.filePath(QStringLiteral("engine/last-job.json"))).value(QStringLiteral("options")).toObject();
+            QCOMPARE(options.contains(QStringLiteral("offline_mode")), on);
+            if (on)
+                QVERIFY(options.value(QStringLiteral("offline_mode")).toBool());
+            QVERIFY(cancelRun());
+        }
+    }
+
+    // A5: the destination check before a run counts as busy, and a close
+    // during it (cancelAndWait) leaves the page idle with no worker started.
+    void theDestinationCheckCountsAsBusy()
+    {
+        tickOnly({QStringLiteral("PPSA10001")});
+        auto release = std::make_shared<std::atomic_bool>(false);
+        pages::BackportPage::setPreflightForTests([release](const QString&, const QString&, const QStringList&) {
+            while (!release->load())
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            return bp::Preflight{};
+        });
+        const auto unhook = qScopeGuard([release] {
+            release->store(true);
+            pages::BackportPage::setPreflightForTests({});
+        });
+        const int before = starts();
+        page()->primaryAction();
+        QVERIFY(page()->isBusy()); // checking the destinations
+        QTest::qWait(200);
+        QVERIFY(page()->isBusy());
+        QTimer::singleShot(200, this, [release] { release->store(true); });
+        page()->cancelAndWait(5000);
+        QVERIFY(!page()->isBusy());
+        QTest::qWait(300);
+        QCOMPARE(starts(), before);
+        QVERIFY(headerButton(QStringLiteral("Start Backport")));
+    }
+
+    // F8 (#26): Dump check › Backport… opens the game in the Backport tab,
+    // ticked and selected; for a folder whose applied backport has a backup it
+    // offers "Restore originals…", which asks before anything is restored.
+    void dumpCheckOpensTheGameInTheBackportTab()
+    {
+        tickOnly({});
+        const QString game2 = QDir::toNativeSeparators(QDir(m_games).filePath(QStringLiteral("PPSA10002 Game 2")));
+        const QString game3 = QDir::toNativeSeparators(QDir(m_games).filePath(QStringLiteral("PPSA10003 Game 3")));
+        auto details = [](const QString& folder, const QString& state) {
+            QJsonObject d = pages::DumpCheckSheet::demoDetails();
+            d.insert(QStringLiteral("folder"), folder);
+            QJsonObject facts = d.value(QStringLiteral("facts")).toObject();
+            facts.insert(QStringLiteral("backportState"), state);
+            d.insert(QStringLiteral("facts"), facts);
+            return d;
+        };
+        m_window->navigate(QStringLiteral("library"));
+        {
+            pages::DumpCheckSheet sheet(m_window.get(), details(game2, QStringLiteral("original")), QString(), QStringLiteral("Game 2"), game2);
+            QVERIFY(!sheet.offersRestore());
+            auto* b = sheet.findChild<QPushButton*>(QStringLiteral("dump-check-backport"));
+            QVERIFY(b);
+            QCOMPARE(b->text(), QStringLiteral("Backport\u2026"));
+            connect(&sheet, &pages::DumpCheckSheet::backportRequested, this,
+                    [this, game2] { m_window->navigate(QStringLiteral("backport"), pages::DumpCheckSheet::backportArgs(game2, false)); });
+            b->click();
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(rowOf(QStringLiteral("PPSA10002")) && rowOf(QStringLiteral("PPSA10002"))->checked, 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(table()->currentIndex().isValid()
+                                     && table()->currentIndex().siblingAtColumn(pages::BackportGameModel::PpsaCol).data().toString()
+                                         == QLatin1String("PPSA10002"),
+                                 10000);
+        QVERIFY(!rowOf(QStringLiteral("PPSA10001"))->checked);
+
+        const int before = starts();
+        QString asked;
+        expectSheet(QStringLiteral("Restore"), [&](ui::Sheet* s) {
+            asked = texts(s).join(u'|');
+            sheetButton(s, QStringLiteral("Cancel"))->click();
+        });
+        m_window->navigate(QStringLiteral("library"));
+        {
+            pages::DumpCheckSheet sheet(m_window.get(), details(game3, QStringLiteral("backported")), QString(), QStringLiteral("Game 3"), game3);
+            QVERIFY(sheet.offersRestore()); // the ledger has its apply, with the journal of its backup
+            auto* b = sheet.findChild<QPushButton*>(QStringLiteral("dump-check-backport"));
+            QCOMPARE(b->text(), QStringLiteral("Restore originals\u2026"));
+            connect(&sheet, &pages::DumpCheckSheet::restoreRequested, this,
+                    [this, game3] { m_window->navigate(QStringLiteral("backport"), pages::DumpCheckSheet::backportArgs(game3, true)); });
+            b->click();
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(m_expectMet, 60000);
+        QVERIFY2(asked.contains(QStringLiteral("Restore the original files of")) && asked.contains(game3), qPrintable(asked));
+        QTRY_VERIFY_WITH_TIMEOUT(!openSheet(), 10000);
+        QTest::qWait(300);
+        QCOMPARE(starts(), before); // nothing was restored
+        QVERIFY(!page()->isBusy());
+        QVERIFY(!rowOf(QStringLiteral("PPSA10003"))->checked); // an applied game is not ticked
+        QCOMPARE(table()->currentIndex().siblingAtColumn(pages::BackportGameModel::PpsaCol).data().toString(), QStringLiteral("PPSA10003"));
+    }
+
+    // BP-07 / F3: the pinned engine's version is the one the app names
+    // (About, the engine line), a testing build says so, and the Target SDK
+    // caption says which games need a backport at all.
+    void theEngineNamedIsThePinnedOne()
+    {
+        bool about = false;
+        for (const QStringList& r : pages::AboutPage::thirdPartyComponents())
+            if (r[0] == QStringLiteral("PS5 Backport engine %1 (Deckerr97)").arg(QLatin1String(bp::kEngineVersion)))
+                about = r[1].contains(QStringLiteral("testing build")) == bp::kEngineIsTestingBuild;
+        QVERIFY(about);
+        m_window->navigate(QStringLiteral("backport"));
+        page()->applyDemoState(QStringLiteral("library"));
+        const auto leave = qScopeGuard([this] { page()->clearDemoState(); });
+        QStringList labels;
+        for (auto* l : page()->findChildren<QLabel*>())
+            labels << l->text();
+        const QString all = labels.join(u'\n');
+        QVERIFY2(all.contains(QStringLiteral("PS5 Backport engine %1 by Deckerr97").arg(QLatin1String(bp::kEngineVersion))), qPrintable(all));
+        QVERIFY(all.contains(QLatin1String(bp::kEngineRevision)));
+        QCOMPARE(all.contains(QStringLiteral("(testing build)")), bp::kEngineIsTestingBuild);
+        QVERIFY(all.contains(QStringLiteral("Only games whose Required FW is higher than your console's firmware need a backport.")));
+    }
+
+    // BP-05: a rebuild of the row's own ZIP names the game folder and what the
+    // build left unchanged (0.3.5 rebuilds those too); a chosen ZIP does not.
+    void theSdkRebuildJobNamesTheGameFolder()
+    {
+        pages::BackportRow row;
+        row.game.path = QStringLiteral("D:/Games/PPSA40001 Game");
+        row.game.titleId = QStringLiteral("PPSA40001");
+        row.game.sdk = QStringLiteral("7.00");
+        row.result = QJsonObject{{QStringLiteral("unchanged_not_exported"), QJsonArray{QStringLiteral("sce_module/libA.prx")}},
+                                 {QStringLiteral("source"), QJsonObject{{QStringLiteral("files_read_by_engine"), QJsonObject{{QStringLiteral("eboot.bin"), 1}}}}}};
+        const QJsonObject own = pages::BackportPage::sdkJob(6, QStringLiteral("E:/out/a.zip"), QStringLiteral("E:\\out"), &row);
+        QCOMPARE(own.value(QStringLiteral("cmd")).toString(), QStringLiteral("sdk"));
+        QCOMPARE(own.value(QStringLiteral("pair")).toInt(), 6);
+        QCOMPARE(own.value(QStringLiteral("source_sdk")).toString(), QStringLiteral("7.00"));
+        QCOMPARE(own.value(QStringLiteral("game_dir")).toString(), QDir::toNativeSeparators(row.game.path));
+        QCOMPARE(own.value(QStringLiteral("unchanged")).toArray(), QJsonArray{QStringLiteral("sce_module/libA.prx")});
+        QVERIFY(own.value(QStringLiteral("source_files")).toObject().contains(QStringLiteral("eboot.bin")));
+        const QJsonObject chosen = pages::BackportPage::sdkJob(6, QStringLiteral("E:/out/a.zip"), QString(), nullptr);
+        QVERIFY(!chosen.contains(QStringLiteral("game_dir")) && !chosen.contains(QStringLiteral("unchanged")) && !chosen.contains(QStringLiteral("source_files")));
+        QCOMPARE(chosen.value(QStringLiteral("output_root")).toString(), QDir::toNativeSeparators(QStringLiteral("E:/out")));
+        QCOMPARE(chosen.value(QStringLiteral("source_sdk")).toString(), QString());
+    }
+
+    // BP-06: the result keys PS5 Backport GUI 0.3.5-test4 adds are shown; a
+    // 0.3.4 result adds nothing.
+    void newerEngineResultsAreShown()
+    {
+        QVERIFY(pages::BackportPage::newerEngineDetails(QJsonObject{{QStringLiteral("status"), QStringLiteral("DONE")}}).isEmpty());
+        const QJsonObject r{
+            {QStringLiteral("engine"),
+             QJsonObject{{QStringLiteral("missing_functions"),
+                          QJsonArray{QJsonObject{{QStringLiteral("nid"), QStringLiteral("abc")}, {QStringLiteral("library"), QStringLiteral("libSceNet")},
+                                                 {QStringLiteral("name"), QStringLiteral("sceNetFoo")}, {QStringLiteral("missing_from"), QStringLiteral("4.00")},
+                                                 {QStringLiteral("missing_to"), QStringLiteral("6.50")}},
+                                     QJsonObject{{QStringLiteral("nid"), QStringLiteral("def")}, {QStringLiteral("library"), QStringLiteral("libSceX")},
+                                                 {QStringLiteral("name"), QString()}, {QStringLiteral("missing_from"), QStringLiteral("4.00")},
+                                                 {QStringLiteral("missing_to"), QStringLiteral("4.50")}, {QStringLiteral("unknown_from"), QStringLiteral("5.00")},
+                                                 {QStringLiteral("unknown_until"), QStringLiteral("6.00")}}}}}},
+            {QStringLiteral("offline_mode"), QJsonObject{{QStringLiteral("requested"), true}, {QStringLiteral("applied"), false},
+                                                         {QStringLiteral("note"), QStringLiteral("Offline mode not applied: no check")}}},
+            {QStringLiteral("no_sdk_field_note"), QStringLiteral("2 library files have no SDK field")},
+            {QStringLiteral("sdk_ceiling_note"), QStringLiteral("not checked")},
+            {QStringLiteral("notes"), QStringLiteral("These files were left in place")},
+            {QStringLiteral("leftover_dirs"), QJsonArray{QStringLiteral("E:/out/run1")}}};
+        QHash<QString, QString> got;
+        for (const auto& [label, text] : pages::BackportPage::newerEngineDetails(r))
+            got.insert(label, text);
+        QVERIFY2(got.value(QStringLiteral("Functions without a replacement")).contains(QStringLiteral("sceNetFoo (libSceNet): missing on FW 4.00 to 6.50")),
+                 qPrintable(got.value(QStringLiteral("Functions without a replacement"))));
+        QVERIFY(got.value(QStringLiteral("Functions without a replacement")).contains(QStringLiteral("def (libSceX): not known for FW 5.00 up to 6.00")));
+        QCOMPARE(got.value(QStringLiteral("Offline mode")), QStringLiteral("Offline mode not applied: no check"));
+        QCOMPARE(got.value(QStringLiteral("Libraries without an SDK field")), QStringLiteral("2 library files have no SDK field"));
+        QCOMPARE(got.value(QStringLiteral("Target SDK check")), QStringLiteral("not checked"));
+        QCOMPARE(got.value(QStringLiteral("Left as they are by the restore")), QStringLiteral("These files were left in place"));
+        QCOMPARE(got.value(QStringLiteral("Run folders that could not be removed")), QStringLiteral("E:/out/run1"));
+        // A restore without the engine's sentence: the files it names.
+        const auto files = pages::BackportPage::newerEngineDetails(QJsonObject{{QStringLiteral("left_in_place"), QJsonArray{QStringLiteral("eboot.bin")}}});
+        QCOMPARE(files.size(), 1);
+        QCOMPARE(files.first().second, QStringLiteral("eboot.bin"));
     }
 
     // The question guards the scan locations: it is asked although no game is listed.

@@ -102,6 +102,38 @@ QString idOr(const BackportRow& r, const QString& fallback = QStringLiteral("no 
     return r.game.titleId.isEmpty() ? fallback : r.game.titleId;
 }
 
+BackportPage::PreflightFn& preflightForTests()
+{
+    static BackportPage::PreflightFn fn;
+    return fn;
+}
+
+// Row states that are decided by the folder and the options, not by a run.
+const QString kNeedsSdk = FW_TR_NOOP("Needs SDK ≤ %1");
+const QString kRestoreNeeded = FW_TR_NOOP("Restore needed");
+// The words of PS5 Backport GUI 0.3.5-test4 (gui.py OFFLINE_TIP).
+const QString kOfflineTip =
+    FW_TR_NOOP("Offline mode: the game is told that the network is down, so it should skip the PSN sign-in and start on its "
+               "offline path. It works only where the engine finds the game's own network check; the result of each game "
+               "says whether it was applied, or why not. Proved on one game so far. Online features (multiplayer, account "
+               "sign-in) stay off on every firmware, also with a working connection. It is off again at every start.");
+
+// Backups & support's engine line once the engine is ready. A testing build
+// (the owner's published 0.3.5-test4) says so.
+QString engineLine(const QString& revision)
+{
+    return bp::kEngineIsTestingBuild
+        ? FW_TR("PS5 Backport engine %1 by Deckerr97 (testing build)  ·  backend %2").arg(QLatin1String(bp::kEngineVersion), revision)
+        : FW_TR("PS5 Backport engine %1 by Deckerr97  ·  backend %2").arg(QLatin1String(bp::kEngineVersion), revision);
+}
+
+// The row's state as shown (the %1 of "Needs SDK ≤ %1" filled in).
+QString shownStatus(const BackportRow& row)
+{
+    const QString s = i18n::translate(row.status);
+    return row.status == kNeedsSdk ? s.arg(row.statusArg) : s;
+}
+
 // The Progress card before anything has run: what it will show, not "Idle 0%".
 QString progressPlaceholder() { return FW_TR("Each game's progress appears here once a run starts."); }
 
@@ -268,7 +300,7 @@ public:
             if (w < full) {
                 // Cut the words, keep the percentage.
                 const QFontMetrics fm(font::chip());
-                const QString status = i18n::translate(row->status);
+                const QString status = shownStatus(*row);
                 const QString pct = text.mid(status.size());
                 QString cut = fm.elidedText(status, Qt::ElideRight, w - (full - fm.horizontalAdvance(text)) - fm.horizontalAdvance(pct));
                 // "Patching, signing…", not "Patching, signing …": the "…" joins the last word.
@@ -299,7 +331,7 @@ BackportGameModel::BackportGameModel(QObject* parent) : QAbstractTableModel(pare
 QString BackportGameModel::statusText(const BackportRow& row)
 {
     // The status is also the row's state (compared in English); it is shown translated.
-    const QString status = i18n::translate(row.status);
+    const QString status = shownStatus(row);
     return row.tone == QLatin1String("busy") && row.pct > 0 ? QStringLiteral("%1 %2%").arg(status).arg(row.pct) : status;
 }
 
@@ -320,7 +352,7 @@ int BackportGameModel::statusWidth(const BackportRow& row)
 {
     const bool icon = statusTone(row) != Tone::Neutral;
     // A running game: as if it were at 100 % already.
-    const QString status = i18n::translate(row.status);
+    const QString status = shownStatus(row);
     const QString text = row.tone == QLatin1String("busy") ? QStringLiteral("%1 100%").arg(status) : status;
     return kStatusPadLeft + badgeWidth(text, icon) + kStatusPadRight;
 }
@@ -353,7 +385,7 @@ QVariant BackportGameModel::data(const QModelIndex& index, int role) const
         case PpsaCol: return r.game.titleId;
         case SdkCol: return r.game.sdk;
         case FwCol: return r.game.fw;
-        case StatusCol: return i18n::translate(r.status);
+        case StatusCol: return shownStatus(r);
         default: return {};
         }
     }
@@ -856,13 +888,18 @@ void BackportPage::buildSideColumn(QVBoxLayout* into)
         m_sdk->addItem(FW_TR("SDK %1  \u00b7  loads on FW %1.00+").arg(n), n);
     m_sdk->setToolTip(tip(kSdkTip));
     m_sdk->setAccessibleName(FW_TR("Target SDK"));
-    m_sdkCaption = caption(FW_TR("An SDK N build only loads on firmware N.00 and later."), opts);
+    // What firmware means here (#92): only a game that needs a newer firmware
+    // than the console has needs a backport at all.
+    // (Two texts, so the first keeps its translations.)
+    m_sdkCaption = caption(FW_TR("An SDK N build only loads on firmware N.00 and later.") + QLatin1Char(' ')
+                               + FW_TR("Only games whose Required FW is higher than your console's firmware need a backport."),
+                           opts);
     m_sdkCaption->setToolTip(tip(kSdkTip));
     opts->body()->addWidget(sdkLabel);
     opts->body()->addWidget(m_sdk);
     opts->body()->addWidget(m_sdkCaption);
     opts->body()->addWidget(hairline(opts));
-    auto addSwitch = [opts](const QString& text, const QString& desc, const QString& tooltip, Switch*& sw) {
+    auto addSwitch = [opts](const QString& text, const QString& desc, const QString& tooltip, Switch*& sw) -> QWidget* {
         auto* row = new QWidget(opts);
         auto* h = hbox(row, space::md);
         auto* col = new QVBoxLayout;
@@ -880,13 +917,23 @@ void BackportPage::buildSideColumn(QVBoxLayout* into)
         sw->setToolTip(tip(tooltip));
         h->addWidget(sw, 0, Qt::AlignVCenter);
         opts->body()->addWidget(row);
+        return row;
     };
     addSwitch(FW_TR("Apply to game folders"), FW_TR("Copy the files into the game folders, after a backup."), kApplyTip, m_apply);
     addSwitch(FW_TR("PS5 Pro fix"), FW_TR("For a black screen or GPU hang on a PS5 Pro."), kProFixTip, m_proFix);
     addSwitch(FW_TR("PS5 Pro build (Pro FW 9.00+)"),
               FW_TR("Pro-only ZIP: the game's own Pro checks, and its PSSR, answer Pro on every Pro firmware."), kPssr2Tip, m_proBuild);
-    connect(m_sdk, &QComboBox::currentIndexChanged, this, [this](int) { updateModeLine(); });
-    for (Switch* s : {m_apply, m_proFix, m_proBuild})
+    // Off at every start and never saved, as in PS5 Backport GUI 0.3.5; an
+    // engine without the option (0.3.4) does not show it.
+    m_offlineRow = addSwitch(FW_TR("Offline mode (skip PSN sign-in)"),
+                             FW_TR("For games that stop at a PSN sign-in or online screen. Online play is off."), kOfflineTip,
+                             m_offline);
+    m_offlineRow->setVisible(engineHasOfflineMode());
+    connect(m_sdk, &QComboBox::currentIndexChanged, this, [this](int) {
+        updateModeLine();
+        markSdkLimits();
+    });
+    for (Switch* s : {m_apply, m_proFix, m_proBuild, m_offline})
         connect(s, &QAbstractButton::toggled, this, [this](bool) { updateModeLine(); });
     into->addWidget(opts);
 
@@ -1160,6 +1207,8 @@ void BackportPage::updateModeLine()
         parts << FW_TR("PS5 Pro fix");
     if (m_proBuild->isChecked())
         parts << FW_TR("PS5 Pro build (Pro only)");
+    if (m_offline->isChecked() && engineHasOfflineMode())
+        parts << FW_TR("Offline mode");
     m_modeLine->setText(FW_TR("Next run: %1").arg(parts.join(QStringLiteral(" \u00b7 "))));
 }
 
@@ -1211,6 +1260,24 @@ bool BackportPage::idleForNewWork()
     return false;
 }
 
+bool BackportPage::standaloneEngineIdle(bool backport)
+{
+    if (!bp::foreignEngineRunning())
+        return true;
+    Sheet::message(window(), QStringLiteral("Backport"),
+                   backport ? FW_TR("PS5 Backport GUI is running. Close it, or let it finish, before starting a backport.")
+                            : FW_TR("PS5 Backport GUI is running. Close it, or let it finish, before this job."),
+                   Sheet::Icon::Warning);
+    return false;
+}
+
+bool BackportPage::engineHasOfflineMode()
+{
+    // The option and the newer ledger came with 0.3.5; 0.3.4 is the one
+    // regular release without them.
+    return QLatin1String(bp::kEngineVersion) != QLatin1String("0.3.4");
+}
+
 // The one gate into Running: from Idle, or from the destination check of this
 // very run, and never while a worker is alive. One worker at a time.
 bool BackportPage::enterRunning(Kind kind)
@@ -1248,7 +1315,7 @@ void BackportPage::updateButtons()
     m_addBtn->setEnabled(!busy);
     m_rootsBtn->setEnabled(!busy);
     // The destinations too: a run keeps the folders its check approved.
-    for (QWidget* w : std::initializer_list<QWidget*>{m_sdk, m_apply, m_proFix, m_proBuild, m_outField, m_bakField})
+    for (QWidget* w : std::initializer_list<QWidget*>{m_sdk, m_apply, m_proFix, m_proBuild, m_offline, m_outField, m_bakField})
         w->setEnabled(!busy);
     m_rootsBtn->setText(FW_TR("Locations (%1)").arg(m_settings.scanRoots.size()));
     updateStartTip();
@@ -1268,7 +1335,8 @@ void BackportPage::updateStats()
         ++games;
         if (r.checked)
             ++sel;
-        if (r.checked && !r.game.alreadyBackported && r.game.appliedRecord.isEmpty() && r.tone != QLatin1String("busy"))
+        if (r.checked && !r.game.alreadyBackported && r.game.appliedRecord.isEmpty() && r.tone != QLatin1String("busy")
+            && r.status != kNeedsSdk)
             ++ready;
         if (r.tone == QLatin1String("busy"))
             ++running;
@@ -1335,7 +1403,8 @@ void BackportPage::onShown()
     if (m_shownOnce || testMode())
         return;
     m_shownOnce = true;
-    log(QStringLiteral("INFO"), QStringLiteral("PS5 Backport engine %1 by Deckerr97 started").arg(QLatin1String(bp::kEngineVersion)));
+    log(QStringLiteral("INFO"), QStringLiteral("PS5 Backport engine %1 by Deckerr97%2 started")
+                                    .arg(QLatin1String(bp::kEngineVersion), bp::kEngineIsTestingBuild ? QStringLiteral(" (testing build)") : QString()));
     log(QStringLiteral("INFO"), QStringLiteral("Builds are verified offline; test them on a console and report problems with Report a problem"));
     if (!m_settings.scanRoots.isEmpty() && m_model->rowCount() == 0 && !isScanning())
         rescan();
@@ -1363,7 +1432,9 @@ void BackportPage::prepareEngine()
         return; // tests and screenshot runs never start the engine on their own
     m_engine = Engine::Preparing;
     setState(FW_TR("Preparing engine\u2026"), Tone::Info);
-    m_engineLine->setText(FW_TR("PS5 Backport engine %1 by Deckerr97 (bundled)").arg(QLatin1String(bp::kEngineVersion)));
+    m_engineLine->setText(bp::kEngineIsTestingBuild
+                              ? FW_TR("PS5 Backport engine %1 by Deckerr97 (bundled testing build)").arg(QLatin1String(bp::kEngineVersion))
+                              : FW_TR("PS5 Backport engine %1 by Deckerr97 (bundled)").arg(QLatin1String(bp::kEngineVersion)));
     auto* w = new bp::Worker(this);
     connect(w, &bp::Worker::progress, this, [this](const QJsonObject& ev) {
         const QString d = ev.value(QStringLiteral("detail")).toString();
@@ -1405,8 +1476,7 @@ void BackportPage::engineReady()
     m_engine = Engine::Ready;
     m_engineBar->hide();
     setState(FW_TR("Ready"), Tone::Ok);
-    m_engineLine->setText(FW_TR("PS5 Backport engine %1 by Deckerr97  \u00b7  backend %2")
-                              .arg(QLatin1String(bp::kEngineVersion), m_engineRevision));
+    m_engineLine->setText(engineLine(m_engineRevision));
     log(QStringLiteral("INFO"), QStringLiteral("Backport engine ready (backend %1)").arg(m_engineRevision));
     // The question belongs to this page: it waits until the page is in front.
     m_offerPending = true;
@@ -1468,12 +1538,25 @@ void BackportPage::offerInterruptedRestores()
             return;
         const QString game = QDir::toNativeSeparators(row.value(QStringLiteral("game_dir")).toString());
         const QString backup = QDir::toNativeSeparators(row.value(QStringLiteral("backup_dir")).toString());
-        const bool yes = Sheet::confirm(window(), FW_TR("Unfinished apply"),
-                                        FW_TR("Applying a backport to this game folder may have been interrupted:\n\n%1\n\nIf PS5 Backport "
-                                                       "GUI is still working on this folder, choose Not now. Otherwise, restore its original "
-                                                       "files now from the verified backup?\n%2")
-                                            .arg(game, backup),
-                                        FW_TR("Not now"), FW_TR("Restore originals"), false, Sheet::Icon::Warning);
+        const QString state = row.value(QStringLiteral("state")).toString();
+        // PS5 Backport GUI 0.3.5 also records restores that did not finish.
+        QString text = state == QLatin1String("ROLLBACK_INCOMPLETE")
+            ? FW_TR("An earlier restore of this game folder could not finish:\n\n%1\n\nIf PS5 Backport GUI is still working on this "
+                    "folder, choose Not now. Otherwise, restore its original files now from the verified backup?\n%2")
+            : state == QLatin1String("RESTORING")
+            ? FW_TR("An earlier restore of this game folder was interrupted before it had finished:\n\n%1\n\nIf PS5 Backport GUI is "
+                    "still working on this folder, choose Not now. Otherwise, restore its original files now from the verified backup?\n%2")
+            : FW_TR("Applying a backport to this game folder may have been interrupted:\n\n%1\n\nIf PS5 Backport "
+                    "GUI is still working on this folder, choose Not now. Otherwise, restore its original "
+                    "files now from the verified backup?\n%2");
+        text = text.arg(game, backup);
+        // A journal of the newer standalone program, and an older engine here.
+        if (row.value(QStringLiteral("written_by_035")).toBool() && !engineHasOfflineMode())
+            text += QStringLiteral("\n\n")
+                + FW_TR("This was recorded by a newer PS5 Backport GUI (0.3.5). If the restore here does not finish, restore the "
+                        "folder with that program.");
+        const bool yes = Sheet::confirm(window(), FW_TR("Unfinished apply"), text, FW_TR("Not now"), FW_TR("Restore originals"), false,
+                                        Sheet::Icon::Warning);
         if (!self)
             return;
         if (yes) {
@@ -1528,8 +1611,65 @@ void BackportPage::navigateWith(const QVariantMap& args)
     if (args.contains(QStringLiteral("folder")))
         dirs << args.value(QStringLiteral("folder")).toString();
     dirs.removeAll(QString());
+    // "select": the game to tick, select and show once it is listed (Dump
+    // check › Backport…); "restore": and offer to restore its originals.
+    const QString select = args.value(QStringLiteral("select")).toString();
+    if (!select.isEmpty()) {
+        m_selectKey = bp::normKey(select);
+        m_selectRestore = args.value(QStringLiteral("restore")).toBool();
+    }
     if (!dirs.isEmpty())
         addRoots(dirs);
+    // Already listed, and no scan on its way: now.
+    if (!m_selectKey.isEmpty() && !isScanning())
+        QTimer::singleShot(0, this, &BackportPage::selectRequested);
+}
+
+void BackportPage::selectRequested()
+{
+    if (m_selectKey.isEmpty() || isScanning())
+        return;
+    const QString key = m_selectKey;
+    const bool restore = m_selectRestore;
+    m_selectKey.clear();
+    m_selectRestore = false;
+    BackportRow* r = m_model->rowByKey(key);
+    if (!r)
+        return;
+    if (isIdle() && r->game.appliedRecord.isEmpty() && !r->game.alreadyBackported) {
+        r->checked = true;
+        m_model->rowChanged(key);
+        emit m_model->checkedChanged();
+    }
+    if (!m_search->text().isEmpty())
+        m_search->clear(); // the game must be in view
+    const QModelIndex src = m_model->index(m_model->indexOfKey(key), BackportGameModel::TitleCol);
+    const QModelIndex shown = m_proxy->mapFromSource(src);
+    if (shown.isValid()) {
+        m_table->selectionModel()->select(shown, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        m_table->setCurrentIndex(shown);
+        m_table->scrollTo(shown, QAbstractItemView::PositionAtCenter);
+    }
+    if (!restore)
+        return;
+    // The restore of this folder's applied backport, asked first as by hand.
+    const QString journal = r->game.appliedRecord.value(QStringLiteral("journal")).toString();
+    if (journal.isEmpty() || !QFileInfo(journal).isFile()) {
+        Sheet::message(window(), FW_TR("Restore"),
+                       FW_TR("No backup of an applied backport is recorded for this game folder. Choose the backup with Restore "
+                             "originals from a backup… (Backups & support)."),
+                       Sheet::Icon::Info);
+        return;
+    }
+    const QString run = QDir::toNativeSeparators(QFileInfo(journal).absolutePath());
+    QPointer<BackportPage> self(this);
+    if (!Sheet::confirm(window(), FW_TR("Restore original files?"),
+                        FW_TR("Restore the original files of\n%1\nfrom\n%2?\n\nFiles the backport added are removed only if they are unchanged.")
+                            .arg(r->game.path, run),
+                        FW_TR("Cancel"), FW_TR("Restore"), true, Sheet::Icon::Warning))
+        return;
+    if (self)
+        runRestore(run);
 }
 
 void BackportPage::addRoots(const QStringList& dirs)
@@ -1620,15 +1760,25 @@ void BackportPage::rescan()
                     const BackportRow& p = it.value();
                     row.checked = p.checked;
                     row.result = p.result;
-                    // "Backport applied" and "Already backported" describe the
-                    // folder as it was then; they are decided again below.
-                    if (p.status != QLatin1String("Backport applied") && p.status != QLatin1String("Already backported")) {
+                    // "Backport applied", "Restore needed", "Already backported"
+                    // and "Needs SDK ≤ N" describe the folder (and the options)
+                    // as they were then; they are decided again below.
+                    if (p.status != QLatin1String("Backport applied") && p.status != QLatin1String("Already backported")
+                        && p.status != kRestoreNeeded && p.status != kNeedsSdk) {
                         row.status = p.status;
                         row.tone = p.tone;
                         row.detail = p.detail;
                     }
                 }
-                if (!game.appliedRecord.isEmpty()) {
+                const QString ledgerState = game.appliedRecord.value(QStringLiteral("state")).toString();
+                if (ledgerState == QLatin1String("ROLLBACK_INCOMPLETE") || ledgerState == QLatin1String("RESTORING")) {
+                    // Written by PS5 Backport GUI 0.3.5: the folder holds a mix of files.
+                    row.status = kRestoreNeeded;
+                    row.tone = QStringLiteral("warn");
+                    row.checked = false;
+                    row.detail = FW_TR("An earlier apply, undo or restore of this folder did not finish. Restore its originals first "
+                                       "(Backups & support).");
+                } else if (!game.appliedRecord.isEmpty()) {
                     row.status = FW_TR_NOOP("Backport applied");
                     row.tone = QStringLiteral("info");
                     row.checked = false;
@@ -1662,10 +1812,52 @@ void BackportPage::onScanFinished(quint64 gen, int count)
         log(QStringLiteral("INFO"), count == 1 ? QStringLiteral("Found 1 game folder") : QStringLiteral("Found %1 game folders").arg(count));
     if (m_proxy->sortColumn() >= 0)
         m_proxy->sort(m_proxy->sortColumn(), m_proxy->sortOrder());
+    markSdkLimits();
     updateButtons();
     updateLibraryState();
     updateStats();
     syncLibraryStatus();
+    if (!m_selectKey.isEmpty())
+        QTimer::singleShot(0, this, &BackportPage::selectRequested);
+}
+
+void BackportPage::markSdkLimits()
+{
+    if (m_demo)
+        return;
+    const int target = targetSdk();
+    bool changed = false;
+    for (auto& r : m_model->rows()) {
+        const bool flagged = r.status == kNeedsSdk;
+        if (!flagged && !(r.status == QLatin1String("Ready") && r.tone == QLatin1String("idle")))
+            continue; // applied, already backported, running, or showing a result
+        const auto top = bp::sdkCeiling(r.game.sdk, target);
+        if (!top) {
+            if (flagged) {
+                r.status = QStringLiteral("Ready");
+                r.tone = QStringLiteral("idle");
+                r.detail.clear();
+                r.statusArg = 0;
+                changed = true;
+            }
+            continue;
+        }
+        r.status = kNeedsSdk;
+        r.statusArg = *top;
+        r.tone = QStringLiteral("warn");
+        r.detail = *top > 4 ? FW_TR("Target SDK %1 is higher than this game's own SDK %2. Choose Target SDK %3 or lower.")
+                                  .arg(target)
+                                  .arg(r.game.sdk)
+                                  .arg(*top)
+                            : FW_TR("Target SDK %1 is higher than this game's own SDK %2. Target SDK 4 is the only build for this game.")
+                                  .arg(target)
+                                  .arg(r.game.sdk);
+        changed = true;
+    }
+    if (changed) {
+        m_model->allChanged();
+        fitStatusColumn();
+    }
 }
 
 // The Library marks the games that carry a backport: it hears here what the
@@ -1819,7 +2011,7 @@ void BackportPage::startRun(const QStringList& keysIn)
 {
     if (isPreflight())
         return; // this very run is still checking its destinations
-    if (!idleForNewWork() || !engineUsable())
+    if (!idleForNewWork() || !engineUsable() || !standaloneEngineIdle(true))
         return;
     if (keysIn.isEmpty()) {
         Sheet::message(window(), QStringLiteral("Backport"), FW_TR("Select at least one game in the Game library."));
@@ -1846,6 +2038,43 @@ void BackportPage::startRun(const QStringList& keysIn)
                                       "originals first (Backups & support)."));
         return;
     }
+    // The worker refuses a Target SDK above the game's own: said here, before
+    // the run, and those games are left out.
+    {
+        const int target = targetSdk();
+        QStringList allowed;
+        int blocked = 0;
+        for (const QString& k : keys) {
+            const BackportRow* r = m_model->rowByKey(k);
+            if (r && bp::sdkCeiling(r->game.sdk, target))
+                ++blocked;
+            else
+                allowed << k;
+        }
+        if (blocked > 0) {
+            markSdkLimits();
+            const QString why = FW_TR("%1 of %2 ticked games cannot be built with Target SDK %3, because a build cannot be made "
+                                      "for an SDK above the game's own.")
+                                    .arg(blocked)
+                                    .arg(keys.size())
+                                    .arg(target);
+            log(QStringLiteral("WARN"), QStringLiteral("%1 of %2 ticked games cannot be built with Target SDK %3 (above their own SDK)")
+                                            .arg(blocked)
+                                            .arg(keys.size())
+                                            .arg(target));
+            if (allowed.isEmpty()) {
+                Sheet::message(window(), QStringLiteral("Backport"),
+                               why + QStringLiteral("\n\n") + FW_TR("Choose a lower Target SDK, then start again."), Sheet::Icon::Warning);
+                return;
+            }
+            QPointer<BackportPage> self(this);
+            const bool go = Sheet::confirm(window(), QStringLiteral("Backport"), why + QStringLiteral("\n\n") + FW_TR("Build the others?"),
+                                           FW_TR("No"), FW_TR("Build the others"), false, Sheet::Icon::Warning);
+            if (!self || !go || !isIdle())
+                return;
+            keys = allowed;
+        }
+    }
     saveDestinations();
     // From here to beginRun() the page is in Preflight: the check runs on a
     // pool thread and may take a while, and nothing else may start meanwhile.
@@ -1858,9 +2087,10 @@ void BackportPage::startRun(const QStringList& keysIn)
     const QString out = m_settings.outputDir, bak = m_settings.backupDir;
     m_runOutputDir = out;
     m_runBackupDir = bak;
+    m_abortPreflight = false;
     QPointer<BackportPage> self(this);
-    (void)QtConcurrent::run([self, out, bak, dirs, keys] {
-        const bp::Preflight pf = bp::preflight(out, bak, dirs);
+    (void)QtConcurrent::run([self, out, bak, dirs, keys, check = preflightForTests()] {
+        const bp::Preflight pf = check ? check(out, bak, dirs) : bp::preflight(out, bak, dirs);
         QMetaObject::invokeMethod(qApp, [self, pf, keys, dirs] {
             if (self)
                 self->preflightDone(pf, keys, dirs);
@@ -1873,6 +2103,13 @@ void BackportPage::preflightDone(const bp::Preflight& pf, const QStringList& key
     if (!isPreflight())
         return;
     showEngineState();
+    // The app is closing (cancelAndWait): no question, no run.
+    if (m_abortPreflight) {
+        m_abortPreflight = false;
+        setRunState(RunState::Idle);
+        log(QStringLiteral("WARN"), QStringLiteral("Run not started: the app is closing"));
+        return;
+    }
     // The questions below run their own event loops; the page stays in
     // Preflight under them and may be gone when one returns.
     QPointer<BackportPage> self(this);
@@ -1915,6 +2152,10 @@ void BackportPage::preflightDone(const bp::Preflight& pf, const QStringList& key
                 + FW_TR("PS5 Pro build is ON: games that declare PS5 Pro support get Pro-only files (eboot.bin, and for "
                         "games with PSSR a different libScePsml.sprx). Apply only to games you play on a PS5 Pro with "
                         "firmware 9.00 or later; a base PS5 should use the normal backport.");
+        if (m_offline->isChecked() && engineHasOfflineMode())
+            text += QStringLiteral("\n\n")
+                + FW_TR("Offline mode is ON: where it applies, the game is told the network is down, so its online features stay "
+                        "off on every firmware.");
         text += QStringLiteral("\n\n") + FW_TR("Apply to these game folders?");
         const bool go = Sheet::confirm(window(), FW_TR("Apply backport to game folders"), text, FW_TR("No"),
                                        FW_TR("Apply"), true, Sheet::Icon::Warning);
@@ -1931,6 +2172,14 @@ void BackportPage::preflightDone(const bp::Preflight& pf, const QStringList& key
 
 void BackportPage::beginRun(const QStringList& keys)
 {
+    // Closing began while a question of the check was open.
+    if (m_abortPreflight) {
+        m_abortPreflight = false;
+        if (isPreflight())
+            setRunState(RunState::Idle);
+        log(QStringLiteral("WARN"), QStringLiteral("Run not started: the app is closing"));
+        return;
+    }
     if (!enterRunning(Kind::Backport)) {
         if (isPreflight())
             setRunState(RunState::Idle);
@@ -1941,6 +2190,11 @@ void BackportPage::beginRun(const QStringList& keys)
                     {QStringLiteral("target_sdk"), targetSdk()},
                     {QStringLiteral("pro_fix"), m_proFix->isChecked()},
                     {QStringLiteral("pssr2"), m_proBuild->isChecked()}};
+    // As in PS5 Backport GUI 0.3.5: only when ticked, so a job without it
+    // builds exactly as before.
+    const bool offline = m_offline->isChecked() && engineHasOfflineMode();
+    if (offline)
+        m_runOptions.insert(QStringLiteral("offline_mode"), true);
     m_runKeys = keys;
     m_runIndex = 0;
     for (const QString& k : keys)
@@ -1961,6 +2215,8 @@ void BackportPage::beginRun(const QStringList& keys)
         msg += QStringLiteral(", PS5 Pro fix");
     if (m_proBuild->isChecked())
         msg += QStringLiteral(", PS5 Pro build (Pro only)");
+    if (offline)
+        msg += QStringLiteral(", Offline mode (skip PSN sign-in)");
     if (m_apply->isChecked())
         msg += QStringLiteral(", apply to game folders");
     log(QStringLiteral("INFO"), msg);
@@ -1982,6 +2238,16 @@ void BackportPage::requestCancel()
 void BackportPage::runNext()
 {
     const int total = m_kind == Kind::Backport ? int(m_runKeys.size()) : int(m_items.size());
+    // The standalone program, started during the run, would share the engine's
+    // work folder with the next job (each job clears it): the rest of the run
+    // stops, as after a cancel. A restore has one job and was checked.
+    if (m_runIndex > 0 && m_runIndex < total && m_runState == RunState::Running && m_kind != Kind::Restore
+        && bp::foreignEngineRunning()) {
+        log(QStringLiteral("WARN"), QStringLiteral("Run stopped: PS5 Backport GUI was started meanwhile"));
+        emit toastRequested(Tone::Warn, FW_TR("Run stopped"),
+                            FW_TR("PS5 Backport GUI was started during the run. Close it, then start the remaining games again."));
+        setRunState(RunState::Cancelling);
+    }
     if (m_runIndex >= total || (isCancelling() && m_kind != Kind::Backport)) {
         if (m_kind == Kind::Backport)
             runFinished();
@@ -2131,6 +2397,71 @@ void BackportPage::onFinished(const QJsonObject& result)
     runNext();
 }
 
+QList<QPair<QString, QString>> BackportPage::newerEngineDetails(const QJsonObject& r)
+{
+    QList<QPair<QString, QString>> out;
+    auto strings = [](const QJsonValue& v) {
+        QStringList s;
+        for (const QJsonValue& e : v.toArray())
+            s << (e.isString() ? e.toString() : QString::fromUtf8(QJsonDocument(e.toObject()).toJson(QJsonDocument::Compact)));
+        return s;
+    };
+    // System functions without a replacement on some firmware this build
+    // loads on (a game that calls one stops with PRX_NOT_RESOLVED_FUNCTION).
+    const QJsonArray mf = r.value(QStringLiteral("engine")).toObject().value(QStringLiteral("missing_functions")).toArray();
+    if (!mf.isEmpty()) {
+        QStringList lines;
+        constexpr int kShown = 20;
+        for (int i = 0; i < mf.size() && i < kShown; ++i) {
+            const QJsonObject m = mf.at(i).toObject();
+            QString name = m.value(QStringLiteral("name")).toString();
+            if (name.isEmpty())
+                name = m.value(QStringLiteral("nid")).toString();
+            const QString lib = m.value(QStringLiteral("library")).toString();
+            QString range;
+            if (m.contains(QStringLiteral("unknown_from")))
+                range = m.value(QStringLiteral("unknown_until")).toString().isEmpty()
+                    ? QStringLiteral("not known for FW %1 and later").arg(m.value(QStringLiteral("unknown_from")).toString())
+                    : QStringLiteral("not known for FW %1 up to %2")
+                          .arg(m.value(QStringLiteral("unknown_from")).toString(), m.value(QStringLiteral("unknown_until")).toString());
+            else
+                range = QStringLiteral("missing on FW %1 to %2")
+                            .arg(m.value(QStringLiteral("missing_from")).toString(), m.value(QStringLiteral("missing_to")).toString());
+            lines << (lib.isEmpty() ? QStringLiteral("%1: %2").arg(name, range) : QStringLiteral("%1 (%2): %3").arg(name, lib, range));
+        }
+        if (mf.size() > kShown)
+            lines << QStringLiteral("… and %1 more").arg(mf.size() - kShown);
+        out.append({FW_TR_NOOP("Functions without a replacement"), lines.join(u'\n')});
+    }
+    const QJsonObject om = r.value(QStringLiteral("offline_mode")).toObject();
+    if (om.value(QStringLiteral("requested")).toBool()) {
+        QString note = om.value(QStringLiteral("note")).toString();
+        if (note.isEmpty())
+            note = om.value(QStringLiteral("applied")).toBool() ? QStringLiteral("applied") : QStringLiteral("not applied");
+        out.append({FW_TR_NOOP("Offline mode"), note});
+    }
+    for (const auto& [key, label] : {std::pair{"no_sdk_field_note", FW_TR_NOOP("Libraries without an SDK field")},
+                                     std::pair{"sdk_ceiling_note", FW_TR_NOOP("Target SDK check")}}) {
+        const QString note = r.value(QLatin1String(key)).toString();
+        if (!note.isEmpty())
+            out.append({label, note});
+    }
+    // A restore (0.3.5-test4 worker.restore): the engine's own sentence about
+    // what it left, otherwise the files it names.
+    if (const QString notes = r.value(QStringLiteral("notes")).toString(); !notes.isEmpty()) {
+        out.append({FW_TR_NOOP("Left as they are by the restore"), notes});
+    } else {
+        QStringList left;
+        for (const char* key : {"left_in_place", "kept_newer_files", "derived_kept"})
+            left << strings(r.value(QLatin1String(key)));
+        if (!left.isEmpty())
+            out.append({FW_TR_NOOP("Left as they are by the restore"), left.join(u'\n')});
+    }
+    if (const QStringList dirs = strings(r.value(QStringLiteral("leftover_dirs"))); !dirs.isEmpty())
+        out.append({FW_TR_NOOP("Run folders that could not be removed"), dirs.join(u'\n')}); // of a failed or cancelled export
+    return out;
+}
+
 void BackportPage::rowResult(BackportRow& row, const QJsonObject& r)
 {
     const QString status = r.value(QStringLiteral("status")).toString();
@@ -2206,6 +2537,9 @@ void BackportPage::rowResult(BackportRow& row, const QJsonObject& r)
         log(QStringLiteral("WARN"), (QStringLiteral("    PS5 Pro build not made: ") + pssr2.value(QStringLiteral("reason")).toString()).left(600));
     const QString zip = r.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
     const QString ozip = r.value(QStringLiteral("originals_zip")).toObject().value(QStringLiteral("path")).toString();
+    for (const auto& [label, note] : newerEngineDetails(r))
+        for (const QString& line : note.split(u'\n'))
+            log(QStringLiteral("INFO"), (QStringLiteral("    %1: %2").arg(label, line)).left(600));
     if (!zip.isEmpty())
         log(QStringLiteral("OK"), QStringLiteral("    Backport ZIP: %1").arg(zip));
     if (!ozip.isEmpty())
@@ -2286,7 +2620,13 @@ void BackportPage::retryFailed()
 
 void BackportPage::startBatch(Kind kind, std::vector<Item> items)
 {
-    if (items.empty() || !enterRunning(kind))
+    if (items.empty())
+        return;
+    // Asked again here: a file dialog or the library sheet may have been open
+    // for a while since the action was chosen (a restore checks on its own).
+    if (kind != Kind::Restore && !standaloneEngineIdle())
+        return;
+    if (!enterRunning(kind))
         return;
     m_items = std::move(items);
     m_batchResults.clear();
@@ -2357,6 +2697,9 @@ void BackportPage::batchFinished()
             return;
         const QJsonObject r = m_batchResults.front().second;
         const QString game = QDir::toNativeSeparators(r.value(QStringLiteral("game_dir")).toString());
+        for (const auto& [label, note] : newerEngineDetails(r))
+            for (const QString& line : note.split(u'\n'))
+                log(QStringLiteral("INFO"), (QStringLiteral("    %1: %2").arg(label, line)).left(600));
         if (r.value(QStringLiteral("status")).toString() == QLatin1String("DONE")) {
             log(QStringLiteral("OK"), QStringLiteral("Originals restored in %1").arg(game));
             Sheet::message(window(), FW_TR("Originals restored"), FW_TR("The original files were restored in\n%1.").arg(game));
@@ -2460,15 +2803,40 @@ QStringList BackportPage::chooseBackportFiles(const QString& question, const QSt
     return {};
 }
 
+QJsonObject BackportPage::sdkJob(int pair, const QString& zip, const QString& outputRoot, const BackportRow* ownRow)
+{
+    QJsonObject job{{QStringLiteral("cmd"), QStringLiteral("sdk")},
+                    {QStringLiteral("pair"), pair},
+                    {QStringLiteral("package"), QDir::toNativeSeparators(zip)},
+                    {QStringLiteral("output_root"), outputRoot.isEmpty() ? QDir::toNativeSeparators(QFileInfo(zip).absolutePath()) : outputRoot},
+                    {QStringLiteral("title_id"), ownRow ? ownRow->game.titleId : QString()},
+                    {QStringLiteral("title"), ownRow ? ownRow->game.title : QString()},
+                    {QStringLiteral("version"), ownRow ? ownRow->game.version : QString()},
+                    {QStringLiteral("source_sdk"), ownRow ? ownRow->game.sdk : QString()}};
+    if (ownRow) {
+        // PS5 Backport GUI 0.3.5 also rebuilds the executables that build
+        // left unchanged, so the game is not left with mixed SDKs.
+        job.insert(QStringLiteral("game_dir"), QDir::toNativeSeparators(ownRow->game.path));
+        const QJsonValue unchanged = ownRow->result.value(QStringLiteral("unchanged_not_exported"));
+        if (unchanged.isArray())
+            job.insert(QStringLiteral("unchanged"), unchanged);
+        const QJsonValue files = ownRow->result.value(QStringLiteral("source")).toObject().value(QStringLiteral("files_read_by_engine"));
+        if (files.isObject())
+            job.insert(QStringLiteral("source_files"), files);
+    }
+    return job;
+}
+
 void BackportPage::rebuildWithSdk(const QStringList& keys)
 {
-    if (!idleForNewWork() || !engineUsable())
+    if (!idleForNewWork() || !engineUsable() || !standaloneEngineIdle())
         return;
     const int pair = targetSdk();
     if (pair < 5)
         return;
     m_sdkPair = pair;
     std::vector<Item> items;
+    QStringList aboveOwn;
     for (const QString& k : keys) {
         const BackportRow* r = m_model->rowByKey(k);
         if (!r)
@@ -2476,15 +2844,25 @@ void BackportPage::rebuildWithSdk(const QStringList& keys)
         const QString zip = r->result.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
         if (zip.isEmpty() || !QFileInfo(zip).isFile())
             continue;
-        items.push_back({{{QStringLiteral("cmd"), QStringLiteral("sdk")},
-                          {QStringLiteral("pair"), pair},
-                          {QStringLiteral("package"), QDir::toNativeSeparators(zip)},
-                          {QStringLiteral("output_root"), outputRoot().isEmpty() ? QDir::toNativeSeparators(QFileInfo(zip).absolutePath()) : outputRoot()},
-                          {QStringLiteral("title_id"), r->game.titleId},
-                          {QStringLiteral("title"), r->game.title},
-                          {QStringLiteral("version"), r->game.version},
-                          {QStringLiteral("source_sdk"), r->game.sdk}},
-                         k, QFileInfo(zip).fileName()});
+        if (bp::sdkCeiling(r->game.sdk, pair)) {
+            aboveOwn << nameOr(*r);
+            continue; // the worker would refuse it at once
+        }
+        items.push_back({sdkJob(pair, zip, outputRoot(), r), k, QFileInfo(zip).fileName()});
+    }
+    if (!aboveOwn.isEmpty()) {
+        log(QStringLiteral("WARN"), QStringLiteral("Rebuild with SDK %1 skipped (above the game's own SDK): %2").arg(pair).arg(aboveOwn.join(QStringLiteral(", "))));
+        if (items.empty()) {
+            Sheet::message(window(), QStringLiteral("Backport"),
+                           FW_TR("%1 of %2 ticked games cannot be built with Target SDK %3, because a build cannot be made for an SDK "
+                                 "above the game's own.")
+                                   .arg(aboveOwn.size())
+                                   .arg(aboveOwn.size())
+                                   .arg(pair)
+                               + QStringLiteral("\n\n") + FW_TR("Choose a lower Target SDK, then start again."),
+                           Sheet::Icon::Warning);
+            return;
+        }
     }
     if (items.empty()) {
         if (!keys.isEmpty()) {
@@ -2498,22 +2876,14 @@ void BackportPage::rebuildWithSdk(const QStringList& keys)
         const QStringList files = QFileDialog::getOpenFileNames(this, FW_TR("Choose the FW 4xx backport ZIP(s) to rebuild with SDK %1").arg(pair),
                                                                 m_outField->path(), FW_TR("Backport ZIP") + QStringLiteral(" (*.zip);;") + FW_TR("All files") + QStringLiteral(" (*)"));
         for (const QString& f : files)
-            items.push_back({{{QStringLiteral("cmd"), QStringLiteral("sdk")},
-                              {QStringLiteral("pair"), pair},
-                              {QStringLiteral("package"), QDir::toNativeSeparators(f)},
-                              {QStringLiteral("output_root"), outputRoot().isEmpty() ? QDir::toNativeSeparators(QFileInfo(f).absolutePath()) : outputRoot()},
-                              {QStringLiteral("title_id"), QString()},
-                              {QStringLiteral("title"), QString()},
-                              {QStringLiteral("version"), QString()},
-                              {QStringLiteral("source_sdk"), QString()}},
-                             QString(), QFileInfo(f).fileName()});
+            items.push_back({sdkJob(pair, f, outputRoot(), nullptr), QString(), QFileInfo(f).fileName()});
     }
     startBatch(Kind::Sdk, std::move(items));
 }
 
 void BackportPage::makeProBuild(const QStringList& keys)
 {
-    if (!idleForNewWork() || !engineUsable())
+    if (!idleForNewWork() || !engineUsable() || !standaloneEngineIdle())
         return;
     std::vector<Item> items;
     auto item = [this](const QString& src, const QString& key, const BackportRow* r, const QString& gameDir) {
@@ -2552,7 +2922,7 @@ void BackportPage::makeProBuild(const QStringList& keys)
 
 void BackportPage::switchFakelib(const QStringList& keys)
 {
-    if (!idleForNewWork() || !engineUsable())
+    if (!idleForNewWork() || !engineUsable() || !standaloneEngineIdle())
         return;
     QStringList sources, rowKeys;
     for (const QString& k : keys) {
@@ -2811,8 +3181,14 @@ void BackportPage::showRowMenu(const QPoint& globalPos)
         menu.addSeparator();
         const int n = targetSdk();
         if (n > 4) {
-            menu.addAction(icon(QStringLiteral("layers"), color::fg_3), FW_TR("Rebuild its backport ZIP with SDK %1\u2026").arg(n), this,
-                           [this, sel] { rebuildWithSdk(sel); });
+            auto* a = menu.addAction(icon(QStringLiteral("layers"), color::fg_3), FW_TR("Rebuild its backport ZIP with SDK %1\u2026").arg(n), this,
+                                     [this, sel] { rebuildWithSdk(sel); });
+            // Every selected game's own SDK is below it: the worker would refuse.
+            bool anyAllowed = false;
+            for (const QString& k : sel)
+                if (const BackportRow* r = m_model->rowByKey(k))
+                    anyAllowed = anyAllowed || !bp::sdkCeiling(r->game.sdk, n);
+            a->setEnabled(anyAllowed);
         } else {
             auto* a = menu.addAction(FW_TR("Rebuild its backport ZIP with another SDK: choose Target SDK 5-13 first"));
             a->setEnabled(false);
@@ -2882,8 +3258,7 @@ void BackportPage::showDetails(const QString& key)
     kv(FW_TR("Version"), orUnknown(r->game.version));
     kv(FW_TR("Source SDK"), orUnknown(r->game.sdk));
     kv(FW_TR("Required firmware"), orUnknown(r->game.fw));
-    kv(FW_TR("Status"), r->detail.isEmpty() ? i18n::translate(r->status)
-                                         : QStringLiteral("%1 \u2014 %2").arg(i18n::translate(r->status), r->detail));
+    kv(FW_TR("Status"), r->detail.isEmpty() ? shownStatus(*r) : QStringLiteral("%1 \u2014 %2").arg(shownStatus(*r), r->detail));
     const QJsonObject res = r->result;
     const QJsonObject stages = res.value(QStringLiteral("stages")).toObject();
     for (auto it = stages.begin(); it != stages.end(); ++it) {
@@ -2931,6 +3306,8 @@ void BackportPage::showDetails(const QString& key)
             kv(FW_TR("PS5 Pro build"), pssr2.value(QStringLiteral("applied")).toBool()
                                                     ? FW_TR("built (Pro FW 9.00+ only): %1").arg(modeNote(pssr2, true))
                                                     : FW_TR("not built: %1").arg(pssr2.value(QStringLiteral("reason")).toString()));
+        for (const auto& [label, note] : newerEngineDetails(res))
+            kv(i18n::translate(label), note);
         const QString zip = res.value(QStringLiteral("zip")).toObject().value(QStringLiteral("path")).toString();
         const QString ozip = res.value(QStringLiteral("originals_zip")).toObject().value(QStringLiteral("path")).toString();
         if (!zip.isEmpty())
@@ -3034,6 +3411,8 @@ void BackportPage::reportProblem()
         sdk += QStringLiteral(", PS5 Pro fix");
     if (m_proBuild->isChecked())
         sdk += QStringLiteral(", PS5 Pro build (Pro FW 9.00+ only)");
+    if (m_offline->isChecked() && engineHasOfflineMode())
+        sdk += QStringLiteral(", Offline mode (skip PSN sign-in)");
     q.addQueryItem(QStringLiteral("sdk"), sdk);
     QString fakelib = QStringLiteral("Default (generated by this program)");
     if (m_proBuild->isChecked())
@@ -3099,10 +3478,14 @@ bool BackportPage::eventFilter(QObject* watched, QEvent* event)
     return Page::eventFilter(watched, event);
 }
 
+void BackportPage::setPreflightForTests(PreflightFn fn) { preflightForTests() = std::move(fn); }
+
 void BackportPage::cancelAndWait(int ms)
 {
     if (!isBusy())
         return;
+    if (isPreflight())
+        m_abortPreflight = true; // the run being checked must not start during the close
     if (m_kind != Kind::Restore)
         requestCancel(); // a restore ignores cancel and must run to its end
     QElapsedTimer t;
@@ -3159,7 +3542,7 @@ void BackportPage::applyDemoState(const QString& name)
     m_bakField->setPath(QStringLiteral("D:\\Backports Backups"));
     setState(FW_TR("Ready"), Tone::Ok);
     m_engineBar->hide();
-    m_engineLine->setText(QStringLiteral("PS5 Backport engine 0.3.4 by Deckerr97  \u00b7  backend 3e08eda5-914d90065d"));
+    m_engineLine->setText(engineLine(QLatin1String(bp::kEngineRevision))); // the pinned engine's own words
     if (name == QLatin1String("running")) {
         // The run state of a real run (Cancel in the header, the run's line in
         // the status bar), entered through its one gate; no worker is started
