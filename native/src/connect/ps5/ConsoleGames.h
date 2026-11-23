@@ -33,7 +33,7 @@ namespace fw::ps5 {
 
 // ---- game list ---------------------------------------------------------------------------
 
-const QStringList& consoleImageSuffixes(); // ".exfat", ".ffpkg", ".ffpfs", ".ffpfsc"
+const QStringList& consoleImageSuffixes(); // ".exfat", ".zstd", ".ffpkg", ".ffpfs", ".ffpfsc"
 bool isConsoleImageName(const QString& name);
 
 struct ConsoleGame {

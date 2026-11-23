@@ -624,6 +624,10 @@ private slots:
                  (QStringList{QStringLiteral("/data/etaHEN/games"), QStringLiteral("/mnt/usb0/games")}));
         QVERIFY(isConsoleImageName(QStringLiteral("A.FFPFSC")));
         QVERIFY(!isConsoleImageName(QStringLiteral("a.pkg")));
+        // The single-file ZSTD image (an exFAT image, Kraken Mount MOD) is listed and uploaded like an .exfat.
+        QVERIFY(isConsoleImageName(QStringLiteral("PPSA01342 Demon's Souls.zstd")));
+        QVERIFY(isConsoleImageName(QStringLiteral("GAME.ZSTD")));
+        QVERIFY(!isConsoleImageName(QStringLiteral("game.exfat.zst"))); // a compressed stream is no image
     }
 
     void gameListMergesConsoleAndLocalImages()

@@ -651,7 +651,7 @@ private slots:
         page.applyDemoState(QStringLiteral("ftp"));
         QCOMPARE(shownPrimaries(), QStringList{QStringLiteral("Upload files…")});
         const QHash<QString, QString> main{{QStringLiteral("manager"), QStringLiteral("Refresh")},
-                                           {QStringLiteral("klog"), QStringLiteral("Connect")},
+                                           {QStringLiteral("klog"), QStringLiteral("Start log")},
                                            {QStringLiteral("crashdumps"), QStringLiteral("Start watching")},
                                            {QStringLiteral("ampr"), QStringLiteral("Generate and upload")},
                                            {QStringLiteral("diagnostics"), QStringLiteral("Run diagnostics")}};
@@ -659,7 +659,21 @@ private slots:
             page.navigateWith({{QStringLiteral("tab"), it.key()}});
             QVERIFY2(shownPrimaries() == QStringList{it.value()}, qPrintable(it.key() + u':' + shownPrimaries().join(u',')));
         }
+        // V-05: under a connected console the kernel log's own state is not
+        // "Disconnected" with a second "Connect": the log is not started.
+        page.navigateWith({{QStringLiteral("tab"), QStringLiteral("klog")}});
+        QStringList badges;
+        for (auto* b : page.findChildren<ui::Badge*>())
+            if (b->isVisibleTo(&page))
+                badges << b->text();
+        QVERIFY2(badges.contains(QStringLiteral("Not started")) && !badges.contains(QStringLiteral("Disconnected")), qPrintable(badges.join(u',')));
+        // V-04: connected, the address field holds the address, not the placeholder.
+        QVERIFY(!page.hero()->hostEdit()->text().isEmpty()); // the settings' address, or the example one
         page.clearDemoState();
+        // V-04: empty, the field says it is an example, in the body font.
+        page.hero()->hostEdit()->clear();
+        QCOMPARE(page.hero()->hostEdit()->placeholderText(), QStringLiteral("e.g. 192.168.1.40"));
+        QCOMPARE(page.hero()->hostEdit()->font().family(), theme::font::body().family());
 
         // The address and the port are named above their fields.
         const auto buddyOf = [&page](QWidget* field) -> QString {
@@ -1490,6 +1504,45 @@ private slots:
         tab->release = true;
         QTRY_VERIFY_WITH_TIMEOUT(!tab->isBusy(), 5000);
         QVERIFY(!window.sessionEndMustWait());
+    }
+
+    // V-01 (UI review 5.2): a backport run is not a queue job, yet the shell
+    // does not say "Ready" and "Queue idle" while one is in progress.
+    void shellSaysABackportRunIsInProgress()
+    {
+        MainWindow window(*m_ctx);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        bool busy = false;
+        window.setBackportHooksForTests({[&] { return busy; }, [] { return false; }, [](int) {}});
+        auto* header = window.findChild<ui::AppHeader*>();
+        auto* bar = window.findChild<ui::StatusBar*>();
+        QVERIFY(header && bar);
+        auto* page = window.findChild<pages::Page*>();
+        QVERIFY(page);
+        emit page->statusContextChanged();
+        QCOMPARE(header->queueChip()->text(), QStringLiteral("Queue idle"));
+        QVERIFY2(labelsOf(bar).contains(QStringLiteral("Ready")), qPrintable(labelsOf(bar)));
+        busy = true;
+        emit page->statusContextChanged(); // what the Backport page sends on each step of its run
+        QCOMPARE(header->queueChip()->text(), QStringLiteral("Backport running"));
+        QVERIFY2(labelsOf(bar).contains(QStringLiteral("Backport running")), qPrintable(labelsOf(bar)));
+        busy = false;
+        emit page->statusContextChanged();
+        QCOMPARE(header->queueChip()->text(), QStringLiteral("Queue idle"));
+    }
+
+    // V-19 (UI review 5.2): one ELF loader, one port in view; the ports of the
+    // two mount tools (as a rule the same) fold away under Advanced.
+    void toolElfPortsAreAdvanced()
+    {
+        const SettingDef* payload = m_ctx->schema().find(ps5::keys::kPayloadPort);
+        const SettingDef* smp = m_ctx->schema().find(ps5::keys::kShadowMountPort);
+        const SettingDef* mm = m_ctx->schema().find(ps5::keys::kMicroMountPort);
+        QVERIFY(payload && smp && mm);
+        QVERIFY(!payload->advanced);
+        QVERIFY(smp->advanced);
+        QVERIFY(mm->advanced);
     }
 
     // Audit A6: one free-space probe at a time on its own pool: a drive that

@@ -1170,8 +1170,8 @@ QStringList mountConfigWarnings(MountTool tool, const MountConfigValues& v)
             obsolete << it.key();
     if (!obsolete.isEmpty())
         out << (obsolete.size() == 1
-                    ? FW_TR("%1 no longer exists in ShadowMount+ 1.7 and is removed on push to a 1.7 console.")
-                    : FW_TR("%1 no longer exist in ShadowMount+ 1.7 and are removed on push to a 1.7 console."))
+                    ? FW_TR("%1 no longer exists in ShadowMount+ 1.7 and is removed when sent to a 1.7 console.")
+                    : FW_TR("%1 no longer exist in ShadowMount+ 1.7 and are removed when sent to a 1.7 console."))
                    .arg(obsolete.join(QStringLiteral(", ")));
     return out;
 }

@@ -41,7 +41,10 @@ QString firstFew(const QStringList& items, int n = 5)
 
 const QStringList& consoleImageSuffixes()
 {
-    static const QStringList s = {QStringLiteral(".exfat"), QStringLiteral(".ffpkg"), QStringLiteral(".ffpfs"), QStringLiteral(".ffpfsc")};
+    // .zstd: the single-file ZSTD image, an exFAT image that Kraken Mount MOD
+    // mounts (engines/integration/ZstdImage.h); listed and uploaded like an .exfat.
+    static const QStringList s = {QStringLiteral(".exfat"), QStringLiteral(".zstd"), QStringLiteral(".ffpkg"), QStringLiteral(".ffpfs"),
+                                  QStringLiteral(".ffpfsc")};
     return s;
 }
 

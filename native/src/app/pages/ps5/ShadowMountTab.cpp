@@ -120,7 +120,7 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
     names->addWidget(m_meta);
     hh->addLayout(names, 1);
     m_load = button(FW_TR("Load from console"), ButtonVariant::Secondary, QStringLiteral("download"), head);
-    m_push = button(FW_TR("Push changes"), ButtonVariant::Primary, QStringLiteral("upload"), head);
+    m_push = button(FW_TR("Send changes"), ButtonVariant::Primary, QStringLiteral("upload"), head);
     setToolPrimary(m_push);
     m_push->setEnabled(false);
     hh->addWidget(m_load, 0, Qt::AlignTop);
@@ -183,7 +183,7 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
         m_groups << d;
         l->addWidget(d);
     }
-    m_unknown = new Disclosure(FW_TR("Other lines in config.ini"), FW_TR("Kept exactly as they are when you push"), this);
+    m_unknown = new Disclosure(FW_TR("Other lines in config.ini"), FW_TR("Kept exactly as they are when you send"), this);
     m_unknownText = label({}, TextStyle::Mono, color::fg_2, m_unknown);
     m_unknownText->setWordWrap(true);
     m_unknownText->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -203,7 +203,7 @@ ShadowMountTab::ShadowMountTab(AppContext& ctx, EndpointFn endpointFn, QWidget* 
         // Loading replaces the form: ask when it holds changes that were not pushed.
         if (m_hasLoaded && !changes().isEmpty()
             && !Sheet::confirm(window(), FW_TR("Discard the changes?"),
-                               FW_TR("The form has changes that were not pushed to the console. Loading replaces them with what the console has."),
+                               FW_TR("The form has changes that were not sent to the console. Loading replaces them with what the console has."),
                                FW_TR("Keep editing"), FW_TR("Load"), true, Sheet::Icon::Warning))
             return;
         load();
@@ -337,7 +337,19 @@ QWidget* ShadowMountTab::buildRow(const SmpKey& k, QWidget* parent)
         h->addWidget(control, 1, 0, 1, 2);
         h->setColumnStretch(0, 1);
     } else {
-        h->addWidget(r.label, 0, 0, Qt::AlignVCenter);
+        // What the line changes on the console, under its name (V-08): a
+        // switch alone ("Quiet mode") says nothing to a beginner. A tall row
+        // has it as its field's placeholder.
+        auto* names = new QWidget(box);
+        auto* nl = vbox(names, 2);
+        nl->addWidget(r.label);
+        if (!shownHelp.isEmpty()) {
+            QLabel* help = caption(shownHelp, names);
+            help->setObjectName(QStringLiteral("smp-help-%1").arg(k.key));
+            help->setWordWrap(true);
+            nl->addWidget(help);
+        }
+        h->addWidget(names, 0, 0, Qt::AlignVCenter);
         h->addWidget(control, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
         h->addWidget(r.reset, 0, 2, Qt::AlignVCenter);
         h->setColumnStretch(0, 1);
@@ -444,7 +456,7 @@ void ShadowMountTab::refreshMarks()
     const QStringList warnings = ps5::mountConfigWarnings(ps5::MountTool::ShadowMountPlus, edited);
     if (!problems.isEmpty()) {
         m_problems->setTone(Tone::Err);
-        m_problems->setTitle(FW_TR("Fix before pushing"));
+        m_problems->setTitle(FW_TR("Fix before sending"));
         m_problems->setMessage(problems.join(u'\n'));
         m_problems->show();
     } else if (!warnings.isEmpty()) {
@@ -456,9 +468,9 @@ void ShadowMountTab::refreshMarks()
         m_problems->hide();
     }
     m_push->setEnabled(m_hasLoaded && !ch.isEmpty() && problems.isEmpty() && !isBusy());
-    m_push->setText(ch.isEmpty() ? FW_TR("Push changes")
-                    : ch.size() == 1 ? FW_TR("Push %1 change").arg(ch.size())
-                                     : FW_TR("Push %1 changes").arg(ch.size()));
+    m_push->setText(ch.isEmpty() ? FW_TR("Send changes")
+                    : ch.size() == 1 ? FW_TR("Send %1 change").arg(ch.size())
+                                     : FW_TR("Send %1 changes").arg(ch.size()));
 }
 
 void ShadowMountTab::setValue(const QString& key, const QString& value)
@@ -525,7 +537,7 @@ void ShadowMountTab::updateHeader()
     if (m_hasLoaded) {
         m_formatBadge->set(FW_TR("Config %1").arg(ps5::smpConfigFormatName(m_format)), m_format == ps5::SmpConfigFormat::Flat16 ? Tone::Warn : Tone::Info);
         m_formatBadge->setToolTip(m_format == ps5::SmpConfigFormat::Flat16 ? FW_TR("1.6 or unknown version: kstuff_* lines are kept")
-                                                                           : FW_TR("Obsolete kstuff_* lines are removed on push"));
+                                                                           : FW_TR("Obsolete kstuff_* lines are removed when you send"));
     }
     m_eject->setEnabled(jobs::isAvailable(m_ctx, ps5::jobkinds::kShadowMountEject) && (m_apiVersion.isEmpty() || ps5::smpVersionAtLeast(m_apiVersion, QStringLiteral("1.7"))));
 }
@@ -627,13 +639,13 @@ void ShadowMountTab::push(bool confirmed)
                                                      : FW_TR("Write %1 changes to the console?").arg(ch.size()),
                             FW_TR("%1<br><br>Only these lines change in %2; everything else stays. The current files are saved to this PC first.%3")
                                 .arg(Sheet::monoLines(lines), Sheet::monoSpan(where), debugOff),
-                            FW_TR("Cancel"), FW_TR("Push"), false, Sheet::Icon::Info))
+                            FW_TR("Cancel"), FW_TR("Send"), false, Sheet::Icon::Info))
             return;
     }
     const QString backupDir = ps5::newConsoleBackupDir();
     const QString apiVersion = m_apiVersion;
     const QString consoleHost = endpoint().host;
-    setStatus(FW_TR("Pushing…"), Tone::Info);
+    setStatus(FW_TR("Sending…"), Tone::Info);
     m_push->setEnabled(false);
     const bool started = runOnConsole<ps5::SmpRemoteState>(
         [files, backupDir, expectConfig, expectProfiles, apiVersion](ps5::FtpClient& c, const CancellationToken& t) -> Result<ps5::SmpRemoteState> {
@@ -646,7 +658,7 @@ void ShadowMountTab::push(bool confirmed)
         [this, n = ch.size(), consoleHost](const Result<ps5::SmpRemoteState>& r) {
             if (!r.ok()) {
                 setStatus(r.error().message, Tone::Err);
-                emit toastRequested(Tone::Err, FW_TR("Not pushed"), r.error().message);
+                emit toastRequested(Tone::Err, FW_TR("Not sent"), r.error().message);
                 refreshMarks();
                 return;
             }
@@ -654,10 +666,10 @@ void ShadowMountTab::push(bool confirmed)
             setStatus(n == 1 ? FW_TR("%1 change written; ShadowMount+ reloads its config by itself.").arg(n)
                              : FW_TR("%1 changes written; ShadowMount+ reloads its config by itself.").arg(n),
                       Tone::Ok);
-            emit toastRequested(Tone::Ok, FW_TR("Config pushed"), n == 1 ? FW_TR("%1 setting changed").arg(n) : FW_TR("%1 settings changed").arg(n));
+            emit toastRequested(Tone::Ok, FW_TR("Config sent"), n == 1 ? FW_TR("%1 setting changed").arg(n) : FW_TR("%1 settings changed").arg(n));
         });
     if (!started) {
-        setStatus(whyNotStarted(), Tone::Warn); // nothing runs: not "Pushing…"
+        setStatus(whyNotStarted(), Tone::Warn); // nothing runs: not "Sending…"
         refreshMarks();
     }
 }
@@ -820,7 +832,7 @@ QWidget* ShadowMountTab::buildMicroMount(QWidget* parent)
     rh->addWidget(m_mmStatus, 1);
     auto* load = button(FW_TR("Load"), ButtonVariant::Secondary, QStringLiteral("download"), row);
     auto* defaults = button(FW_TR("Defaults"), ButtonVariant::Subtle, QStringLiteral("undo"), row);
-    m_mmPush = button(FW_TR("Push"), ButtonVariant::Secondary, QStringLiteral("upload"), row);
+    m_mmPush = button(FW_TR("Send"), ButtonVariant::Secondary, QStringLiteral("upload"), row);
     rh->addWidget(defaults);
     rh->addWidget(load);
     rh->addWidget(m_mmPush);
@@ -875,7 +887,7 @@ QWidget* ShadowMountTab::buildMicroMount(QWidget* parent)
         }
         if (!Sheet::confirm(window(), FW_TR("Write %1 to the console?").arg(ps5::mountConfigRemotePath(ps5::MountTool::MicroMount)),
                             FW_TR("The current file on the PS5 is saved to this PC first, then the new one is swapped in."),
-                            FW_TR("Cancel"), FW_TR("Push"), false, Sheet::Icon::Info))
+                            FW_TR("Cancel"), FW_TR("Send"), false, Sheet::Icon::Info))
             return;
         const QString text = ps5::renderMountConfig(ps5::MountTool::MicroMount, v);
         const QString backupDir = ps5::newConsoleBackupDir();

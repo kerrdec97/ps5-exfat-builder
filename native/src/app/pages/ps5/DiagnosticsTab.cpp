@@ -487,7 +487,7 @@ void DiagnosticsTab::showResult(const ps5::FtpDiagnosis& d, const QString& verdi
 void DiagnosticsTab::showSpecimen()
 {
     ps5::FtpDiagnosis d;
-    d.host = QStringLiteral("192.168.1.42");
+    d.host = QStringLiteral("192.168.1.40"); // the console the other PS5 demos show (V-23)
     d.port = 2121;
     d.folder = QStringLiteral("/mnt/usb0/games");
     d.reachable = true;

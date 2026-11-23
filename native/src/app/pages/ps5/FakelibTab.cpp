@@ -61,7 +61,8 @@ FakelibTab::FakelibTab(AppContext& ctx, EndpointFn endpointFn, QWidget* parent)
     setToolPrimary(m_add); // the tab's one gradient button
     m_replace = button(FW_TR("Replace…"), ButtonVariant::Secondary, QStringLiteral("replace"), card);
     m_toggle = button(FW_TR("Disable"), ButtonVariant::Secondary, QStringLiteral("toggle"), card);
-    m_remove = button(FW_TR("Remove"), ButtonVariant::Secondary, QStringLiteral("trash"), card);
+    // "…": it asks first (V-16).
+    m_remove = button(FW_TR("Remove…"), ButtonVariant::Secondary, QStringLiteral("trash"), card);
     m_refresh = new IconButton(QStringLiteral("refresh"), FW_TR("Refresh"), IconButton::Size::Regular, card);
     m_refresh->setToolTip(FW_TR("List the overlays again"));
     for (auto* b : {m_add, m_replace, m_toggle, m_remove})
