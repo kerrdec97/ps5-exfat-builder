@@ -1009,6 +1009,36 @@ Result<PlanSummary> Ufs2Writer::plan()
     return m_summary;
 }
 
+std::vector<std::vector<archive::Extent>> Ufs2Writer::fileExtents() const
+{
+    std::vector<std::vector<archive::Extent>> out(m_tree.nodes.size());
+    if (!m_plan)
+        return out;
+    const Plan& p = *m_plan;
+    std::vector<const Segment*> segs;
+    for (const Segment& s : p.data)
+        if (s.kind == SegKind::FileData)
+            segs.push_back(&s);
+    std::stable_sort(segs.begin(), segs.end(), [](const Segment* a, const Segment* b) {
+        return a->ref != b->ref ? a->ref < b->ref : a->sub < b->sub;
+    });
+    for (const Segment* s : segs) {
+        const TreeNode& n = m_tree.nodes[size_t(s->ref)];
+        const qint64 fileOff = s->sub * p.g.bsize;
+        const qint64 len = std::min(n.size - fileOff, s->length);
+        if (len <= 0)
+            continue;
+        auto& list = out[size_t(s->ref)];
+        // Runs that follow on in the file and in the image are one extent.
+        if (!list.empty() && list.back().fileOffset + list.back().length == fileOff
+            && list.back().imageOffset + list.back().length == s->offset)
+            list.back().length += len;
+        else
+            list.push_back({fileOff, s->offset, len});
+    }
+    return out;
+}
+
 Result<WriteStats> Ufs2Writer::write(const QString& path, const CancellationToken& token, ProgressReporter* progress)
 {
     if (!m_plan)
@@ -1132,6 +1162,8 @@ Result<WriteStats> Ufs2Writer::write(const QString& path, const CancellationToke
         }
         case SegKind::FileData: {
             const TreeNode& n = m_tree.nodes[size_t(s.ref)];
+            if (m_opt.leaveArchiveData && n.archiveItem >= 0)
+                break; // the archive pass writes it (and counts it)
             if (streamNode != s.ref) {
                 if (stream)
                     return Error(ErrorCode::Internal, QStringLiteral("Image layout error (interleaved files)."));
@@ -1176,9 +1208,15 @@ Result<WriteStats> Ufs2Writer::write(const QString& path, const CancellationToke
     }
     if (stream)
         return Error(ErrorCode::Internal, QStringLiteral("Image layout error (unfinished file)."));
-    // Files without data blocks (empty files) are done as well.
-    if (progress && p.emptyFiles > 0)
-        progress->advanceFiles(p.emptyFiles);
+    // Files without data blocks (empty files) are done as well; the archive
+    // pass counts its own.
+    qint64 emptyDone = p.emptyFiles;
+    if (m_opt.leaveArchiveData)
+        for (const TreeNode& n : m_tree.nodes)
+            if (!n.isDir() && !n.removed && n.size == 0 && n.archiveItem >= 0)
+                --emptyDone;
+    if (progress && emptyDone > 0)
+        progress->advanceFiles(emptyDone);
     FW_TRY(pipe.finish(m_summary.imageBytes));
     out.close();
     if (out.error() != QFileDevice::NoError)

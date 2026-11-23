@@ -10,6 +10,7 @@
 // Source reads and image writes overlap through a small pool of large buffers
 // handed to a writer thread.
 
+#include "core/ArchiveStream.h"
 #include "core/Cancellation.h"
 #include "core/Progress.h"
 #include "core/Result.h"
@@ -33,6 +34,10 @@ struct WriterOptions {
     qint64 sizeBytes = 0;
     qint64 ioBufferBytes = 4 * 1024 * 1024;
     int ioBuffers = 3;
+    // Builds that stream an archive (Ufs2Archive.h): the data blocks of nodes
+    // with an archiveItem are left as they are (zeros), for the archive pass
+    // to fill in afterwards (fileExtents() says where).
+    bool leaveArchiveData = false;
 };
 
 struct PlanSummary {
@@ -70,6 +75,9 @@ public:
     // advances by source bytes copied. On failure the file is left for the
     // caller to delete (callers write to a PartFile).
     Result<WriteStats> write(const QString& path, const CancellationToken& token, ProgressReporter* progress);
+    // After plan(): where each node's bytes are in the image, in file order
+    // (indexed like the tree's nodes; empty for folders and empty files).
+    std::vector<std::vector<archive::Extent>> fileExtents() const;
 
     struct Plan; // layout state, private to Ufs2Writer.cpp
 

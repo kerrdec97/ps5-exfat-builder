@@ -4,7 +4,9 @@
 #include "core/FileUtil.h"
 #include "engines/general/Module.h"
 #include "engines/ufs2/Module.h"
+#include "core/ArchiveStream.h"
 #include "engines/ufs2/Ufs2Ampr.h"
+#include "engines/ufs2/Ufs2Archive.h"
 #include "engines/ufs2/Ufs2Check.h"
 #include "engines/ufs2/Ufs2Edit.h"
 #include "engines/ufs2/Ufs2Reader.h"
@@ -17,6 +19,7 @@
 #include <QJsonArray>
 
 #include <algorithm>
+#include <optional>
 
 namespace fw::ufs2 {
 
@@ -221,19 +224,20 @@ public:
     {
         return {QStringLiteral("Scanning"), QStringLiteral("Writing image"), QStringLiteral("Verifying")};
     }
-    QList<double> phaseWeights() const override { return threePhaseWeights(archive::isZipSource(source()), true, true); }
+    // An archive is streamed into the image (#37): no unpacking step in Scanning.
+    QList<double> phaseWeights() const override { return threePhaseWeights(false, true, true); }
     // The structure check runs with verification turned off too; only a
     // byte-for-byte compare takes the verification's full share.
     QList<double> phaseWeights(const SettingsValues& s) const override
     {
-        return threePhaseWeights(archive::isZipSource(source()), true, verifyEnabled(s) && verifyDepth(s) == CompareDepth::Full);
+        return threePhaseWeights(false, true, verifyEnabled(s) && verifyDepth(s) == CompareDepth::Full);
     }
     QJsonObject parameters() const override { return m_p; }
 
     Status validate(const SettingsValues& settings) const override
     {
         const QString src = source(), out = output();
-        if (archive::isZipSource(src)) // #67: a zipped dump, unpacked in run()
+        if (archive::isZipSource(src)) // #67, #37: an archived dump, streamed in run()
             FW_TRY(archive::checkZipSource(src));
         else if (src.isEmpty() || !QFileInfo(src).isDir())
             return Error(ErrorCode::NotFound, QStringLiteral("Choose an existing game folder to build from."));
@@ -255,21 +259,30 @@ public:
     {
         FW_TRY(validate(ctx.settings));
         // As the queue declared them (a runner that declared none gets them
-        // here), before anything is counted: the unpacking of a zipped dump
-        // is the first step of Scanning.
+        // here), before anything is counted.
         ctx.progress->setPhases(phases(), phaseWeights(ctx.settings));
-        if (archive::isZipSource(source())) {
-            const QString zip = source();
-            FW_TRY_ASSIGN(m_unpacked, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, marginBytes(ctx.settings)));
-            ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_unpacked)));
-        }
         const QString src = source(), out = output();
         ProgressReporter& prog = *ctx.progress;
         JobOutcome outcome;
 
         prog.beginPhase(0, 0, 0, false);
-        ctx.log.info(QStringLiteral("Scanning %1").arg(native(src)));
-        FW_TRY_ASSIGN(SourceTree tree, scanLocalFolder(src, ctx.token));
+        // An archived dump (#37) is built straight from the archive: its list
+        // gives the tree, one pass through it the files' data. Nothing is
+        // unpacked to disk.
+        std::optional<archive::GameListing> game;
+        SourceTree tree;
+        if (archive::isZipSource(src)) {
+            m_streamed = true;
+            ctx.log.info(archive::streamingLogLine(src));
+            FW_TRY_ASSIGN(game, archive::listArchiveGame(src, ctx.token));
+            FW_TRY_ASSIGN(tree, treeFromArchive(*game, QDateTime::currentDateTime(), ctx.token));
+            if (game->links > 0)
+                ctx.log.info(QStringLiteral("%1 symbolic or hard links in the archive are left out, as unpacking leaves them out.")
+                                 .arg(formatCount(game->links)));
+        } else {
+            ctx.log.info(QStringLiteral("Scanning %1").arg(native(src)));
+            FW_TRY_ASSIGN(tree, scanLocalFolder(src, ctx.token));
+        }
         if (tree.fileCount == 0 && tree.dirCount == 0)
             return Error(ErrorCode::InvalidArgument, QStringLiteral("%1 is empty.").arg(native(src)));
         ctx.log.info(QStringLiteral("%1 in %2, %3").arg(counted(tree.fileCount, "file", "files"),
@@ -281,9 +294,16 @@ public:
         // written. The folder's own listing is kept for the check before the
         // folder is deleted.
         const QStringList folderListing = listingOf(tree);
+        // From an archive, the dump's own index is read out of it when it has to be compared.
+        NodeContents fromArchive;
+        if (game)
+            fromArchive = [&](const TreeNode& n) -> Result<QByteArray> {
+                const QString rel = n.archiveItem >= 0 ? game->items[size_t(n.archiveItem)].path : QString();
+                return archive::readGameFile(*game, rel, std::max<qint64>(n.size + 1, 1), ctx.token);
+            };
         FW_TRY_ASSIGN(const AmprPlacement ampr,
                       applyAmprIndex(tree, pfs::amprModeFromSetting(ctx.settings.string(keys::kAmprIndex), pfs::AmprMode::Auto),
-                                     ctx.tempDir));
+                                     ctx.tempDir, fromArchive));
         if (const QString line = pfs::amprActionLogLine(ampr.action); !line.isEmpty())
             ctx.log.info(line);
         if (const QString line = pfs::amprLeftOutLogLine(ampr.leftOut); !line.isEmpty())
@@ -293,6 +313,7 @@ public:
         WriterOptions opt;
         opt.params = formatParams(ctx.settings, &notes);
         opt.ioBufferBytes = ioBufferBytes(ctx.settings);
+        opt.leaveArchiveData = game.has_value();
         for (const QString& n : notes) {
             ctx.log.warn(n);
             outcome.warnings << n;
@@ -327,7 +348,17 @@ public:
                                         "Choose a folder on an NTFS or exFAT drive."));
 
         prog.beginPhase(1, tree.totalBytes, tree.fileCount);
-        FW_TRY_ASSIGN(WriteStats ws, writer.write(part.partPath(), ctx.token, ctx.progress));
+        WriteStats ws;
+        if (game) {
+            // The metadata first, then the archive's files where the plan put them.
+            FW_TRY_ASSIGN(ArchiveWriteStats as, writeImageFromArchive(writer, tree, *game, part.partPath(),
+                                                                      ioBufferBytes(ctx.settings), ctx.token, ctx.progress));
+            ws = as.metadata;
+            ws.elapsedMs += as.stream.elapsedMs;
+            ws.bytesPerSec = ws.elapsedMs > 0 ? double(ws.dataBytes) * 1000.0 / double(ws.elapsedMs) : 0.0;
+        } else {
+            FW_TRY_ASSIGN(ws, writer.write(part.partPath(), ctx.token, ctx.progress));
+        }
         ctx.log.info(QStringLiteral("Wrote %1 (%2 of files) in %3 — %4")
                          .arg(formatBytes(ws.imageBytes), formatBytes(ws.dataBytes), seconds(ws.elapsedMs), formatRate(ws.bytesPerSec)));
 
@@ -365,14 +396,15 @@ public:
 
         if (ctx.settings.boolean(keys::kDeleteSourceAfterBuild)) {
             QString why;
-            if (v.verification != Verification::Passed || depth != CompareDepth::Full)
+            if (m_streamed)
+                ; // an archive is never deleted (below)
+            else if (v.verification != Verification::Passed || depth != CompareDepth::Full)
                 why = QStringLiteral("the image was not verified byte for byte");
             else if (!QFileInfo(QDir(src).filePath(QStringLiteral("eboot.bin"))).isFile())
                 why = QStringLiteral("the folder has no eboot.bin");
             else if (auto again = scanLocalFolder(src, ctx.token); !again.ok() || listingOf(again.value()) != folderListing)
                 why = QStringLiteral("files in it changed while the image was being built");
-            if (!m_unpacked.isEmpty()) {
-                // `src` is the unpacked copy in the job's temporary folder.
+            if (m_streamed) {
                 const QString w = QStringLiteral("The ZIP %1 was kept: only folders are deleted after a build.")
                                       .arg(native(absolute(m_p.value(QStringLiteral("source")).toString())));
                 outcome.warnings << w;
@@ -396,13 +428,11 @@ public:
     }
 
 private:
-    // A zipped dump is unpacked at the start of run(); from then on the game
-    // folder inside the job's temp folder is the source.
-    QString source() const { return m_unpacked.isEmpty() ? absolute(m_p.value(QStringLiteral("source")).toString()) : m_unpacked; }
+    QString source() const { return absolute(m_p.value(QStringLiteral("source")).toString()); }
     QString output() const { return absolute(m_p.value(QStringLiteral("output")).toString()); }
     bool replaceExisting() const { return m_p.value(QStringLiteral("replaceExisting")).toBool(false); }
     QJsonObject m_p;
-    QString m_unpacked;
+    bool m_streamed = false; // built straight from an archive
 };
 
 // ---- verify -----------------------------------------------------------------------------
