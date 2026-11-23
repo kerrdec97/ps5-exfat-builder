@@ -47,6 +47,8 @@ public:
     bool showAdvanced() const { return m_advanced; }
     int attentionCount() const; // dependency problems + invalid values
     void setSearchText(const QString& text);
+    // Imports a version 4 settings.json (the Import legacy button after its file dialog).
+    void importLegacyFrom(const QString& path);
 signals:
     void attentionChanged();
 
@@ -67,7 +69,6 @@ private:
     void setCompactList(bool compact); // icon-only section list on narrow windows
     void syncSectionBar(bool animate); // the section list's one sliding selection bar
     void importLegacy();
-    void importLegacyFrom(const QString& path);
     void resetAll();
     void updateTempUsage();
     QString sectionCaption(const QString& section) const;
