@@ -27,10 +27,16 @@
 #include "core/Result.h"
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 
+#include <memory>
+#include <vector>
+
 namespace fw::archive {
+
+struct ArchiveListing;
 
 // An existing file named *.zip, *.7z or *.rar.
 bool isArchiveSource(const QString& path);
@@ -84,6 +90,51 @@ Result<QString> unpackArchiveSource(const QString& path, const QString& tempDir,
 Result<QString> unpackZipSource(const QString& zipPath, const QString& tempDir, const CancellationToken& token,
                                 ProgressReporter* progress = nullptr,
                                 qint64 freeSpaceMarginBytes = 256LL * 1024 * 1024);
+
+// ---- the game, from the archive's list alone (builds that stream) --------
+
+// One file or folder of the game, as it goes into an image.
+struct GameItem {
+    QString entry;       // its name in the archive; empty for a folder only implied by the names in it
+    QString path;        // inside the game, '/' separated: what the unpacked folder would hold
+    bool isDir = false;
+    qint64 size = 0;     // files: as listed
+    QDateTime modified;  // files: as listed, the time unpacking gives the file (invalid: none)
+    int source = -1;     // files: index of the entry in the archive's list
+};
+
+struct GameListing {
+    QString archive;     // the file the user chose
+    bool zip = false;    // read by zip::Reader, else by libarchive (`listing`)
+    std::shared_ptr<const ArchiveListing> listing;
+    QString rootPrefix;  // as ZipGame::rootPrefix
+    // Exactly what unpackArchiveSource() would make of the game: every file,
+    // every folder (listed or implied by the names under it), no links;
+    // sorted by path, so each folder comes before what it holds.
+    std::vector<GameItem> items;
+    qint64 files = 0, dirs = 0, bytes = 0;
+    qint64 links = 0;    // never unpacked, so never in an image
+    bool hasEboot = false; // eboot.bin at the top of the game
+
+    // The item for a path inside the game (compared without regard to case), or -1.
+    int find(const QString& path) const;
+    // "Folder" for an archive of the game's folder; "" for one of its contents.
+    QString rootName() const;
+};
+
+// The checks of checkArchiveSource() (readable, one game, every name safe and
+// storable, no password), then the list. Nothing is decoded.
+Result<GameListing> listArchiveGame(const QString& path, const CancellationToken& token = {});
+
+// The whole contents of one small file of the game (`path` as in GameItem).
+// In a 7z or RAR archive that decodes everything stored before it.
+Result<QByteArray> readGameFile(const GameListing& game, const QString& path, qint64 maxSize,
+                                const CancellationToken& token = {});
+
+// Tests only: the whole archive as if it were the game (rootPrefix ""), with
+// the name checks but without looking for eboot.bin or param.json, for the
+// sample archives of libarchive's test suite.
+Result<GameListing> listWholeArchiveForTesting(const QString& path, const CancellationToken& token = {});
 
 // Tests only: what reading param.json out of a 7z or RAR archive may cost
 // (-1: no limit), and forget every list read so far.
