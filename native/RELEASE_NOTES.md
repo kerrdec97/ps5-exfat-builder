@@ -24,6 +24,18 @@ console yet.
   extract, convert, edit, compare, Library, PS5 connect lists); a file that is
   a plain zstd stream or not an exFAT image is refused with a clear text. Not
   yet confirmed against ModGames44's own tool or on a console.
+* **Build straight from an archive, GitHub #37.** exFAT and FFPKG images are
+  built directly from a `.zip`, `.7z` or `.rar`: one pass through the archive,
+  nothing is unpacked to disk, so the temporary drive no longer needs room for
+  the game. Every entry's checksum is verified while it is read, and the
+  finished image is read back and checked before it gets its name. Builds
+  with zstd packs (compressed exFAT, ZSTD image, packed folder), PFS images
+  and FPKG packages still unpack the archive first; the job log says which
+  way a build went and why.
+* **Compressed exFAT is a visible choice.** The exFAT tile starts with
+  **Image type: Standard / Compressed**. Compressed is the same `.exfat`,
+  smaller, with the game's files in zstd packs (it replaces the "Compress
+  game files" switch further down the tile).
 * **ampr-emu-ng 0.5.0** is the bundled runtime for zstd packs (was 0.3.3).
   The pack format is unchanged. `.ini` files are never packed; a game that
   already carries a newer runtime gets a warning; the mounter notes name
