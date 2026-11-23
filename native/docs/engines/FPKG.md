@@ -42,7 +42,7 @@ formats (GP5, scenario and `param.json`) are checked against goldens written by 
 
 | Kind | JSON parameters | Phases (weight) |
 |---|---|---|
-| `fpkg.build` | `source` (folder, `.gp5`, or an image with a registered stager), `output`?, `basePackage`?, `baseFolder`?, `exactSource`? (bool), `updateOutput`? (`both` \| `update` \| `full`, default `both`), `contentId`? (must equal `param.json`), `contentVersion`?, `title`? | Preparing the source 8 · Planning 0.5 · Writing project files 0.5 · Pre-reading files 3 · Packing 90 · Checking the package 1 · Verifying with img_verify 8 · Computing SHA-256 6; a stage the build skips takes no share (pre-scan off, img_verify off, no SHA-256) |
+| `fpkg.build` | `source` (folder, `.gp5`, an image with a registered stager, or an archived dump `.zip` / `.7z` / `.rar`, unpacked into the job's temporary folder first, #37), `output`?, `titleAllLanguages`? (bool, default true, #94), `basePackage`?, `baseFolder`?, `exactSource`? (bool), `updateOutput`? (`both` \| `update` \| `full`, default `both`), `contentId`? (must equal `param.json`), `contentVersion`?, `title`? | Preparing the source 8 · Planning 0.5 · Writing project files 0.5 · Pre-reading files 3 · Packing 90 · Checking the package 1 · Verifying with img_verify 8 · Computing SHA-256 6; a stage the build skips takes no share (pre-scan off, img_verify off, no SHA-256) |
 | `fpkg.addon` | `payloadFolder`, `output`?, `contentId`?, `entitlementKey` (32 hex), `volumeType`? (`prospero_ac`; `prospero_al` is refused) | as `fpkg.build` (no Preparing the source, no Pre-reading files) |
 | `fpkg.backport` | `package`? (the base; empty with `buildBase`), `game`? (the base's game folder; required with `buildBase`), `backport4xx`?, `backport5xx`? (folder or `.zip`, at least one), `version`? (default: base + 1 in the last group), `output`?, `buildBase`? (bool) | Checking the inputs 2 · [Building the base package 40] · Checking the base package 10 · Building the 4.xx update 40 · Building the 5.xx+ update 40 |
 | `fpkg.verify` | `package`, `passcode`? (default `fpkg.passcode`), `integrity`? (default true) | Checking the header 1 · Verifying with img_verify 99 |
@@ -160,6 +160,15 @@ control on the running job).
   when a temporary folder is set); the engine then finds the app root (first folder with `sce_sys`, breadth-first,
   depth ≤ 3). The work folder is tracked and removed when the build ends, or by the next sweep after a crash. Without a
   registered stager `validate()` reports that images are not available yet.
+* Archived dumps (GitHub #37): `validate()` checks the archive (`archive::checkArchiveSource`); `run()` unpacks it
+  with `archive::unpackArchiveSource` into the job's temporary folder (free space on that drive checked first) and
+  builds from that folder exactly as from a folder; the package goes where it would go for the archive
+  (`<archive name>-pkg` next to it by default), never into the temporary folder, which the queue removes afterwards.
+  Add-ons are still made from their own folder.
+* Title (GitHub #94): `titleAllLanguages` (Build page "Title for all languages", default on) writes a changed title
+  into every `localizedParameters.<lang>.titleName`, not only the default language's. Only a real rename counts:
+  the default language must have had a title of its own that differs (a fallback the page shows is no rename). Off:
+  the default language only, as the reference toolkit does, and the log names the languages that keep their own title.
 * Add-ons: `prospero_ac` project with the entitlement key and no `chunk_info`; the add-on's own `param.json` is packaged
   unchanged; `prospero_al` refused. `addonsFromDlcEmu(gameFolder)` lists `dlc_emu.ini` entries for the dialog.
 * Two builds of the same Content ID into the same folder never pack at the same time (the second waits).

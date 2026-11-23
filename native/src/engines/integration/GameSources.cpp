@@ -15,6 +15,7 @@
 #include "engines/fpkg/DumpRules.h"
 #include "engines/fpkg/SourceStager.h"
 #include "engines/general/Module.h"
+#include "engines/integration/ZstdImage.h"
 #include "engines/pfs/Module.h"
 #include "engines/ufs2/Module.h"
 
@@ -170,6 +171,10 @@ public:
     }
     QString subtitle() const override
     {
+        // A ZSTD image (GitHub #98) is named as the Build page's tile is, with
+        // its own extension, ".zstd", in the queue and the monitor.
+        if (isZstdImageName(output()))
+            return QStringLiteral("ZSTD image (experimental) · .zstd → %1").arg(native(QFileInfo(output()).absolutePath()));
         return QStringLiteral("zstd packs · .%1 → %2").arg(format(), native(QFileInfo(output()).absolutePath()));
     }
     QStringList phases() const override
@@ -192,6 +197,9 @@ public:
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the game folder (or an archived dump) to pack."));
         if (output().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the image."));
+        // A .zstd single file is an exFAT image with the packs inside (ZstdImage.h).
+        if (isZstdImageName(output()) && format() != u"exfat")
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Only an exFAT image with zstd packs can be named .zstd."));
         if (!m_factory || !m_factory->contains(childKindFor(format())))
             return Error(ErrorCode::Unsupported, QStringLiteral("This image format is not available in this build."));
         const QString problem = ampr::bundledRuntimeProblem();
@@ -277,6 +285,9 @@ public:
         // its files (that would drop the packed files), no per-file PFS
         // compression (the volumes keep their exact sizes), and nothing deleted.
         sub.settings = childSettings(ctx.settings);
+        if (isZstdImageName(output()) && ctx.settings.string(exfat::keys::kSectorSize) != u"512")
+            ctx.log.info(QStringLiteral("Sector size %1 in Settings is not used: a .zstd is written with 512-byte sectors, the only size "
+                                        "Kraken Mount MOD reads.").arg(ctx.settings.string(exfat::keys::kSectorSize)));
         ChildProgress cp(ctx.progress, 3, ph);
         // The child's own phase list, so each of its phases gets its index
         // (a build that never declares them would stay on its first).
@@ -299,8 +310,12 @@ public:
                                        {QStringLiteral("previousRuntime"), rep.previousRuntime.describe()}});
         if (out.verification != Verification::Failed)
             out.summary = QStringLiteral("zstd: %1. %2").arg(rep.summary(), out.summary);
-        out.warnings << QStringLiteral("Packed games need ShadowMount+ with \"Update game fakelib emulators\" turned off, or the "
-                                       "runtime is replaced and the game cannot read its packs.");
+        // ShadowMount+ does not mount a .zstd (report 03): its warning is for the other images.
+        if (isZstdImageName(output()))
+            out.warnings << QStringLiteral("A .zstd file is for Kraken Mount MOD; it is not yet confirmed on a console.");
+        else
+            out.warnings << QStringLiteral("Packed games need ShadowMount+ with \"Update game fakelib emulators\" turned off, or the "
+                                           "runtime is replaced and the game cannot read its packs.");
         return out;
     }
 
@@ -352,7 +367,16 @@ private:
     // files (that would drop the packed files), no per-file PFS compression
     // (the volumes keep their exact sizes), no exclusions (they were applied
     // before packing; a pattern could now hit the packs) and nothing deleted.
-    static SettingsValues childSettings(const SettingsValues& s)
+    // A .zstd (Kraken Mount MOD) is attached with 512-byte sectors only
+    // (report 03): Settings › exFAT › Sector size, which may be 4096 for
+    // ShadowMount+, never reaches it.
+    SettingsValues childSettings(const SettingsValues& s) const
+    {
+        if (isZstdImageName(output()))
+            return baseChildSettings(s).withOverrides({{exfat::keys::kSectorSize, QStringLiteral("512")}});
+        return baseChildSettings(s);
+    }
+    static SettingsValues baseChildSettings(const SettingsValues& s)
     {
         return s.withOverrides({{pfs::keys::kAmprIndex, QStringLiteral("off")},
                                 {exfat::keys::kAmprIndex, QStringLiteral("off")},
@@ -430,7 +454,9 @@ public:
         if (!QFileInfo::exists(source()))
             return Error(ErrorCode::NotFound, QStringLiteral("Choose the image or game folder to extract."));
         if (!QFileInfo(source()).isDir() && !isTreeImage(source()))
-            return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs or .ffpfsc image or a game folder."));
+            return Error(ErrorCode::Unsupported, QStringLiteral("Choose an .exfat, .zstd, .ffpkg, .ffpfs or .ffpfsc image or a game folder."));
+        if (isZstdImageName(source()))
+            FW_TRY(checkZstdImage(source()));
         if (output().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to extract to."));
         const QString o = QFileInfo(output()).absoluteFilePath();

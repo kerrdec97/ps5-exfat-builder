@@ -43,7 +43,7 @@ const QString kConvertKind = QStringLiteral("image.convert");
 // A function, not a constant: the descriptions are translated when the dialog is set up.
 QString imageFilter()
 {
-    return FW_TR("Images") + QStringLiteral(" (*.exfat *.ffpkg *.ffpfs *.ffpfsc);;") + FW_TR("FPKG packages") + QStringLiteral(" (*.pkg);;")
+    return FW_TR("Images") + QStringLiteral(" (*.exfat *.zstd *.ffpkg *.ffpfs *.ffpfsc);;") + FW_TR("FPKG packages") + QStringLiteral(" (*.pkg);;")
            + FW_TR("All files") + QStringLiteral(" (*)");
 }
 
@@ -434,7 +434,7 @@ void ImageToolsPage::buildImageCard()
     });
 
     m_drop = new DropZone(QStringLiteral("drive"), FW_TR("Open an image"),
-                          FW_TR("Drop an .exfat, .ffpkg, .ffpfs or .ffpfsc file here, or click to browse"), m_imageCard);
+                          FW_TR("Drop an .exfat, .zstd, .ffpkg, .ffpfs or .ffpfsc file here, or click to browse"), m_imageCard);
     m_drop->setToolTip(FW_TR("FPKG packages (.pkg) can be opened too, to extract or verify them."));
     connect(m_drop, &DropZone::clicked, m_imageField->browseButton(), &QPushButton::click);
     m_imageCard->body()->addWidget(m_drop);
@@ -1054,9 +1054,9 @@ void ImageToolsPage::updateCompareKind()
 {
     const bool folder = m_compareBKind->currentValue().toString() == QLatin1String("folder");
     m_compareB->setMode(folder ? PathField::Mode::Directory : PathField::Mode::OpenFile);
-    m_compareB->setFilter(FW_TR("Images") + QStringLiteral(" (*.exfat *.ffpkg *.ffpfs *.ffpfsc);;") + FW_TR("All files") + QStringLiteral(" (*)"));
+    m_compareB->setFilter(FW_TR("Images") + QStringLiteral(" (*.exfat *.zstd *.ffpkg *.ffpfs *.ffpfsc);;") + FW_TR("All files") + QStringLiteral(" (*)"));
     m_compareB->setDialogTitle(folder ? FW_TR("Choose the folder to compare with") : FW_TR("Choose the image to compare with"));
-    m_compareB->setPlaceholder(folder ? FW_TR("A game folder, e.g. the dump the image was built from") : FW_TR(".exfat, .ffpkg, .ffpfs or .ffpfsc"));
+    m_compareB->setPlaceholder(folder ? FW_TR("A game folder, e.g. the dump the image was built from") : FW_TR(".exfat, .zstd, .ffpkg, .ffpfs or .ffpfsc"));
     m_compareB->setError({});
 }
 
@@ -1089,13 +1089,13 @@ bool ImageToolsPage::checkCompareInputs(QString* problem)
     const QFileInfo fa(m_path), fb(b);
     QString msg;
     if (!isCompareImage(m_path))
-        msg = FW_TR("Only .exfat, .ffpkg, .ffpfs and .ffpfsc images can be compared.");
+        msg = FW_TR("Only .exfat, .zstd, .ffpkg, .ffpfs and .ffpfsc images can be compared.");
     else if (b.isEmpty())
         msg = bFolder ? FW_TR("Choose the folder to compare with.") : FW_TR("Choose the image to compare with.");
     else if (bFolder ? !fb.isDir() : !fb.isFile())
         msg = bFolder ? FW_TR("This folder does not exist.") : FW_TR("This file does not exist.");
     else if (!bFolder && !isCompareImage(b))
-        msg = FW_TR("Choose an .exfat, .ffpkg, .ffpfs or .ffpfsc image, or switch to Folder.");
+        msg = FW_TR("Choose an .exfat, .zstd, .ffpkg, .ffpfs or .ffpfsc image, or switch to Folder.");
     else if (QDir::cleanPath(fa.absoluteFilePath()) == QDir::cleanPath(fb.absoluteFilePath()))
         msg = FW_TR("Choose a different image than the one that is open.");
     m_compareB->setError(msg);

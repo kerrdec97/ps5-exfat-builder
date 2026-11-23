@@ -22,7 +22,10 @@
 #include "engines/general/Module.h"
 #include "engines/integration/GameSources.h"
 #include "engines/integration/ImageFiles.h"
+#include "engines/integration/ImageCompare.h"
 #include "engines/integration/Module.h"
+#include "engines/integration/ZstdImage.h"
+#include "engines/pfs/AmprIndex.h"
 #include "engines/pfs/Module.h"
 #include "engines/ufs2/Module.h"
 #include "jobs/JobQueue.h"
@@ -35,6 +38,10 @@
 #include <QJsonArray>
 #include <QTemporaryDir>
 #include <QTest>
+
+#include <zstd.h>
+
+#include <algorithm>
 
 using namespace fw;
 
@@ -247,6 +254,179 @@ private slots:
                                                                      {QStringLiteral("source"), m_game},
                                                                      {QStringLiteral("output"), m_game + QStringLiteral("/x.exfat")}});
         QVERIFY(!inside.ok());
+    }
+
+    // GitHub #98, report 03: the ".zstd" file Kraken Mount MOD mounts is a bare
+    // exFAT volume (boot sector at byte 0, "EXFAT   " at 3..10) holding the
+    // game with its files in ampr-emu-ng zstd packs. image.build.zstd with
+    // format exfat writes exactly that; named .zstd it is the same image.
+    // (Only the reader's contract is checked here; MOCK, no console.)
+    void zstdSingleFileImage()
+    {
+        Env env(m_root.filePath(QStringLiteral("e-zstdfile")));
+        const QString out = m_root.filePath(QStringLiteral("zstdfile"));
+        QDir().mkpath(out);
+        const QString exfatImage = out + QStringLiteral("/game.exfat");
+        const QString zstdImage = out + QStringLiteral("/game.zstd");
+        for (const QString& image : {exfatImage, zstdImage}) {
+            auto r = env.run(integration::kZstdBuildJob, {{QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("source"), m_game},
+                                                          {QStringLiteral("output"), image}});
+            QVERIFY2(succeeded(r), qPrintable(image + u' ' + describe(r)));
+            QVERIFY(r->subtitle.contains(image == zstdImage ? QLatin1String(".zstd") : QLatin1String(".exfat")));
+            // The queue and the monitor name the format as the Build page's tile does.
+            QCOMPARE(r->subtitle.startsWith(QLatin1String("ZSTD image (experimental)")), image == zstdImage);
+            // ShadowMount+ is named for the .exfat only: it does not mount a .zstd (report 03).
+            QVERIFY(r->outcome);
+            const QStringList& w = r->outcome->warnings;
+            const bool smp = std::any_of(w.begin(), w.end(), [](const QString& s) { return s.startsWith(QLatin1String("Packed games need ShadowMount+")); });
+            QCOMPARE(smp, image == exfatImage);
+            if (image == zstdImage)
+                QVERIFY2(w.contains(QStringLiteral("A .zstd file is for Kraken Mount MOD; it is not yet confirmed on a console.")),
+                         qPrintable(w.join(u'|')));
+        }
+        {
+            // Kraken Mount MOD attaches a .zstd with 512-byte sectors only: Settings › exFAT ›
+            // Sector size 4096 (for ShadowMount+) does not reach it.
+            (void)env.store->setValue(exfat::keys::kSectorSize, QStringLiteral("4096"));
+            const QString big = out + QStringLiteral("/sector4096.zstd");
+            auto r = env.run(integration::kZstdBuildJob, {{QStringLiteral("format"), QStringLiteral("exfat")}, {QStringLiteral("source"), m_game},
+                                                          {QStringLiteral("output"), big}});
+            (void)env.store->setValue(exfat::keys::kSectorSize, QStringLiteral("512"));
+            QVERIFY2(succeeded(r), qPrintable(describe(r)));
+            const QByteArray b = fileBytes(big);
+            QVERIFY(b.size() >= 512);
+            QCOMPARE(quint8(b.at(108)), quint8(9));
+            QVERIFY(QFile::remove(big));
+        }
+        // The reader's contract (kraken-mount-MOD src/image.rs, described in report 03).
+        const QByteArray z = fileBytes(zstdImage), e = fileBytes(exfatImage);
+        QVERIFY(z.size() >= 512);
+        QCOMPARE(z.mid(3, 8), QByteArrayLiteral("EXFAT   "));
+        QCOMPARE(quint8(z.at(108)), quint8(9)); // BytesPerSectorShift: 512-byte sectors
+        QVERIFY(!z.startsWith(QByteArray("\x28\xB5\x2F\xFD", 4)));
+        QCOMPARE(z.size() % 512, 0);
+        // The .exfat build of the same job, but for what every build writes
+        // afresh (two .exfat builds differ the same way): the volume serial
+        // (boot bytes 100..103, and the boot checksums over it), the time
+        // stamps of the new pack files and the packs' archive_id (below).
+        QCOMPARE(z.size(), e.size());
+        QByteArray zb = z.left(512), eb = e.left(512);
+        zb.replace(100, 4, QByteArray(4, '\0'));
+        eb.replace(100, 4, QByteArray(4, '\0'));
+        QCOMPARE(zb, eb);
+        auto zt = integration::openFileTree(zstdImage, {});
+        QVERIFY2(zt.ok(), zt.ok() ? "" : qPrintable(zt.error().toLogString()));
+        for (const char* top : {"eboot.bin", "sce_sys/param.json", "ampr_zstd.index", "fakelib/libSceAmpr.sprx", "ampr_emu.index"})
+            QVERIFY2((*zt)->find(QLatin1String(top)) >= 0, top);
+        auto et = integration::openFileTree(exfatImage, {});
+        QVERIFY(et.ok());
+        integration::CompareOptions co;
+        co.depth = integration::CompareDepth::Full;
+        auto cmp = integration::compareTrees(*zt.value(), *et.value(), co, {});
+        QVERIFY2(cmp.ok(), cmp.ok() ? "" : qPrintable(cmp.error().message));
+        // Every file the same, but for the pack set's archive_id (16 bytes at
+        // 24 of the index and of each volume), which every packing draws anew,
+        // and the header checksums over it (index 116..119, volume 60..63;
+        // engines/ampr/ZstdPack.h).
+        QCOMPARE(cmp->missingCount + cmp->extraCount + cmp->sizeCount + cmp->unreadableCount, qint64(0));
+        for (const auto& d : cmp->contentDifferent) {
+            if (d.path == QLatin1String("ampr_emu.index")) {
+                // It lists the new pack files with their times in whole seconds:
+                // two builds a second apart differ there and nowhere else.
+                auto a = integration::readSlice(**zt, d.path, 0, 1 << 26), b = integration::readSlice(**et, d.path, 0, 1 << 26);
+                QVERIFY(a.ok() && b.ok());
+                QVERIFY(pfs::amprIndexesDifferOnlyInTimes(a->data, b->data));
+                continue;
+            }
+            QVERIFY2(d.path.startsWith(QLatin1String("ampr_zstd")) && d.offset >= 24 && d.offset < 40, qPrintable(d.path));
+            auto a = integration::readSlice(**zt, d.path, 0, 1 << 26), b = integration::readSlice(**et, d.path, 0, 1 << 26);
+            QVERIFY(a.ok() && b.ok());
+            QCOMPARE(a->data.size(), b->data.size());
+            QByteArray am = a->data, bm = b->data;
+            const int crcAt = d.path.endsWith(QLatin1String(".index")) ? 116 : 60;
+            for (QByteArray* x : {&am, &bm}) {
+                x->replace(24, 16, QByteArray(16, '\0'));
+                x->replace(crcAt, 4, QByteArray(4, '\0'));
+            }
+            qsizetype at = 0;
+            while (at < am.size() && am.at(at) == bm.at(at))
+                ++at;
+            QVERIFY2(am == bm, qPrintable(QStringLiteral("%1 differs at %2").arg(d.path).arg(at)));
+        }
+
+        // Opened and extracted through the reader: the game as it was.
+        auto files = integration::openGameFiles(zstdImage, {});
+        QVERIFY2(files.ok(), files.ok() ? "" : qPrintable(files.error().toLogString()));
+        QCOMPARE(ampr::detectPackKind(**files), ampr::PackKind::Zstd);
+        const QString extracted = m_root.filePath(QStringLiteral("zstdfile-extracted"));
+        auto x = env.run(integration::kGameExtractJob, {{QStringLiteral("source"), zstdImage}, {QStringLiteral("output"), extracted}});
+        QVERIFY2(succeeded(x), qPrintable(describe(x)));
+        QCOMPARE(snapshot(extracted, {QStringLiteral("fakelib/libSceAmpr.sprx"), QStringLiteral("ampr_emu.index")}), m_original);
+
+        // Only an exFAT image can be named .zstd.
+        auto wrong = env.queue->enqueue(integration::kZstdBuildJob, {{QStringLiteral("format"), QStringLiteral("ffpkg")},
+                                                                    {QStringLiteral("source"), m_game},
+                                                                    {QStringLiteral("output"), out + QStringLiteral("/other.zstd")}});
+        QVERIFY(!wrong.ok());
+        QCOMPARE(wrong.error().message, QStringLiteral("Only an exFAT image with zstd packs can be named .zstd."));
+    }
+
+    // A .zstd that is not an exFAT image is refused with what it is: a real zstd
+    // stream (made with the bundled zstd, as PS5ZST's .exfat.zst is) and a PFSC
+    // container renamed .zstd.
+    void zstdFilesThatAreNotImagesAreRefused()
+    {
+        Env env(m_root.filePath(QStringLiteral("e-zstdbad")));
+        const QString out = m_root.filePath(QStringLiteral("zstdbad"));
+        QDir().mkpath(out);
+        // A whole exFAT image compressed into one zstd frame.
+        const QString exfatImage = out + QStringLiteral("/plain.exfat");
+        auto built = env.run(QStringLiteral("image.exfat.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), exfatImage}});
+        QVERIFY2(succeeded(built), qPrintable(describe(built)));
+        const QByteArray plain = fileBytes(exfatImage);
+        QByteArray packed(qsizetype(ZSTD_compressBound(size_t(plain.size()))), '\0');
+        const size_t n = ZSTD_compress(packed.data(), size_t(packed.size()), plain.constData(), size_t(plain.size()), 3);
+        QVERIFY(!ZSTD_isError(n));
+        packed.truncate(qsizetype(n));
+        const QString stream = out + QStringLiteral("/stream.zstd");
+        QVERIFY(fwtest::writeTextFile(stream, packed));
+        QCOMPARE(integration::sniffZstdImage(packed), integration::ZstdImageKind::ZstdStream);
+        // A PFSC container renamed .zstd.
+        const QString pfsc = out + QStringLiteral("/game.ffpfsc");
+        auto pb = env.run(QStringLiteral("image.pfs.build"), {{QStringLiteral("source"), m_game}, {QStringLiteral("output"), pfsc},
+                                                            {QStringLiteral("format"), QStringLiteral("ffpfsc")}});
+        QVERIFY2(succeeded(pb), qPrintable(describe(pb)));
+        const QString renamed = out + QStringLiteral("/renamed.zstd");
+        QVERIFY(QFile::copy(pfsc, renamed));
+
+        const QString streamText = QStringLiteral("stream.zstd is a zstd-compressed stream, not a mountable image. Decompress it first.");
+        const QString otherText = QStringLiteral("renamed.zstd is not an exFAT image. Only .zstd files that hold an exFAT image can be opened.");
+        const struct {
+            QString path, text;
+        } cases[] = {{stream, streamText}, {renamed, otherText}};
+        for (const auto& c : cases) {
+            const Status st = integration::checkZstdImage(c.path);
+            QVERIFY(!st.ok());
+            QCOMPARE(st.error().code, ErrorCode::Unsupported);
+            QCOMPARE(st.error().message, c.text);
+            // Every way in says the same: the reader, extraction, conversion, comparison.
+            auto tree = integration::openFileTree(c.path, {});
+            QVERIFY(!tree.ok());
+            QCOMPARE(tree.error().message, c.text);
+            auto ex = env.queue->enqueue(integration::kGameExtractJob, {{QStringLiteral("source"), c.path},
+                                                                        {QStringLiteral("output"), out + QStringLiteral("/x")}});
+            QVERIFY(!ex.ok());
+            QCOMPARE(ex.error().message, c.text);
+            auto cv = env.queue->enqueue(integration::kConvertJob, {{QStringLiteral("image"), c.path},
+                                                                    {QStringLiteral("format"), QStringLiteral("ffpkg")},
+                                                                    {QStringLiteral("output"), out + QStringLiteral("/x.ffpkg")}});
+            QVERIFY(!cv.ok());
+            QCOMPARE(cv.error().message, c.text);
+            auto cp = env.queue->enqueue(QStringLiteral("image.compare"), {{QStringLiteral("a"), c.path}, {QStringLiteral("b"), exfatImage}});
+            QVERIFY(!cp.ok());
+            QCOMPARE(cp.error().message, c.text);
+        }
+        QVERIFY(integration::checkZstdImage(out + QStringLiteral("/missing.zstd")).error().code == ErrorCode::NotFound);
     }
 
     void wrappedImagesOpenStraightThrough()

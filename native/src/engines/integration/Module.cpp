@@ -11,6 +11,7 @@
 #include "engines/general/Module.h"
 #include "engines/integration/ImageCompare.h"
 #include "engines/integration/ImageFiles.h"
+#include "engines/integration/ZstdImage.h"
 #include "engines/pfs/Module.h"
 #include "engines/pfs/PfsVerify.h"
 #include "engines/ufs2/Module.h"
@@ -32,19 +33,9 @@ namespace {
 
 // ---- image.convert ------------------------------------------------------------------
 
-QString formatOfFile(const QString& path)
-{
-    const QString ext = QFileInfo(path).suffix().toLower();
-    if (ext == u"exfat")
-        return QStringLiteral("exfat");
-    if (ext == u"ffpkg")
-        return QStringLiteral("ffpkg");
-    if (ext == u"ffpfs")
-        return QStringLiteral("ffpfs");
-    if (ext == u"ffpfsc")
-        return QStringLiteral("ffpfsc");
-    return {};
-}
+// The format of an image to read: a .zstd single file is an exFAT image
+// (checked by its first sector in validate()).
+QString formatOfFile(const QString& path) { return imageFormatByName(path); }
 
 bool isPfsFormat(const QString& format) { return format == u"ffpfs" || format == u"ffpfsc"; }
 
@@ -199,14 +190,17 @@ public:
     {
         const QString from = formatOfFile(image());
         if (!QFileInfo(image()).isFile() || from.isEmpty())
-            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose an .exfat, .ffpkg, .ffpfs or .ffpfsc image to convert."));
+            return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose an .exfat, .zstd, .ffpkg, .ffpfs or .ffpfsc image to convert."));
+        if (isZstdImageName(image()))
+            FW_TRY(checkZstdImage(image()));
         if (engineOf(target()).isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose the format to convert to."));
         if (from == target())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The image is already in that format."));
         if (output().isEmpty())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose where to save the converted image."));
-        if (formatOfFile(output()) != target())
+        // The output is named by its format exactly (a converted image is never a .zstd).
+        if (QFileInfo(output()).suffix().toLower() != target())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The converted image must end in .%1.").arg(target()));
         if (QFileInfo(output()).absoluteFilePath() == QFileInfo(image()).absoluteFilePath())
             return Error(ErrorCode::InvalidArgument, QStringLiteral("The converted image cannot replace its source."));
@@ -528,7 +522,9 @@ public:
                 return Error(ErrorCode::NotFound, QStringLiteral("%1 does not exist.").arg(QDir::toNativeSeparators(p)));
             if (!fi.isDir() && !isTreeImage(p))
                 return Error(ErrorCode::InvalidArgument,
-                             QStringLiteral("%1 is not an .exfat, .ffpkg, .ffpfs or .ffpfsc image or a folder.").arg(QDir::toNativeSeparators(p)));
+                             QStringLiteral("%1 is not an .exfat, .zstd, .ffpkg, .ffpfs or .ffpfsc image or a folder.").arg(QDir::toNativeSeparators(p)));
+            if (!fi.isDir() && isZstdImageName(p))
+                FW_TRY(checkZstdImage(p));
         }
         if (QDir::cleanPath(QFileInfo(a()).absoluteFilePath()) == QDir::cleanPath(QFileInfo(b()).absoluteFilePath()))
             return Error(ErrorCode::InvalidArgument, QStringLiteral("Choose two different images (or an image and a folder)."));

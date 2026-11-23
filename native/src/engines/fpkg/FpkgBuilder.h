@@ -48,6 +48,7 @@ struct BuildRequest {
     QString contentId;       // optional; must equal param.json
     QString contentVersion;  // optional; written into the packaged param.json
     QString title;           // optional; written into the packaged param.json
+    bool titleAllLanguages = true; // the title renames every language, not only the default one (#94)
     // Not serialised; set by composite jobs (backport updates): keep Sony's
     // <update>.naps_metric.json next to the update instead of deleting it.
     bool keepNapsMetric = false;
@@ -138,6 +139,7 @@ struct PlanOptions {
     QString contentId;          // overrides (see BuildRequest)
     QString contentVersion;
     QString title;
+    bool titleAllLanguages = true; // see BuildRequest
     bool haveDds2png = false;
 };
 
