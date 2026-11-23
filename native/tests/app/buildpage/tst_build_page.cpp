@@ -44,6 +44,7 @@
 #include "engines/ufs2/Module.h"
 #include "support/TestSupport.h"
 
+#include <QAccessible>
 #include <QApplication>
 #include <QDir>
 #include <QDirIterator>
@@ -1554,6 +1555,88 @@ private slots:
         m_page->setOutputFolder({});
         m_page->setSource({});
         m_page->setFormat(jobs::kFormatExfat);
+    }
+
+    // A tile's badge ("Experimental", "Popular") is shown whether the tile is
+    // selected or not, at every width the tiles are laid out in: where the
+    // check bubble leaves no room for it, the bubble goes (fill and border
+    // mark the selected tile anyway). The ZSTD image tile lost its badge when
+    // selected in one row of six.
+    void selectedTileKeepsItsBadge()
+    {
+        m_page->showForm();
+        pages::OptionTiles* tiles = nullptr;
+        for (auto* w : m_page->findChildren<QWidget*>())
+            if (w->accessibleName() == QLatin1String("Output format"))
+                tiles = dynamic_cast<pages::OptionTiles*>(w);
+        QVERIFY(tiles);
+        QCOMPARE(tiles->titleAt(5), QStringLiteral("ZSTD image"));
+        const QString before = tiles->currentValue();
+        const auto restore = qScopeGuard([&] { tiles->setCurrentValue(before); });
+        int bubbleGave = 0; // widths where the badge was kept by leaving the bubble out
+        for (int width = 400; width <= 1400; width += 10) {
+            // A new format changes the page around the tiles: their width is set again after it.
+            const auto select = [&](int i) {
+                tiles->setCurrentIndex(i);
+                tiles->resize(width, tiles->heightForWidth(width));
+            };
+            for (int i : {0, 5}) { // the two tiles with a badge: exFAT "Popular", ZSTD image "Experimental"
+                select(2); // another tile selected
+                const QRect plain = tiles->tagRect(i);
+                QVERIFY2(tiles->checkRect(i).isEmpty(), qPrintable(QString::number(width))); // only the selected tile has one
+                select(i);
+                const QRect tile = tiles->tileRect(i);
+                const QString where = QStringLiteral("%1 px, tile %2 (%3 px wide)").arg(width).arg(i).arg(tile.width());
+                const QRect tag = tiles->tagRect(i);
+                const QRect check = tiles->checkRect(i);
+                // Selected or not, the badge is there whenever the tile has room for it.
+                QVERIFY2(tag.isEmpty() == plain.isEmpty(), qPrintable(where));
+                if (tag.isEmpty())
+                    continue;
+                QVERIFY2(tile.contains(tag), qPrintable(where));
+                if (check.isEmpty())
+                    ++bubbleGave;
+                else
+                    QVERIFY2(!check.intersects(tag), qPrintable(where));
+            }
+            // In the window's widest layout (one row of six) the tag must show.
+            if (tiles->tileRect(5).top() == tiles->tileRect(0).top() && width >= 1100) {
+                QVERIFY2(!tiles->tagRect(5).isEmpty() || ui::badgeWidth(QStringLiteral("Experimental")) >= tiles->tileRect(5).width() - 70,
+                         qPrintable(QString::number(width)));
+            }
+        }
+        QVERIFY(bubbleGave > 0); // the case of the ZSTD image tile in one row was met
+        // A tile without a badge keeps its check bubble.
+        tiles->setCurrentIndex(1);
+        tiles->resize(1100, tiles->heightForWidth(1100));
+        QVERIFY(tiles->tagRect(1).isEmpty());
+        QVERIFY(!tiles->checkRect(1).isEmpty());
+        // V-13: to a screen reader the tiles are one choice whose value is the selected tile.
+        QAccessibleInterface* a = QAccessible::queryAccessibleInterface(tiles);
+        QVERIFY(a);
+        QCOMPARE(a->role(), QAccessible::ComboBox);
+        QCOMPARE(a->text(QAccessible::Value), tiles->titleAt(1));
+        tiles->setCurrentIndex(5);
+        QCOMPARE(a->text(QAccessible::Value), QStringLiteral("ZSTD image"));
+    }
+
+    // V-07 (UI review 5.2): the three "AMPR file index" settings offer the
+    // same choices in the same order and words; only the default differs
+    // (PFS: what Lazy_MkPFS does, which its choice says).
+    void amprIndexSettingsAgree()
+    {
+        const auto choices = [this](const QString& key) {
+            QStringList out;
+            const SettingDef* d = m_ctx->schema().find(key);
+            if (d)
+                for (const SettingChoice& c : d->choices)
+                    out << c.value + u'=' + c.label;
+            return out;
+        };
+        const QStringList exfatChoices = choices(exfat::keys::kAmprIndex);
+        QCOMPARE(exfatChoices.size(), 4);
+        QCOMPARE(choices(ufs2::keys::kAmprIndex), exfatChoices);
+        QCOMPARE(choices(pfs::keys::kAmprIndex), exfatChoices);
     }
 
     // FPKG (#37): an archived dump is a source like the folder: dropped on the
