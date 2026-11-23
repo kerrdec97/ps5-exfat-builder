@@ -79,6 +79,7 @@ public:
                 return seg->segmentText(seg->currentIndex());
             if (auto* tiles = qobject_cast<ChoiceTiles*>(widget()))
                 return tiles->choiceTitle(tiles->currentIndex());
+            return widget()->property("fwChoiceValue").toString(); // "fwRole" = "choice"
         }
         return QAccessibleWidget::text(t);
     }
@@ -139,6 +140,8 @@ QAccessibleInterface* factory(const QString&, QObject* object)
         return new StatTileAccessible(tile);
     if (w->property("fwRole").toString() == QLatin1String("button"))
         return new ButtonLikeAccessible(w);
+    if (w->property("fwRole").toString() == QLatin1String("choice"))
+        return new ChoiceAccessible(w);
     return nullptr;
 }
 

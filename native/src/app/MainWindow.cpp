@@ -488,7 +488,11 @@ void MainWindow::updateChips()
     const QString afterName = m_ctx.settings().value(general::keys::kAfterQueueAction).toString();
     const power::Action after = power::actionFromName(afterName);
     const QString then = after == power::Action::None ? QString() : QStringLiteral(" · ") + afterQueueText(afterName);
-    if (running == 0 && queued == 0)
+    // A backport run is not a queue job: with nothing in the queue the chip
+    // says that the app is at work all the same (V-01).
+    if (running == 0 && queued == 0 && backportBusy())
+        m_header->setQueueChip(FW_TR("Backport running") + then, after == power::Action::None ? Tone::Info : Tone::Warn, true);
+    else if (running == 0 && queued == 0)
         m_header->setQueueChip(FW_TR("Queue idle") + then, after == power::Action::None ? Tone::Neutral : Tone::Warn, true);
     else if (running == 0 && m_ctx.queue().isHeld()) // a list that waits for "Start queue"
         m_header->setQueueChip(FW_TR("Queue waiting · %1").arg(queued) + then, after == power::Action::None ? Tone::Info : Tone::Warn, true);
@@ -498,6 +502,7 @@ void MainWindow::updateChips()
 
 void MainWindow::updateStatus()
 {
+    updateChips(); // the queue chip also follows a backport run, which only this hears about
     int runningUser = 0, queuedUser = 0;
     countUserJobs(*m_queueModel, runningUser, queuedUser);
     Q_UNUSED(runningUser);
@@ -515,6 +520,10 @@ void MainWindow::updateStatus()
                                                                       : FW_TR("Running: %1%2");
         m_status->setStatus(text.arg(running->title, pct),
                             running->state == JobState::Running ? Tone::Info : Tone::Neutral);
+    } else if (backportBusy()) {
+        // Not "Ready" while the PS5 Backport engine works on a game (V-01);
+        // the Backport page's own line ("game 2 of 3") is its status context.
+        m_status->setStatus(FW_TR("Backport running"), Tone::Info);
     } else if (const int n = m_settingsPage ? m_settingsPage->attentionCount() : 0; n > 0) {
         m_status->setStatus(n == 1 ? FW_TR("%1 setting needs attention").arg(n) : FW_TR("%1 settings need attention").arg(n), Tone::Warn);
     } else if (m_ctx.queue().isHeld() && queuedUser > 0) {

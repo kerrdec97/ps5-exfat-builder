@@ -1108,7 +1108,7 @@ void JobMonitor::apply(const JobRecord& r)
         break;
     }
     m_percent->setText(pct);
-    m_percent->setMinimumWidth(pct.size() <= 5 ? QFontMetrics(percentFont(m_variant)).horizontalAdvance(thinPercent(1.0)) : 0);
+    m_percent->setMinimumWidth(pct.size() <= thinPercent(1.0).size() ?QFontMetrics(percentFont(m_variant)).horizontalAdvance(thinPercent(1.0)) : 0);
     setTextColor(m_percent, pctColor);
 
     // The error itself is in the result block below (once, not twice).
@@ -1164,7 +1164,10 @@ void JobMonitor::apply(const JobRecord& r)
     m_detail->setText(detail);
     setTextColor(m_detail, detailColor);
     m_detail->setVisible(!detail.isEmpty());
-    const bool showItem = r.state == JobState::Running && !p.currentItem.isEmpty();
+    // Not when it only repeats the amount done ("19.9 GB written"), which the
+    // line above and the Done tile already say (V-21).
+    const bool showItem = r.state == JobState::Running && !p.currentItem.isEmpty()
+                       && currentItemText(p.currentItem) != FW_TR("%1 written").arg(formatBytes(p.done));
     // A file name, or a step text some engines give as data (FTP diagnostics,
     // a composite job's inner stage): shown translated.
     const QString item = showItem ? currentItemText(p.currentItem) : QString();

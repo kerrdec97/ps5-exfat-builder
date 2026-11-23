@@ -33,6 +33,8 @@ public:
                            const QWidget* widget) const override;
     // A sorted column's chevron follows its leading-aligned label.
     QRect subElementRect(SubElement element, const QStyleOption* option, const QWidget* widget) const override;
+    // Every horizontal table header's font (12 px, DemiBold), set when it is polished.
+    static QFont headerFont();
 };
 
 // Application-wide input rules, installed once by theme::apply():

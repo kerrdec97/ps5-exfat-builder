@@ -115,7 +115,6 @@ LogTable::LogTable(QWidget* parent) : QTableView(parent)
     verticalHeader()->hide();
     verticalHeader()->setDefaultSectionSize(size::rowCompact);
     verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-    horizontalHeader()->setFont(font::caption());
     horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     horizontalHeader()->setHighlightSections(false);
     horizontalHeader()->setStretchLastSection(true);
@@ -260,7 +259,7 @@ LogConsole::LogConsole(LogModel& model, QWidget* parent) : QPlainTextEdit(parent
     setMinimumHeight(120);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setProperty("fwRadius", radius::control); // it takes keyboard focus: it gets the ring
-    setAccessibleName(QStringLiteral("Live log"));
+    setAccessibleName(FW_TR("Live log"));
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
         if (m_adjusting)
             return;
