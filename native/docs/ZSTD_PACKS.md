@@ -120,3 +120,39 @@ does not depend on the thread count.
 * YouTube packages for Y2JB are not bundled or downloaded: they are Google's
   app. The Y2JB tab installs them from the user's own folder; a private build
   can carry the owner's own copies (`make-release.ps1 -PrivateYoutube`).
+
+## .zstd single-file images (GitHub #98, experimental)
+
+The ".zstd single file" that ModGames44's closed MODGAMES ZSTD Container
+writes and that only Kraken Mount MOD 0.2.5 and later mounts is, by the
+reader's published source (kraken-mount-MOD `src/image.rs`, GPL-3.0; read
+for the interface only, nothing copied), **a bare exFAT volume image**: the
+exFAT boot sector at byte 0 (`EXFAT   ` at bytes 3 to 10), attached whole
+with 512-byte sectors, the game at the image root, its files in the zstd
+packs described above. There is no zstd frame, header, index or footer
+around the volume; the "zstd" in the name is the packs inside. That is what
+`image.build.zstd` with format `exfat` writes, named `.zstd` instead of
+`.exfat`.
+
+* Build page tile "ZSTD image" (badge "Experimental"; also in Library ›
+  Build selected): queues `image.build.zstd` with format `exfat`, zstd packs
+  on whatever Settings say, and the output `<name>.zstd`. The image's sector
+  size is always 512 (the only size Kraken Mount MOD attaches with); a
+  `.zstd` output with another format is refused.
+* Opening: wherever images are opened (Image tools, Library, extract,
+  convert, compare, edit, drops and file dialogs) a `.zstd` counts as an
+  exFAT image once its first sector says so
+  (`engines/integration/ZstdImage.h`). A file starting with a zstd frame
+  (`28 B5 2F FD`, or a skippable frame `5x 2A 4D 18`), such as PS5ZST's
+  `.exfat.zst`, is refused as "a zstd-compressed stream, not a mountable
+  image"; anything else (a PFSC container renamed `.zstd`) as "not an exFAT
+  image".
+* What loads it: Kraken Mount MOD only. ShadowMount+ does not mount a
+  `.zstd`: rename it to `.exfat` for ShadowMount+ (the packed-game warning
+  about "Update game fakelib emulators" is for that case).
+* Not proven: that MODGAMES ZSTD Container writes exactly this (its source,
+  a sample and its chunk size are unpublished). Every result here is MOCK;
+  a `.zstd` mounted and started on a console is HARDWARE REQUIRED.
+* Tests: `tst_zstd_games` (`zstdSingleFileImage`,
+  `zstdFilesThatAreNotImagesAreRefused`), `tst_build_page`
+  (`zstdImageTile`).

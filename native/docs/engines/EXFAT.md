@@ -50,6 +50,21 @@ to read), `exfat_builder.py` (`verify_walk_tree`, `_get_cluster_size_arg`,
 | Free space | Full image size + `storage.freeSpaceMarginMiB` before writing; FAT32 output refused for images ≥ 4 GiB (also for a rebuild edit that grows past 4 GiB, and for extracting a file ≥ 4 GiB onto FAT32) | PS1 preflight: image + 256 MB |
 | Links | File links are followed (content copied). Folder links/junctions are followed unless they point back into their own parent chain (skipped with a warning). A broken link stops the build. A Windows shortcut (`.lnk`) is not a link: it is copied as the small file it is, whatever it points at. | robocopy default |
 
+### `.zstd` single files (GitHub #98, experimental)
+
+A `.zstd` game file as Kraken Mount MOD 0.2.5 and later mounts it is a bare
+exFAT volume of this engine, nothing more: boot sector at byte 0 (`EXFAT   `
+at bytes 3 to 10), 512-byte sectors, 64 KiB clusters, with the game's files
+in ampr-emu-ng zstd packs inside (`docs/ZSTD_PACKS.md`, last section). The
+app writes one through `image.build.zstd` with format `exfat` and the output
+named `.zstd` (Build page tile "ZSTD image"); the sector size is forced to 512
+for it. The app sends a `.zstd` to the `image.exfat.*` jobs (verify, extract,
+edit), and the integration readers (extract game, convert, compare, Library)
+open one, only after its first sector was read
+(`engines/integration/ZstdImage.h`): a zstd stream (`28 B5 2F FD` or a
+skippable frame at byte 0) and anything that is not an exFAT boot sector are
+refused with their own texts. MOCK only; on a console HARDWARE REQUIRED.
+
 ## Jobs
 
 | Kind | Parameters | Phases | Notes |

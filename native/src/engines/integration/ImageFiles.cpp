@@ -6,6 +6,7 @@
 #include "engines/pfs/PfsBuilder.h"
 #include "engines/pfs/PfsReader.h"
 #include "engines/ufs2/Ufs2Reader.h"
+#include "engines/integration/ZstdImage.h"
 
 #include <QDir>
 #include <QFile>
@@ -328,7 +329,8 @@ public:
         const pfs::PfsEntry& e = img.files().front();
         const QString name = QString::fromUtf8(e.path);
         const QString low = name.toLower();
-        if (low.endsWith(QLatin1String(".exfat")))
+        // A .zstd inside is read as exFAT: the exFAT reader refuses anything else.
+        if (low.endsWith(QLatin1String(".exfat")) || low.endsWith(QLatin1String(".zstd")))
             *format = QStringLiteral("exfat");
         else if (low.endsWith(QLatin1String(".ffpkg")) || low.endsWith(QLatin1String(".ufs2")))
             *format = QStringLiteral("ffpkg");
@@ -436,8 +438,7 @@ void FileTree::finish()
 
 bool isTreeImage(const QString& path)
 {
-    const QString ext = suffixOf(path);
-    return ext == u"exfat" || ext == u"ffpkg" || ext == u"ffpfs" || ext == u"ffpfsc";
+    return !imageFormatByName(path).isEmpty();
 }
 
 Result<std::unique_ptr<FileTree>> openFileTree(const QString& path, const CancellationToken& token)
@@ -452,7 +453,10 @@ Result<std::unique_ptr<FileTree>> openFileTree(const QString& path, const Cancel
         return std::unique_ptr<FileTree>(std::move(t));
     }
     const QString ext = suffixOf(abs);
-    if (ext == u"exfat") {
+    // A .zstd is an exFAT image only when its first sector says so.
+    if (ext == u"zstd")
+        FW_TRY(checkZstdImage(abs));
+    if (ext == u"exfat" || ext == u"zstd") {
         auto t = std::make_unique<ExfatTree>(abs);
         FW_TRY(t->open(token));
         return std::unique_ptr<FileTree>(std::move(t));
@@ -484,7 +488,7 @@ Result<std::unique_ptr<FileTree>> openFileTree(const QString& path, const Cancel
         return std::unique_ptr<FileTree>(std::move(u));
     }
     return Error(ErrorCode::Unsupported,
-                 QStringLiteral("%1 is not an .exfat, .ffpkg, .ffpfs or .ffpfsc image or a folder.").arg(nativeName(path)));
+                 QStringLiteral("%1 is not an .exfat, .zstd, .ffpkg, .ffpfs or .ffpfsc image or a folder.").arg(nativeName(path)));
 }
 
 Result<FileSlice> readSlice(FileTree& tree, const QString& path, qint64 offset, qint64 length)
