@@ -9,6 +9,8 @@
 
 #include "engines/pfs/AmprIndex.h"
 #include "core/FolderAccess.h"
+#include "core/Zip.h"
+#include "engines/pfs/PfsIo.h"
 #include "engines/pfs/PfsFormat.h"
 
 #include <QDateTime>
@@ -420,11 +422,21 @@ Result<SourcePlan> planArchive(const archive::GameListing& game, const PlanOptio
 {
     ArchiveWalker w(game, token, compileExcludes(options.excludes), options.time);
     FW_TRY(w.walk(QString()));
-    return finishPlan(game.archive, QFileInfo(game.archive).fileName(), std::move(w), options,
-                      [&game, &token](const SourceFile& existing) -> Result<QByteArray> {
-                          // In a 7z or RAR archive what is stored before it is decoded too.
-                          return archive::readGameFile(game, QString::fromLatin1(existing.relPath), existing.size + 1, token);
-                      });
+    FW_TRY_ASSIGN(SourcePlan plan, finishPlan(game.archive, QFileInfo(game.archive).fileName(), std::move(w), options,
+                                              [&game, &token](const SourceFile& existing) -> Result<QByteArray> {
+                                                  // In a 7z or RAR archive what is stored before it is decoded too.
+                                                  return archive::readGameFile(game, QString::fromLatin1(existing.relPath),
+                                                                               existing.size + 1, token);
+                                              }));
+    auto files = std::make_shared<ArchiveFiles>();
+    files->game = game;
+    if (game.zip) {
+        zip::Reader r;
+        FW_TRY(r.open(game.archive));
+        files->zipEntries = r.entries();
+    }
+    plan.archive = std::move(files);
+    return plan;
 }
 
 } // namespace fw::pfs

@@ -54,6 +54,10 @@ struct ArchiveListing;
 // An existing file named *.zip, *.7z or *.rar.
 bool isArchiveSource(const QString& path);
 bool isZipSource(const QString& path);
+// An archive source read by the app's ZIP reader (by its first bytes, as
+// listArchiveGame() tells them apart): its files can be read in any order.
+// False for a 7z or RAR, which give their files in the order they store them.
+bool isZipFormatArchive(const QString& path);
 
 // "zip", "7z", "rar": the suffixes isArchiveSource() accepts.
 QStringList archiveSourceSuffixes();

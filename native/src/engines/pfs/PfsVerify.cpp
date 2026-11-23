@@ -74,8 +74,8 @@ Status openNested(Opened& o)
 QString rel(const QByteArray& p) { return QString::fromLatin1(p); }
 
 // Compares one image file with its source. `content` false: size only.
-Status compareFile(const PfsImage& img, const PfsEntry& e, const SourceFile& src, bool content, VerifyReport& rep,
-                   const CancellationToken& token, const ProgressHooks& hooks)
+Status compareFile(const PfsImage& img, const PfsEntry& e, const SourceFile& src, const SourcePlan& plan, bool content,
+                   VerifyReport& rep, const CancellationToken& token, const ProgressHooks& hooks)
 {
     const Inode& ino = img.inodes()[e.inode];
     const qint64 logical = ino.logicalSize();
@@ -133,6 +133,9 @@ Status compareFile(const PfsImage& img, const PfsEntry& e, const SourceFile& src
     std::unique_ptr<SeqSource> in;
     if (src.generated) {
         in = std::make_unique<MemorySeqSource>(src.content);
+    } else if (src.archiveItem >= 0) {
+        // A zipped dump: the file out of the ZIP again (its CRC-32 checked as well).
+        in = openPlanFile(src, plan);
     } else {
         auto f = std::make_unique<FileSeqSource>(src.absPath);
         const Status st = f->open();
@@ -234,7 +237,7 @@ Status compareTree(const PfsImage& img, const SourcePlan& plan, bool content, Ve
             rep.fail(QStringLiteral("Missing from the image: %1").arg(rel(f.relPath)));
             continue;
         }
-        FW_TRY(compareFile(img, *e, f, content, rep, token, hooks));
+        FW_TRY(compareFile(img, *e, f, plan, content, rep, token, hooks));
     }
     for (const PfsEntry& e : img.files())
         if (!planned.count(e.path))
@@ -406,7 +409,8 @@ Result<VerifyReport> verifyImage(const QString& image, const VerifyExpectation& 
         if (!full)
             FW_TRY(decodeAll(*o.outer, rep, token, hooks));
         const qint64 bytesBefore = rep.bytesChecked;
-        const Status compared = compareFile(*o.outer, o.outer->files().front(), src, full, rep, token, full ? hooks : ProgressHooks{});
+        const Status compared = compareFile(*o.outer, o.outer->files().front(), src, SourcePlan(), full, rep, token,
+                                            full ? hooks : ProgressHooks{});
         if (stopped(compared, rep))
             return compared.error();
         rep.cancelled = !compared.ok();

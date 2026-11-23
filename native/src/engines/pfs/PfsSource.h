@@ -19,6 +19,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <memory>
 #include <vector>
 
 namespace fw::pfs {
@@ -52,8 +53,12 @@ struct PlanOptions {
     qint64 time = 0; // mtime recorded for generated files
 };
 
+// The archive a plan of planArchive() reads its files from (PfsIo.h).
+struct ArchiveFiles;
+
 struct SourcePlan {
     QString root;
+    std::shared_ptr<const ArchiveFiles> archive; // planArchive() only
     std::vector<SourceFile> files; // Lazy order
     qint64 totalBytes = 0;
     int excludedFiles = 0;

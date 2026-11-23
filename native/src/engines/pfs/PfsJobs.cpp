@@ -92,12 +92,12 @@ QString findGameRoot(const QString& dir, int depth = 0)
 
 } // namespace
 
-QString archiveStreamProblem(OutputFormat format, const BuildOptions& options)
+QString archiveStreamProblem(OutputFormat format, const BuildOptions& options, bool zip)
 {
-    if (format == OutputFormat::Container)
+    if (format == OutputFormat::Container && !zip)
         return QStringLiteral("an .ffpfsc is compressed block by block, front to back, as it is written, so it needs the "
-                              "game's files in the image's order, not the archive's");
-    if (options.files.compress)
+                              "game's files in the image's order, and a 7z or RAR archive gives them only in its own");
+    if (format == OutputFormat::FolderImage && options.files.compress)
         return QStringLiteral("with per-file compression (Settings > PFS) a file's place in the image depends on how the "
                               "files before it compressed, so the files are needed in the image's order, not the archive's");
     return {};
@@ -217,11 +217,13 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
     const BuildOptions opts = buildOptionsFrom(ctx.settings, now);
     // An archived dump (#37): an uncompressed folder image is built straight
     // from it (the layout comes from the archive's list, one pass writes the
-    // files' data). An .ffpfsc and per-file compression need the files in the
+    // files' data), and so is an .ffpfsc from a ZIP (its files are read out
+    // of it in the image's order as the nested image is compressed). An
+    // .ffpfsc from a 7z or RAR and per-file compression need the files in the
     // image's order and unpack it first.
     std::optional<archive::GameListing> game;
     if (archive::isZipSource(m_source)) {
-        const QString why = archiveStreamProblem(fmt, opts);
+        const QString why = archiveStreamProblem(fmt, opts, archive::isZipFormatArchive(m_source));
         if (why.isEmpty()) {
             ctx.log.info(archive::streamingLogLine(m_source));
             if (ctx.progress)
@@ -331,7 +333,7 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
     // writeImage() flushes the image to the drive before it closes it, and so
     // does the archive's (which also notes each file's digest in the plan).
     BuildStats st;
-    if (game) {
+    if (game && fmt == OutputFormat::FolderImage) {
         FW_TRY_ASSIGN(st, writeFolderImageFromArchive(in.plan, *game, opts, part.partPath(), ctx.token, pr, ctx.log));
     } else {
         FW_TRY_ASSIGN(st, writeImage(in, fmt, opts, part.partPath(), ctx.token, hooks, ctx.log));

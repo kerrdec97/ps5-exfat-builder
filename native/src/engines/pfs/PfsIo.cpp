@@ -87,6 +87,76 @@ std::unique_ptr<SeqSource> openPlanFile(const SourceFile& f)
     return std::make_unique<FileSeqSource>(f.absPath, f.size);
 }
 
+namespace {
+
+// One file of a zipped dump, read out of the ZIP as it is needed.
+class ZipEntrySeqSource final : public SeqSource {
+public:
+    ZipEntrySeqSource(std::shared_ptr<const ArchiveFiles> files, const SourceFile& f) : m_files(std::move(files)), m_file(f) {}
+    qint64 size() const override { return m_file.size; }
+    QString describe() const override { return QString::fromLatin1(m_file.relPath); }
+    Status rewind() override
+    {
+        m_reader.reset();
+        m_pos = 0;
+        return success();
+    }
+    Result<qint64> read(char* dst, qint64 n) override
+    {
+        if (!m_reader)
+            FW_TRY(open());
+        const qint64 want = std::min(n, m_file.size - m_pos);
+        qint64 got = 0;
+        while (got < want) {
+            FW_TRY_ASSIGN(const qint64 r, m_reader->read(dst + got, want - got));
+            if (r == 0)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 is shorter in the archive than its list says.").arg(describe()));
+            got += r;
+        }
+        m_pos += got;
+        if (m_pos == m_file.size && got > 0) {
+            // Read to the end: the reader has checked the CRC-32; a byte more is an error too.
+            char extra;
+            FW_TRY_ASSIGN(const qint64 more, m_reader->read(&extra, 1));
+            if (more != 0)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(describe()));
+        }
+        return got;
+    }
+
+private:
+    Status open()
+    {
+        const archive::GameListing& g = m_files->game;
+        const QString name = QFileInfo(g.archive).fileName();
+        if (!g.zip)
+            return Error(ErrorCode::Internal, QStringLiteral("%1 cannot be read file by file.").arg(name));
+        const int item = m_file.archiveItem;
+        if (item < 0 || size_t(item) >= g.items.size())
+            return Error(ErrorCode::Internal, QStringLiteral("The plan of %1 is inconsistent.").arg(name));
+        const archive::GameItem& it = g.items[size_t(item)];
+        if (it.source < 0 || size_t(it.source) >= m_files->zipEntries.size() || m_files->zipEntries[size_t(it.source)].name != it.entry
+            || qint64(m_files->zipEntries[size_t(it.source)].uncompressedSize) != m_file.size)
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 changed while the image was being built.").arg(name));
+        m_reader = std::make_unique<zip::EntryReader>();
+        return m_reader->open(g.archive, m_files->zipEntries[size_t(it.source)]);
+    }
+
+    std::shared_ptr<const ArchiveFiles> m_files;
+    const SourceFile& m_file;
+    std::unique_ptr<zip::EntryReader> m_reader;
+    qint64 m_pos = 0;
+};
+
+} // namespace
+
+std::unique_ptr<SeqSource> openPlanFile(const SourceFile& f, const SourcePlan& plan)
+{
+    if (f.archiveItem >= 0 && !f.generated)
+        return std::make_unique<ZipEntrySeqSource>(plan.archive, f);
+    return openPlanFile(f);
+}
+
 // ---- FolderImageSource ----------------------------------------------------------------
 
 FolderImageSource::FolderImageSource(const FolderLayout& L, const SourcePlan& plan) : m_plan(plan)
@@ -160,7 +230,7 @@ Result<qint64> FolderImageSource::read(char* dst, qint64 n)
             const qint64 fromFile = std::min(take, dataAvail);
             if (fromFile > 0) {
                 if (!m_open) {
-                    m_open = openPlanFile(f);
+                    m_open = openPlanFile(f, m_plan);
                     m_openRead = 0;
                 }
                 FW_TRY_ASSIGN(const qint64 got, m_open->read(out, fromFile));

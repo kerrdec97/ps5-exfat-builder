@@ -116,6 +116,28 @@ private:
     std::vector<Entry> m_entries;
 };
 
+// One entry's data read on demand (Reader::read() pushes it), for a consumer
+// that pulls the bytes in its own pieces: the PFS builder reads the files of
+// a zipped dump in the image's order (GitHub #37). The same checks as
+// Reader::read(): never more than the listed size, and once the last byte is
+// read the CRC-32, the size and the end of the deflate stream are checked
+// (CorruptData). Memory: one 1 MiB input buffer.
+class EntryReader {
+public:
+    EntryReader();
+    ~EntryReader();
+    EntryReader(const EntryReader&) = delete;
+    EntryReader& operator=(const EntryReader&) = delete;
+
+    Status open(const QString& zipPath, const Entry& entry);
+    // Up to `max` bytes; 0 once the whole entry was read (and checked).
+    Result<qint64> read(char* dst, qint64 max);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> d;
+};
+
 quint32 crc32(const QByteArray& data, quint32 seed = 0);
 
 // Unpacking a file of a long name: an extractor writes it through a PartFile
