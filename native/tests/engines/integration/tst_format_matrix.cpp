@@ -1840,14 +1840,12 @@ private slots:
         const QString out = freshDir(path(QStringLiteral("fpkg/%1").arg(tag)));
         auto r = m_env->runDirect(QStringLiteral("fpkg.build"), {{QStringLiteral("source"), src}, {QStringLiteral("output"), out}},
                                   {{fpkg::keys::kKeepIntermediate, true}, {fpkg::keys::kPlayGoChunkCount, 4}});
-        // Documented refusals (FPKG.md): fpkg.build takes "a folder, .gp5, or
-        // an image with a registered stager", not an archive; and the path
-        // rules (ASCII names the Publishing Tools accept) are checked before
-        // packing.
+        // Documented refusal (FPKG.md): the path rules (ASCII names the
+        // Publishing Tools accept) are checked before packing. An archived
+        // dump (ZIP, 7z) is unpacked to a temporary folder and built like a
+        // folder (GitHub #37).
         QString refusal;
-        if (source == u"zip" || source == u"7z")
-            refusal = QStringLiteral("Choose a game folder, a .gp5 project or");
-        else if (shape == u"unicode")
+        if (shape == u"unicode")
             refusal = QStringLiteral("not accepted by the Publishing Tools");
         if (!refusal.isEmpty()) {
             MCHECK(g, "refused", !r.ok() && r.error().message.contains(refusal), describe(r));

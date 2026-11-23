@@ -333,12 +333,13 @@ private slots:
         QTest::keyClicks(edit, QStringLiteral("3"));
         QTest::keyClick(edit, Qt::Key_Return);
         QCOMPARE(m_ctx->settings().value(key).toInt(), 3);
-        // Reload from disk: the value was saved.
-        {
+        // Reload from disk: the value was saved (one save per turn of the
+        // event loop, so not before the loop has run).
+        const auto onDisk = [&] {
             SettingsStore again(m_ctx->settings().schemaPtr(), m_ctx->settings().filePath());
-            QVERIFY(again.load().ok());
-            QCOMPARE(again.value(key).toInt(), 3);
-        }
+            return again.load().ok() ? again.value(key).toInt() : -1;
+        };
+        QTRY_COMPARE(onDisk(), 3);
         // Invalid value: message shown, store unchanged.
         edit->selectAll();
         QTest::keyClicks(edit, QStringLiteral("99"));
