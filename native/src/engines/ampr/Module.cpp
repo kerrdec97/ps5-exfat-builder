@@ -1,6 +1,7 @@
 #include "engines/ampr/Module.h"
 
 #include "core/ArchiveSource.h"
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 #include "core/Tr.h"
 #include "engines/ampr/GamePack.h"
@@ -182,6 +183,8 @@ public:
         ctx.progress->beginPhase(0, 0);
         QString src = QFileInfo(source()).absoluteFilePath();
         if (isZip()) {
+            ctx.log.info(archive::unpackFirstLogLine(
+                src, QStringLiteral("the zstd packer reads the game's files from a folder, in the order it packs them")));
             FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
             // The unpack was a step of the first stage, which goes on (the
