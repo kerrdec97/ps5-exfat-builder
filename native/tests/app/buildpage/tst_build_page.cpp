@@ -70,12 +70,49 @@
 #include <QUrl>
 #include <QtEndian>
 
+#include <archive.h>
+#include <archive_entry.h>
+
 #include <atomic>
 #include <memory>
 
 using namespace fw;
 
 namespace {
+
+la_ssize_t appendTo7z(struct archive*, void* client, const void* buffer, size_t length)
+{
+    QFile* f = static_cast<QFile*>(client);
+    return f->write(static_cast<const char*>(buffer), qint64(length)) == qint64(length) ? la_ssize_t(length) : -1;
+}
+
+// A solid 7z of these files (libarchive's writer puts every file in one block).
+bool write7z(const QString& path, const QList<QPair<QString, QByteArray>>& files)
+{
+    QFile out(path);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    struct archive* a = archive_write_new();
+    bool ok = archive_write_set_format_7zip(a) == ARCHIVE_OK;
+    ok = ok && archive_write_set_options(a, "7zip:compression=lzma2,7zip:compression-level=1") == ARCHIVE_OK;
+    ok = ok && archive_write_open(a, &out, nullptr, appendTo7z, nullptr) == ARCHIVE_OK;
+    for (const auto& [name, data] : files) {
+        if (!ok)
+            break;
+        struct archive_entry* e = archive_entry_new();
+        archive_entry_copy_pathname_w(e, name.toStdWString().c_str());
+        archive_entry_set_filetype(e, AE_IFREG);
+        archive_entry_set_perm(e, 0644);
+        archive_entry_set_mtime(e, 1717243200, 0);
+        archive_entry_set_size(e, data.size());
+        ok = archive_write_header(a, e) == ARCHIVE_OK
+             && (data.isEmpty() || archive_write_data(a, data.constData(), size_t(data.size())) == la_ssize_t(data.size()));
+        archive_entry_free(e);
+    }
+    ok = archive_write_close(a) == ARCHIVE_OK && ok;
+    archive_write_free(a);
+    return ok && out.flush();
+}
 
 const QString kVerify = general::keys::kVerifyAfterBuild;
 const QString kMode = general::keys::kVerifyMode;
@@ -1099,27 +1136,37 @@ private slots:
         m_page->setOutputFolder({});
     }
 
-    // An archived dump (#37): exFAT and FFPKG are built straight from it; a
-    // compressed exFAT, PFS and FPKG unpack it first. The note under the
-    // source says which, and follows the tile and the Image type row.
+    // An archived dump (#37): exFAT, FFPKG, an uncompressed .ffpfs and, from a
+    // ZIP, an .ffpfsc are built straight from it; with zstd packs (compressed
+    // exFAT, the ZSTD image) the game is packed straight from it, but the
+    // packs are written to disk first (and from a 7z, their data waits in the
+    // temporary folder); the packed folder is made straight from it; FPKG,
+    // per-file PFS compression and an .ffpfsc from a 7z unpack it first. The
+    // note under the source says which, and follows the tile, the Image type
+    // row and the PFS image type.
     void archiveNoteSaysWhetherItIsUnpacked()
     {
         m_page->showForm();
         m_page->setFormat(jobs::kFormatExfat);
         const QString zipPath = path(QStringLiteral("stream-note/PPSA01234-app.zip"));
+        const QString sevenPath = path(QStringLiteral("stream-note/PPSA01234-app.7z"));
         {
             QDir().mkpath(QFileInfo(zipPath).absolutePath());
             zip::Writer w;
             QVERIFY(w.open(zipPath, true).ok());
+            QList<QPair<QString, QByteArray>> files;
             QDirIterator it(m_asciiGame, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
             while (it.hasNext()) {
                 const QString p = it.next();
-                QVERIFY(w.addFile(QStringLiteral("PPSA01234-app/") + QDir(m_asciiGame).relativeFilePath(p), p, zip::Method::Deflate, {}).ok());
+                const QString name = QStringLiteral("PPSA01234-app/") + QDir(m_asciiGame).relativeFilePath(p);
+                QVERIFY(w.addFile(name, p, zip::Method::Deflate, {}).ok());
+                QFile f(p);
+                QVERIFY(f.open(QIODevice::ReadOnly));
+                files.append({name, f.readAll()});
             }
             QVERIFY(w.finish(true).ok());
+            QVERIFY(write7z(sevenPath, files));
         }
-        m_page->setSource(zipPath);
-        QVERIFY(QTest::qWaitFor([&] { return m_page->summary().isGame && clean(m_page->summary().folder) == clean(zipPath); }, 15000));
         const auto note = [&] {
             for (QLabel* l : m_page->findChildren<QLabel*>()) {
                 if (!l->isVisibleTo(m_page))
@@ -1128,27 +1175,50 @@ private slots:
                     return QStringLiteral("streams");
                 if (l->text().startsWith(QStringLiteral("The archive is unpacked to a temporary folder")))
                     return QStringLiteral("unpacks");
+                if (l->text().startsWith(QStringLiteral("Nothing is unpacked: the game is packed straight from the archive")))
+                    return l->text().contains(QStringLiteral("temporary folder")) ? QStringLiteral("packs, waits") : QStringLiteral("packs");
+                if (l->text().startsWith(QStringLiteral("The packed folder is made straight from the archive")))
+                    return l->text().contains(QStringLiteral("temporary folder")) ? QStringLiteral("packed folder, waits")
+                                                                                   : QStringLiteral("packed folder");
             }
             return QStringLiteral("none");
         };
         ui::JobOptionsPanel* panel = m_page->optionsPanel(jobs::kFormatExfat);
+        ui::JobOptionsPanel* pfsPanel = m_page->optionsPanel(jobs::kFormatFfpfsc);
         panel->clearOverrides();
+        pfsPanel->clearOverrides();
         QVERIFY(!panel->effectiveValue(ampr::keys::kZstdPack).toBool());
-        QCOMPARE(note(), QStringLiteral("streams"));
-        m_page->exfatKind()->setCurrentValue(true); // compressed: the packer reads a folder
-        QCOMPARE(note(), QStringLiteral("unpacks"));
-        m_page->exfatKind()->setCurrentValue(false);
-        QCOMPARE(note(), QStringLiteral("streams"));
-        m_page->setFormat(jobs::kFormatFfpkg);
-        QCOMPARE(note(), QStringLiteral("streams"));
-        m_page->setFormat(jobs::kFormatFfpfsc);
-        QCOMPARE(note(), QStringLiteral("unpacks"));
-        m_page->setFormat(pages::kFormatFpkg);
-        QCOMPARE(note(), QStringLiteral("unpacks"));
-        m_page->setFormat(jobs::kFormatZstdImage);
-        QCOMPARE(note(), QStringLiteral("unpacks"));
+        QVERIFY(!pfsPanel->effectiveValue(pfs::keys::kCompressFiles).toBool());
+        for (const QString& archive : {zipPath, sevenPath}) {
+            const bool zip = archive == zipPath;
+            m_page->setFormat(jobs::kFormatExfat);
+            m_page->setSource(archive);
+            QVERIFY(QTest::qWaitFor([&] { return m_page->summary().isGame && clean(m_page->summary().folder) == clean(archive); }, 15000));
+            QCOMPARE(note(), QStringLiteral("streams"));
+            m_page->exfatKind()->setCurrentValue(true); // compressed: packed in one pass, the packs written first
+            QCOMPARE(note(), zip ? QStringLiteral("packs") : QStringLiteral("packs, waits"));
+            m_page->exfatKind()->setCurrentValue(false);
+            QCOMPARE(note(), QStringLiteral("streams"));
+            m_page->setFormat(jobs::kFormatFfpkg);
+            QCOMPARE(note(), QStringLiteral("streams"));
+            m_page->setFormat(jobs::kFormatFfpfsc); // from a ZIP in the image's order; a 7z only in its own
+            QCOMPARE(note(), zip ? QStringLiteral("streams") : QStringLiteral("unpacks"));
+            m_page->setFormat(jobs::kFormatFfpfs);
+            QCOMPARE(note(), QStringLiteral("streams"));
+            pfsPanel->setOverride(pfs::keys::kCompressFiles, true); // a file's place depends on the files before it
+            QCOMPARE(note(), QStringLiteral("unpacks"));
+            pfsPanel->clearOverrides();
+            QCOMPARE(note(), QStringLiteral("streams"));
+            m_page->setFormat(pages::kFormatFpkg);
+            QCOMPARE(note(), QStringLiteral("unpacks"));
+            m_page->setFormat(jobs::kFormatZstdImage);
+            QCOMPARE(note(), zip ? QStringLiteral("packs") : QStringLiteral("packs, waits"));
+            m_page->setFormat(pages::kFormatZstdFolder);
+            QCOMPARE(note(), zip ? QStringLiteral("packed folder") : QStringLiteral("packed folder, waits"));
+        }
         m_page->setFormat(jobs::kFormatExfat);
         panel->clearOverrides();
+        pfsPanel->clearOverrides();
         m_page->setSource({});
     }
 

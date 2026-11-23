@@ -141,6 +141,7 @@ private:
     void browseSource();
     void onSummary(const ui::GameSummary& s);
     void refreshSourceState(); // strip, badge and messages for m_summary and the format
+    QString archiveNote() const; // an archived dump: streamed, streamed with packs written first, or unpacked first
     void showGameRoots(const ui::GameSummary& s);
     void updateOutput();
     void renderFileName();
