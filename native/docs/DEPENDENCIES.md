@@ -24,9 +24,9 @@ the decision to the owner.
 | Component | Version | Used for | Licence | How it is obtained |
 |---|---|---|---|---|
 | Qt 6: Core, Concurrent, Network, Gui, Widgets, Svg, Sql (SQLite driver); Test for the tests | 6.10.3 for releases built on the owner's PC (msvc2022_64); the manual Windows workflow uses 6.8.3; CMake accepts 6.4 or later | Framework, UI, sockets, SQLite edits of the console's `app.db` | LGPL-3.0, dynamically linked | Installed Qt kit (`CMAKE_PREFIX_PATH`); deployed with `windeployqt`, unused plugins removed by `finish-deploy.ps1`. The code of other projects inside the Qt files is listed in the notices and `licenses/Qt-third-party-code.txt` |
-| zlib | 1.3.1 | PFS/FFPFSC compression, ZIP | zlib | `find_package(ZLIB)`; if none is found, FetchContent from the madler/zlib release, pinned by SHA-256 (`native/CMakeLists.txt`) |
+| zlib | 1.4 | PFS/FFPFSC compression, ZIP | zlib | `find_package(ZLIB)`; if none is found, FetchContent from the madler/zlib release, pinned by SHA-256 (`native/CMakeLists.txt`) |
 | zstd | 1.5.7 | zstd asset packs (write and read) | BSD-3-Clause | FetchContent, pinned by SHA-256; only `lib/common`, `lib/compress`, `lib/decompress` C sources (`ZSTD_DISABLE_ASM`, no legacy formats) |
-| LZ4 | 1.10.0, `lib/lz4.c` only | Reading LZ4 (AMPRPAK4) packs; never written | BSD-2-Clause | FetchContent, pinned by SHA-256 |
+| LZ4 | 1.11.1, `lib/lz4.c` only | Reading LZ4 (AMPRPAK4) packs; never written | BSD-2-Clause | FetchContent, pinned by SHA-256 |
 | libarchive | 3.8.11, the 7z, RAR and RAR5 readers | 7z and RAR archives as build sources | BSD-2-Clause | FetchContent, pinned (`cmake/ArchiveLibs.cmake`); compiled with `cmake/libarchive/fw_libarchive_config.h`, not with its own CMake project. `fw_libarchive_write` (7z writer) is linked into `tst_archive_source` only |
 | liblzma (XZ Utils) | 5.8.4, library only | LZMA/LZMA2 for 7z | 0BSD | FetchContent, pinned; XZ Utils' CMake project with every tool off |
 | Lucide icons | vendored SVGs | Interface icons | ISC (`LICENSES/Lucide-ISC.txt`) | In the repository: `native/src/app/resources/icons/` (`icons.qrc`) |

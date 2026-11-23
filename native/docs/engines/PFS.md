@@ -474,7 +474,7 @@ To regenerate: `python3 -I native/tests/data/pfs/make_golden.py <scratch> --writ
 
 Identity was verified with madler zlib 1.3 on both sides (Python's `zlib`
 module and the native build; on Windows the native build uses a system/vcpkg
-zlib or zlib 1.3.1 from FetchContent, and CPython 3.11 — the legacy release
+zlib or zlib 1.4 from FetchContent, and CPython 3.11 — the legacy release
 build — bundles madler zlib). madler zlib's deflate has produced the same
 output at default parameters for many releases, but nothing guarantees it: if
 a zlib update ever changes it, `tst_pfs_golden` fails and the references must

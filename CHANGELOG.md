@@ -24,7 +24,7 @@ action after the queue (#96); Settings › Storage lists the Backport tab's
 folders (#90, #91); closing the app stops and records running jobs first and
 asks while a PS5 tool or a backport run is at work; bounded FTP reads and
 kernel log batches in PS5 connect; interface fixes from a UI review; all new
-texts in the 42 languages.
+texts in the 42 languages. zlib 1.4 and LZ4 1.11.1.
 
 ## [5.0.3] - 2026-11-14
 

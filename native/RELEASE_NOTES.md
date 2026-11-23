@@ -59,6 +59,8 @@ please open an issue: they are read and answered.
   and "Needs SDK ≤ N" states, the 0.3.5 space rules, no job while the
   standalone program runs, Dump check hands a game over to the Backport tab
   (#26), a clearer Target SDK caption (#92).
+* **Libraries:** zlib 1.4 (was 1.3.1) and LZ4 1.11.1 (was 1.10.0), which fix
+  memory-safety and decoding bugs in the code that unpacks compressed data.
 * **FPKG:** the FPKG tile takes ZIP, 7z and RAR dumps like the other tiles
   (#37); "Title for all languages" writes a changed title for every language
   of `param.json` (#94, on by default). An FPKG made from a PFS image leaves
