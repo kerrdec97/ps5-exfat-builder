@@ -186,8 +186,14 @@ Qt sockets only work on threads Qt started (the queue's `QThreadPool`,
 
 `core/ArchiveSource.h`: a build job's `source` may be a `.zip`, `.7z` or `.rar` of a dump (the first bytes decide
 the reader, not the name). `validate()` lists the archive (nothing is unpacked) and checks it holds exactly one
-game; `run()` unpacks only the game into `<tempDir>/zip-source` in one pass, after a free-space check from the listed
-sizes, with every checksum verified and file times kept, then builds from that folder. ZIP uses the app's own reader
+game. The exFAT and FFPKG builds then **stream** the archive (GitHub #37, `core/ArchiveStream.h`): the image is
+planned from the list alone (`listArchiveGame`), its metadata written, and one pass through the archive writes every
+file's bytes where the plan put them, checksums verified while decoded and each file digested for the read-back
+verification; nothing of the game is written to disk outside the image, and the image is byte for byte the one the
+unpacked folder gives (`engines/EXFAT.md`, *Building from an archive*). PFS, zstd-pack and packed-folder builds
+and FPKG still unpack first (the log says which and why): `run()` unpacks only the game into `<tempDir>/zip-source`
+in one pass, after a free-space check from the listed sizes, with every checksum verified and file times kept, then
+builds from that folder. ZIP uses the app's own reader
 (`core/Zip.*`); 7z and RAR use libarchive 3.8.11 with liblzma 5.8.4 (`core/ArchiveReader.*`,
 `cmake/ArchiveLibs.cmake`: only the 7z, RAR and RAR5 readers are compiled, with the hand-written configuration in
 `cmake/libarchive/`, so the app's configure runs no libarchive platform checks). A 7z or RAR list is kept while the

@@ -2,11 +2,24 @@
 
 // An archive used as a build source (GitHub #67, #37): many people keep their
 // dumps packed. The image build jobs accept "<dump>.zip", "<dump>.7z" or
-// "<dump>.rar" as `source`; they check it here first (validate), then unpack
-// it into the job's private temporary folder (run) and build from the game
-// inside exactly as from a folder. Every entry's checksum is verified while it
-// is unpacked, names that would leave the folder are refused, and the
-// temporary copy is removed with the job's temp folder.
+// "<dump>.rar" as `source` and check it here first (validate). Then:
+//
+//  * exFAT and FFPKG builds STREAM it: listArchiveGame() gives the game from
+//    the archive's list alone, the image is planned from that, and one pass
+//    through the archive writes every file into the image
+//    (ArchiveStream.h). Nothing of the game is written to disk outside the
+//    image, and the image is byte for byte the one the unpacked folder gives.
+//  * PFS (.ffpfs, .ffpfsc), zstd-pack and packed-folder builds and FPKG
+//    UNPACK it first (unpackArchiveSource) into the job's private temporary
+//    folder and build from the game inside exactly as from a folder: PFS is
+//    written front to back (an .ffpfsc compressed as it goes) and needs the
+//    files in the image's order; the zstd packer and Sony's publishing tool
+//    read a folder. Their logs say so (unpackFirstLogLine). The temporary copy
+//    is removed with the job's temp folder.
+//
+// Either way every entry's checksum is verified while it is decoded, and the
+// same names are refused (ones that would leave the folder, that Windows
+// cannot store or tell apart).
 //
 // ZIP archives are read by the app's own reader (zip::Reader); 7z and RAR
 // archives by libarchive (ArchiveReader.h, which lists what is not read:
@@ -80,7 +93,7 @@ Result<ZipGame> inspectZip(const QString& zipPath);
 Status checkArchiveSource(const QString& path, const CancellationToken& token = {});
 Status checkZipSource(const QString& zipPath);
 
-// run(): unpacks the game (and nothing else the archive holds) into
+// run() of a build that cannot stream: unpacks the game (and nothing else the archive holds) into
 // <tempDir>/zip-source and returns the game folder. Checks free space on the
 // temp drive first, keeping `freeSpaceMarginBytes` in reserve (jobs pass
 // storage.freeSpaceMarginMiB).

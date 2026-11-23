@@ -69,7 +69,7 @@ refused with their own texts. MOCK only; on a console HARDWARE REQUIRED.
 
 | Kind | Parameters | Phases | Notes |
 |---|---|---|---|
-| `image.exfat.build` | `source` (a folder, or a ZIP of a dump, which is unpacked into the job's temporary folder first), `output` (file, or an existing folder → `<source name>.exfat`, without `.zip` for a ZIP), optional `label`, optional `excludes[]` | Scanning → Writing image → Verifying | Writes `<output>.part`, verifies the `.part`, then renames (an existing image is replaced by `PartFile` in one step, so its name is never empty; a failed rename leaves it as it was). Verification failure: nothing is renamed, an older image stays. Cancel during verification (GitHub #97): the image is saved exactly as with verification turned off (renamed now, replacing an older one only now), the job ends with an outcome (verification Skipped, "Verification was cancelled, so the image is not verified.", `details.verificationCancelled`), and the source is not deleted; a difference found before the cancel fails the job as any failed verification does. If the rename fails (the old image is mounted or open elsewhere) the finished image is kept as `<name> (new).exfat` and the error says so. |
+| `image.exfat.build` | `source` (a folder, or a `.zip`, `.7z` or `.rar` of a dump, built straight from the archive: see *Building from an archive*), `output` (file, or an existing folder → `<source name>.exfat`, without the archive's suffix), optional `label`, optional `excludes[]` | Scanning → Writing image → Verifying | Writes `<output>.part`, verifies the `.part`, then renames (an existing image is replaced by `PartFile` in one step, so its name is never empty; a failed rename leaves it as it was). Verification failure: nothing is renamed, an older image stays. Cancel during verification (GitHub #97): the image is saved exactly as with verification turned off (renamed now, replacing an older one only now), the job ends with an outcome (verification Skipped, "Verification was cancelled, so the image is not verified.", `details.verificationCancelled`), and the source is not deleted; a difference found before the cancel fails the job as any failed verification does. If the rename fails (the old image is mounted or open elsewhere) the finished image is kept as `<name> (new).exfat` and the error says so. |
 | `image.exfat.verify` | `image`, optional `source`, optional `excludes[]` | Reading image → Comparing | With `source`: `verification.mode` decides full or structure. Without it the image is checked on its own: structure, and in full mode every file is read back. In both modes a damaged image (boot region and backup boot region included) is a failed verification, not an error. |
 | `image.exfat.extract` | `image`, `output` (new or empty folder) | Reading image → Extracting → Verifying | Extracts into `<output>.part` (with a marker file so a stale one can be recognised as ours; an image whose root holds that name in any case is refused), verifies it against the image (unless `verification.verifyAfterBuild` is off for the job: Image tools' "Verify after extracting"), then renames. Cancel during verification keeps every extracted file under the chosen name, as with verification off (Skipped, "…the extracted files are not verified."). A `.part` folder without the marker is never touched. If the rename fails the extracted folder is kept as `<output>.new`. Every output path is checked to stay inside the folder (`core/PathSafety.h`); names exFAT allows but the drive cannot store as they are (on Windows trailing dots or spaces and device names such as `CON`; anywhere names made only of dots and spaces) are changed, reported as "Renamed for this drive" warnings and verified under their image names. |
 | `image.exfat.edit` | `image`, `operations[]` of `{op: add\|replace\|delete\|mkdir, imagePath, localPath}` | Planning → Writing → Verifying | See *Editing images*. Always verified (mode from `verification.mode`). |
@@ -77,8 +77,8 @@ refused with their own texts. MOCK only; on a console HARDWARE REQUIRED.
 **Progress.** Build, extract and edit share the bar 5 % (scanning, reading the
 image, planning) · 60 % (writing) · 35 % (verifying); a verification of names,
 sizes and structure takes 5 % and one that is turned off none (writing takes the
-rest). With a zipped dump the build gives Scanning 30 % (the unpacking is a step
-that takes its first half), writing 45 %, verifying 25 %. `image.exfat.verify`:
+rest), for an archived dump too (it is not unpacked first: the pass through the
+archive is the writing). `image.exfat.verify`:
 10 % reading, 90 % comparing (an image checked on its own in structure mode:
 all of it in Reading image). `phaseWeights()` gives the queue the shares before
 the job starts and `run()` adjusts them to the settings before the first stage
@@ -117,6 +117,61 @@ only when full byte verification passed, the image got its final name, and
 nothing in the source was excluded; otherwise the folder is kept with a
 warning. A ZIP source is never deleted. `removeTreeSafely` refuses drive
 roots and the home folder.
+
+## Building from an archive (GitHub #37)
+
+A `.zip`, `.7z` or `.rar` source is built **straight from the archive**:
+nothing of the game is unpacked to disk, so a 60 GB archive needs no 60 GB of
+temporary space (`ExfatArchive.*`, `core/ArchiveStream.h`). The log says
+"Building straight from … (one pass through the archive; nothing is unpacked
+to disk)".
+
+1. **Plan from the list.** `archive::listArchiveGame()` reads the archive's
+   list (ZIP central directory, 7z header, RAR headers; nothing is decoded)
+   with every rule of an unpacked source: exactly one game, names that leave
+   the game or that Windows cannot store or tell apart refused
+   (`checkExtractable`), no password. `treeFromArchive()` turns it into the
+   tree scanning the unpacked folder would give: the same names, sizes,
+   folders (listed or implied, empty ones too) and exclusion rules, links
+   left out (unpacking never creates them), the attributes of a new file
+   (archive) and folder, and the unpack path's times: a file keeps the
+   modification time the archive lists (whole seconds; the build's time when
+   it lists none), its creation and access times and a folder's three times
+   are the build's time (unpacking would have set them when it wrote the
+   file). `exfat.requireEboot` asks for eboot.bin at the top of the game.
+2. **Metadata.** `writeImage()` with `leaveArchiveData` writes the boot
+   regions, FAT, bitmap, up-case table and every directory, and any file the
+   build made itself (a new `ampr_emu.index` from the temporary folder), and
+   leaves the archive's files' clusters as zeros. The dump's own
+   `ampr_emu.index` is read out of the archive (`readGameFile`) only when it
+   has to be compared with the one the build would write; for the label
+   policy Title ID, `sce_sys/param.json` is read the same way. In a solid 7z or
+   RAR that decodes what is stored before that file.
+3. **One pass through the archive** (`archive::streamGameInto`): every file's
+   bytes go to its planned clusters as they are decoded, in whatever order the
+   archive stores them (a ZIP, which can be read in any order, is read in the
+   image's order). Every entry's checksum is verified while it is decoded
+   (ZIP CRC-32, the 7z and RAR checksums); an entry that is damaged, larger or
+   smaller than listed, not listed, listed twice or with another time than
+   listed fails the job, and the `.fw.part` is removed with nothing renamed.
+   Runs of 1 MiB of zeros are not written (the new image reads zeros there).
+   Memory: one write buffer of `performance.ioBufferMiB` plus what the
+   archive's decoder needs (as when unpacking; RAR 5 dictionaries are
+   limited to 64 MiB, a 7z's dictionary is what the archive was made with).
+4. **Verification.** There is no folder to compare with: while each file is
+   written its bytes are digested (`ContentDigest`, CRC-32 and Adler-32 side
+   by side, 64 bits), and the verification reads every file back from the
+   finished image and compares the digest (full mode; structure mode checks
+   names, sizes and structure as for a folder). `ExpectedFile::hasDigest`.
+5. **Free space.** Only the output drive's check (the image plus
+   `storage.freeSpaceMarginMiB`); the temporary folder holds at most the new
+   `ampr_emu.index`.
+
+The image is byte for byte the image of the same archive unpacked to a folder
+(`unpackArchiveSource`) and built from it with the same serial and times
+(`tst_archive_stream`: ZIP stored and deflated, 7z solid LZMA2, stored and
+PPMd, RAR 4 and RAR 5 samples, archive order unlike image order). The source
+archive is never deleted.
 
 ## Editing images
 

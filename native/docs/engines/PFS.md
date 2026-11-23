@@ -297,7 +297,7 @@ into the dump).
 
 | Kind | Parameters | Phases |
 |---|---|---|
-| `image.pfs.build` | `source` (folder, image file, or a zipped dump that is unpacked to the job's temp folder first), `output`, `format` (`ffpfsc` \| `ffpfs`; default from the extension, `.ffpfs` → folder image), `replaceExisting` (false), `timestamp` (seconds; default now), `title`, `findGameRoot` (true), `innerName` (file source: its plain ASCII name inside the container; default the file's own name) | Scanning → Compressing and writing → Verifying |
+| `image.pfs.build` | `source` (folder, image file, or an archived dump `.zip` / `.7z` / `.rar`, unpacked to the job's temp folder first: a PFS image is written front to back and an `.ffpfsc` is compressed block by block as it goes, so the build needs the files in the image's order, not the archive's; the log says so; exFAT and FFPKG builds stream instead, `EXFAT.md`), `output`, `format` (`ffpfsc` \| `ffpfs`; default from the extension, `.ffpfs` → folder image), `replaceExisting` (false), `timestamp` (seconds; default now), `title`, `findGameRoot` (true), `innerName` (file source: its plain ASCII name inside the container; default the file's own name) | Scanning → Compressing and writing → Verifying |
 | `image.pfs.verify` | `image`, `source` (folder or file, optional), `depth` (`full` \| `structure`; default full with a source, structure without), `findGameRoot` (true), `innerName` (as for the build) | Verifying |
 | `image.pfs.extract` | `image`, `output` (folder), `deep` (true: unpack the nested `pfs_image.dat`, MkPFS `unpack --deep`), `overwrite` (false) | Extracting |
 
