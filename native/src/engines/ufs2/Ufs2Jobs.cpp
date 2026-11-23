@@ -396,9 +396,9 @@ public:
 
         if (ctx.settings.boolean(keys::kDeleteSourceAfterBuild)) {
             QString why;
-            if (m_streamed)
-                ; // an archive is never deleted (below)
-            else if (v.verification != Verification::Passed || depth != CompareDepth::Full)
+            if (m_streamed) {
+                // an archive is never deleted (below)
+            } else if (v.verification != Verification::Passed || depth != CompareDepth::Full)
                 why = QStringLiteral("the image was not verified byte for byte");
             else if (!QFileInfo(QDir(src).filePath(QStringLiteral("eboot.bin"))).isFile())
                 why = QStringLiteral("the folder has no eboot.bin");
