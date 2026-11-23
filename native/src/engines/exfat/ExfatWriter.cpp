@@ -543,7 +543,7 @@ Result<WriteStats> writeImage(const SourceTree& tree, const ImagePlan& plan, con
     ScopedThread reader(std::thread([&] {
         for (int k = 0; k < int(plan.fileOrder.size()); ++k) {
             const SourceNode& n = tree.nodes[size_t(plan.fileOrder[size_t(k)])];
-            if (n.size == 0) {
+            if (n.size == 0 || (o.leaveArchiveData && n.archiveItem >= 0)) {
                 if (!pipe.post({nullptr, 0, k, true}))
                     break;
                 continue;
@@ -646,10 +646,11 @@ Result<WriteStats> writeImage(const SourceTree& tree, const ImagePlan& plan, con
                 progress->advance(chunk->length);
         }
         if (chunk->endOfItem) {
-            sink.skip(qint64(p.clusters) * clusterBytes - p.dataLength);
+            const bool leftForArchive = o.leaveArchiveData && tree.nodes[size_t(node)].archiveItem >= 0;
+            sink.skip(qint64(p.clusters) * clusterBytes - (leftForArchive ? 0 : p.dataLength));
             ++stats.filesWritten;
             ++sinceCheck;
-            if (progress)
+            if (progress && !leftForArchive) // counted by the archive pass
                 progress->advanceFiles(1);
         }
         if (sinceCheck >= 4 * kMiB || (stats.filesWritten % 64) == 0) {

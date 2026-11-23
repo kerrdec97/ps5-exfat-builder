@@ -1012,7 +1012,9 @@ private slots:
             QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("edit: ") + problems));
         }
 
-        // A zipped dump: the unpacking and the scan fill Scanning's larger share.
+        // A zipped dump is streamed into the image (#37): nothing is unpacked
+        // in Scanning, which keeps a folder's small share; the pass through
+        // the archive is the writing.
         const QString zipPath = path(QStringLiteral("progress.zip"));
         {
             zip::Writer w;
@@ -1027,10 +1029,10 @@ private slots:
         fwtest::ProgressAudit zipped;
         const QString problems = audited(kJobBuild, buildParams(zipPath, outDir + QStringLiteral("/zipped.exfat")), {}, zipped);
         QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("zipped build: ") + problems));
-        const double unpacked = zipped.fractionWhen([](const ProgressSnapshot& s) { return s.phase == QLatin1String("Scanning") && s.phaseProgress >= 0.49; });
         const double atWrite = zipped.fractionWhen([](const ProgressSnapshot& s) { return s.phaseIndex == 1; });
-        QVERIFY2(unpacked >= 0.14 && unpacked <= 0.16, qPrintable(QString::number(unpacked)));
-        QVERIFY2(atWrite >= 0.29 && atWrite <= 0.31, qPrintable(QString::number(atWrite)));
+        const double atVerify = zipped.fractionWhen([](const ProgressSnapshot& s) { return s.phaseIndex == 2; });
+        QVERIFY2(atWrite >= 0.04 && atWrite <= 0.06, qPrintable(QString::number(atWrite)));
+        QVERIFY2(atVerify >= 0.64 && atVerify <= 0.66, qPrintable(QString::number(atVerify)));
     }
 
     void summariesCountInTheSingularAndEndWithOneFullStop()

@@ -1,6 +1,7 @@
 #include "engines/integration/GameSources.h"
 
 #include "core/ArchiveSource.h"
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 #include "core/PathSafety.h"
 #include "engines/ampr/GamePack.h"
@@ -228,6 +229,9 @@ public:
 
         QString src = QFileInfo(source()).absoluteFilePath();
         if (archive::isZipSource(src)) {
+            ctx.log.info(archive::unpackFirstLogLine(
+                src, QStringLiteral("the zstd packer reads the game's files from a folder, in the order it packs them, and the "
+                                    "image is then built from the packed folder")));
             FW_TRY_ASSIGN(src, archive::unpackZipSource(src, ctx.tempDir, ctx.token, ctx.progress, general::freeSpaceMarginBytes(ctx.settings)));
             ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(source()), native(src)));
             // The unpacking was a step inside Preparing; Preparing goes on from there.

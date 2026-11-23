@@ -3,6 +3,7 @@
 #include "engines/fpkg/BackportUpdate.h"
 
 #include "core/ArchiveSource.h"
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 #include "engines/fpkg/PubCmd.h"
 #include "engines/fpkg/SourceScanner.h"
@@ -81,6 +82,8 @@ Result<JobOutcome> FpkgBuildJob::run(JobContext& ctx)
     BuildRequest r = m_request;
     if (r.output.isEmpty())
         r.output = defaultOutputFolder(m_request.source, settings.defaultOutputDir);
+    ctx.log.info(archive::unpackFirstLogLine(m_request.source,
+                                             QStringLiteral("the publishing tool reads the game's files from a folder")));
     FW_TRY_ASSIGN(r.source, archive::unpackArchiveSource(m_request.source, ctx.tempDir, ctx.token, ctx.progress,
                                                          settings.freeSpaceMarginBytes));
     ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(nativePath(m_request.source), nativePath(r.source)));

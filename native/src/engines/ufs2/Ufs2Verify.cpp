@@ -1,5 +1,6 @@
 #include "engines/ufs2/Ufs2Verify.h"
 
+#include "core/ArchiveStream.h"
 #include "core/FileUtil.h"
 #include "core/PathSafety.h"
 
@@ -180,6 +181,39 @@ Result<CompareReport> compareImage(const Ufs2Reader& image, const SourceTree& ex
                     progress->advance(1);
                     progress->advanceFiles(1);
                 }
+                continue;
+            }
+            if (e.hasDigest) {
+                // Built from an archive: no file to read, the digest of what was written.
+                auto si = image.openFile(i.imageIno);
+                if (!si.ok()) {
+                    rep.changed << QStringLiteral("%1 (could not be read back: %2)").arg(rel, si.error().message);
+                    continue;
+                }
+                archive::ContentDigest d;
+                qint64 done = 0;
+                QString problem;
+                while (done < e.size) {
+                    if (!token.checkpoint())
+                        return cancelledWith(rep);
+                    auto got = si.value()->read(bb.data(), std::min<qint64>(bb.size(), e.size - done));
+                    if (!got.ok() || got.value() <= 0) {
+                        problem = got.ok() ? QStringLiteral("is shorter than expected")
+                                           : QStringLiteral("could not be read back (%1)").arg(got.error().message);
+                        break;
+                    }
+                    d.add(bb.constData(), got.value());
+                    done += got.value();
+                    rep.bytesCompared += got.value();
+                    if (progress)
+                        progress->advance(got.value());
+                }
+                if (problem.isEmpty() && d.value() != e.digest)
+                    problem = QStringLiteral("content differs from what was decoded from the archive");
+                if (!problem.isEmpty())
+                    rep.changed << QStringLiteral("%1 (%2)").arg(rel, problem);
+                if (progress)
+                    progress->advanceFiles(1);
                 continue;
             }
             auto se = openContent(expected, ec);

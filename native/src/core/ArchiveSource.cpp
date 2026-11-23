@@ -8,6 +8,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 #include <QList>
 #include <QMap>
 #include <QMutex>
@@ -463,6 +464,166 @@ Result<QString> unpackZipSource(const QString& zipPath, const QString& tempDir, 
                                 ProgressReporter* progress, qint64 freeSpaceMarginBytes)
 {
     return unpackArchiveSource(zipPath, tempDir, token, progress, freeSpaceMarginBytes);
+}
+
+// ---- the game, from the archive's list alone --------------------------------
+
+int GameListing::find(const QString& path) const
+{
+    // Sorted by path, but compared without regard to case: a plain search.
+    for (size_t i = 0; i < items.size(); ++i)
+        if (items[i].path.compare(path, Qt::CaseInsensitive) == 0)
+            return int(i);
+    return -1;
+}
+
+QString GameListing::rootName() const
+{
+    const QString rel = zip::Reader::extractedPath(rootPrefix);
+    return rel.isEmpty() ? QString() : rel.section(u'/', -1);
+}
+
+namespace {
+
+// One listed entry, whichever reader listed it.
+struct Listed {
+    QString name;
+    ArchiveEntry::Type type = ArchiveEntry::Type::File;
+    qint64 size = 0;
+    QDateTime modified;
+};
+
+void collectGame(GameListing& out, const std::vector<Listed>& entries)
+{
+    QHash<QString, int> at; // path in lower case -> item
+    const auto folder = [&](const QString& path) {
+        // The folder and every folder above it, once each.
+        QString walked;
+        for (const QString& part : path.split(u'/', Qt::SkipEmptyParts)) {
+            walked = walked.isEmpty() ? part : walked + u'/' + part;
+            const QString key = walked.toLower();
+            if (at.contains(key))
+                continue;
+            GameItem d;
+            d.path = walked;
+            d.isDir = true;
+            at.insert(key, int(out.items.size()));
+            out.items.push_back(std::move(d));
+            ++out.dirs;
+        }
+    };
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const Listed& e = entries[i];
+        if (!e.name.startsWith(out.rootPrefix, Qt::CaseInsensitive))
+            continue;
+        // Where unpacking puts it inside the game's folder (as checkExtractable() names it).
+        const QString inside = zip::Reader::extractedPath(e.name.mid(out.rootPrefix.size()));
+        if (inside.isEmpty())
+            continue; // the game's folder itself
+        if (e.type == ArchiveEntry::Type::Link) {
+            ++out.links;
+            continue;
+        }
+        if (e.type == ArchiveEntry::Type::Directory) {
+            folder(inside);
+            if (const auto it = at.constFind(inside.toLower()); it != at.cend())
+                out.items[size_t(*it)].entry = e.name;
+            continue;
+        }
+        if (e.type != ArchiveEntry::Type::File)
+            continue;
+        const qsizetype slash = inside.lastIndexOf(u'/');
+        if (slash > 0)
+            folder(inside.left(slash));
+        GameItem f;
+        f.entry = e.name;
+        f.path = inside;
+        f.size = e.size;
+        f.modified = e.modified;
+        f.source = int(i);
+        at.insert(inside.toLower(), int(out.items.size()));
+        out.items.push_back(std::move(f));
+        ++out.files;
+        out.bytes += e.size;
+        if (slash < 0 && inside.compare(QLatin1String("eboot.bin"), Qt::CaseInsensitive) == 0)
+            out.hasEboot = true;
+    }
+    std::sort(out.items.begin(), out.items.end(), [](const GameItem& a, const GameItem& b) { return a.path < b.path; });
+}
+
+} // namespace
+
+Result<GameListing> listArchiveGame(const QString& path, const CancellationToken& token)
+{
+    FW_TRY(checkArchiveSource(path, token));
+    GameListing out;
+    out.archive = path;
+    std::vector<Listed> entries;
+    if (readWithLibarchive(path)) {
+        FW_TRY_ASSIGN(const ListedGame listed, listedGame(path, token));
+        out.listing = listed.listing;
+        out.rootPrefix = listed.game.rootPrefix;
+        entries.reserve(listed.listing->entries.size());
+        for (const ArchiveEntry& e : listed.listing->entries)
+            entries.push_back(Listed{e.name, e.type, e.size, e.modified});
+    } else {
+        out.zip = true;
+        FW_TRY_ASSIGN(const ZipGame g, inspectArchive(path, token));
+        out.rootPrefix = g.rootPrefix;
+        zip::Reader r;
+        FW_TRY(r.open(path));
+        entries.reserve(r.entries().size());
+        for (const zip::Entry& e : r.entries()) {
+            const qint64 size = qint64(std::min<quint64>(e.uncompressedSize, quint64(std::numeric_limits<qint64>::max())));
+            entries.push_back(Listed{e.name, e.isDirectory() ? ArchiveEntry::Type::Directory : ArchiveEntry::Type::File,
+                                     size, e.modified});
+        }
+    }
+    collectGame(out, entries);
+    return out;
+}
+
+Result<GameListing> listWholeArchiveForTesting(const QString& path, const CancellationToken& token)
+{
+    GameListing out;
+    out.archive = path;
+    std::vector<Listed> entries;
+    if (readWithLibarchive(path)) {
+        FW_TRY_ASSIGN(out.listing, listingOf(path, token));
+        FW_TRY(checkExtractable(*out.listing));
+        for (const ArchiveEntry& e : out.listing->entries)
+            entries.push_back(Listed{e.name, e.type, e.size, e.modified});
+    } else {
+        out.zip = true;
+        zip::Reader r;
+        FW_TRY(r.open(path));
+        FW_TRY(checkExtractable(zipListing(path, r)));
+        for (const zip::Entry& e : r.entries())
+            entries.push_back(Listed{e.name, e.isDirectory() ? ArchiveEntry::Type::Directory : ArchiveEntry::Type::File,
+                                     qint64(e.uncompressedSize), e.modified});
+    }
+    collectGame(out, entries);
+    return out;
+}
+
+Result<QByteArray> readGameFile(const GameListing& game, const QString& path, qint64 maxSize, const CancellationToken& token)
+{
+    const int i = game.find(path);
+    if (i < 0 || game.items[size_t(i)].isDir)
+        return Error(ErrorCode::NotFound, QStringLiteral("%1 is not in %2.").arg(path, QFileInfo(game.archive).fileName()));
+    const GameItem& item = game.items[size_t(i)];
+    if (item.size > maxSize)
+        return Error(ErrorCode::Unsupported, QStringLiteral("%1 is too large to read into memory.").arg(path));
+    if (!game.zip) {
+        if (!game.listing)
+            return Error(ErrorCode::Internal, QStringLiteral("The archive's list of files is missing."));
+        return readArchiveFile(*game.listing, item.entry, maxSize, ReadBudget{}, nullptr, token);
+    }
+    zip::Reader r;
+    FW_TRY(r.open(game.archive));
+    if (item.source < 0 || size_t(item.source) >= r.entries().size() || r.entries()[size_t(item.source)].name != item.entry)
+        return Error(ErrorCode::CorruptData, QStringLiteral("%1 changed while it was read.").arg(QFileInfo(game.archive).fileName()));
+    return r.readAll(r.entries()[size_t(item.source)], maxSize);
 }
 
 void setArchiveInspectBudgetForTesting(qint64 archiveBytes, int milliseconds)

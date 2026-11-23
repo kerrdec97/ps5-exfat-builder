@@ -11,6 +11,7 @@
 
 #include "engines/pfs/PfsJobs.h"
 #include "core/ArchiveSource.h"
+#include "core/ArchiveStream.h"
 
 #include "core/FileUtil.h"
 #include "engines/pfs/Module.h"
@@ -195,6 +196,9 @@ Result<JobOutcome> PfsBuildJob::run(JobContext& ctx)
     FW_TRY(validate(ctx.settings));
     if (archive::isZipSource(m_source)) {
         const QString zip = m_source;
+        ctx.log.info(archive::unpackFirstLogLine(
+            zip, QStringLiteral("a PFS image is written front to back (an .ffpfsc compressed block by block as it goes), so "
+                                "it needs the game's files in the image's order, not the archive's")));
         FW_TRY_ASSIGN(m_source, archive::unpackZipSource(zip, ctx.tempDir, ctx.token, ctx.progress, freeSpaceMarginFrom(ctx.settings)));
         ctx.log.info(QStringLiteral("Unpacked %1 to %2").arg(native(zip), native(m_source)));
         FW_TRY(validate(ctx.settings));

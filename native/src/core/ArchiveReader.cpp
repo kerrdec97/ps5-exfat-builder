@@ -249,6 +249,19 @@ struct Cursor {
         }
         return v;
     }
+    // Little-endian fixed-size numbers (RAR 5 times).
+    quint32 u32()
+    {
+        quint32 v = 0;
+        for (int i = 0; i < 4; ++i)
+            v |= quint32(byte()) << (8 * i);
+        return v;
+    }
+    quint64 u64()
+    {
+        const quint64 low = u32();
+        return low | (quint64(u32()) << 32);
+    }
     // RAR 5: seven bits a byte, lowest first, the top bit says "more".
     quint64 vint()
     {
@@ -526,8 +539,15 @@ Result<ArchiveListing> listRar5(const QString& path, const CancellationToken& to
                 const quint64 fileFlags = c.vint();
                 const quint64 unpacked = c.vint();
                 c.vint(); // attributes
-                if (fileFlags & 0x0002)
-                    c.skip(4); // time
+                // The time libarchive gives the entry (archive_read_support_format_rar5.c,
+                // process_head_file): this field when it is there, else the
+                // modification time of the extra time record.
+                bool hasTime = false;
+                qint64 seconds = 0;
+                if (fileFlags & 0x0002) {
+                    hasTime = true;
+                    seconds = qint64(c.u32());
+                }
                 if (fileFlags & 0x0004)
                     c.skip(4); // checksum
                 const quint64 compression = c.vint();
@@ -554,6 +574,27 @@ Result<ArchiveListing> listRar5(const QString& path, const CancellationToken& to
                     const quint64 recordType = x.vint();
                     if (recordType == 0x01) {
                         e.encrypted = true;
+                    } else if (recordType == 0x03 && !hasTime) {
+                        // Flags: 0x01 Unix seconds (else a Windows FILETIME), 0x02 modification time first.
+                        const quint64 timeFlags = x.vint();
+                        if (x.ok && (timeFlags & 0x02)) {
+                            if (timeFlags & 0x01) {
+                                seconds = qint64(x.u32());
+                            } else {
+                                // __archive_ntfs_to_unix: 100 ns ticks since 1601, floored to a second.
+                                const quint64 ticks = x.u64();
+                                constexpr qint64 kEpochTicks = 116444736000000000LL;
+                                constexpr qint64 kTicks = 10000000LL;
+                                if (ticks > quint64(std::numeric_limits<qint64>::max())) {
+                                    seconds = qint64((ticks - quint64(kEpochTicks)) / quint64(kTicks));
+                                } else {
+                                    const qint64 v = qint64(ticks) - kEpochTicks;
+                                    seconds = v / kTicks - ((v % kTicks) < 0 ? 1 : 0);
+                                }
+                            }
+                            if (x.ok)
+                                e.modified = QDateTime::fromSecsSinceEpoch(seconds);
+                        }
                     } else if (recordType == 0x05) {
                         const quint64 redirection = x.vint();
                         if (redirection == 5)
@@ -565,6 +606,8 @@ Result<ArchiveListing> listRar5(const QString& path, const CancellationToken& to
                     x.ok = true;
                     x.skip(recordSize);
                 }
+                if (hasTime)
+                    e.modified = QDateTime::fromSecsSinceEpoch(seconds);
                 if (e.type == ArchiveEntry::Type::File) {
                     if (fileFlags & 0x0008)
                         return Error(ErrorCode::Unsupported,
@@ -825,6 +868,14 @@ public:
         return ArchiveEntry::Type::File;
     }
 
+    // The time an unpacked file gets: whole seconds, invalid when the archive has none.
+    static QDateTime modifiedOf(struct archive_entry* e)
+    {
+        if (!archive_entry_mtime_is_set(e))
+            return {};
+        return QDateTime::fromSecsSinceEpoch(qint64(archive_entry_mtime(e)));
+    }
+
 private:
     struct archive* m_a = nullptr;
     Client m_client;
@@ -867,8 +918,10 @@ Status listWithLibarchive(ArchiveListing& out, const CancellationToken& token)
             return nameTooLong(out.path, entry.name);
         entry.type = LaReader::entryType(e);
         entry.encrypted = archive_entry_is_data_encrypted(e) > 0 || archive_entry_is_metadata_encrypted(e) > 0;
-        if (entry.type == ArchiveEntry::Type::File)
+        if (entry.type == ArchiveEntry::Type::File) {
             entry.size = std::max<qint64>(0, archive_entry_size(e));
+            entry.modified = LaReader::modifiedOf(e);
+        }
         if (qsizetype(out.entries.size()) >= kMaxEntries)
             return tooManyEntries(out.path);
         listedChars += entry.name.size();
@@ -1257,10 +1310,7 @@ Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QStrin
         if (produced != listed->size)
             return Error(ErrorCode::CorruptData, QStringLiteral("%1 is damaged in %2.").arg(name, archive),
                          QStringLiteral("%1 of %2 bytes").arg(produced).arg(listed->size));
-        QDateTime modified;
-        if (archive_entry_mtime_is_set(e))
-            modified = QDateTime::fromSecsSinceEpoch(qint64(archive_entry_mtime(e)));
-        FW_TRY(finishWrittenFile(out, rel, modified));
+        FW_TRY(finishWrittenFile(out, rel, LaReader::modifiedOf(e)));
         // Never over a file: every name is unique by now, so one that is there
         // already is not this pass's (or is the same file under its short
         // 8.3 name, "GAMEFO~1").
@@ -1275,6 +1325,104 @@ Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QStrin
         if (!it->seen)
             return mismatch(QStringLiteral("%1 is missing").arg(it.key()));
     return result;
+}
+
+Status visitArchive(const ArchiveListing& listing, const QString& onlyUnder, const ArchiveVisitor& visitor,
+                    const CancellationToken& token)
+{
+    // The rules of extractArchive(), with the caller in place of the files.
+    FW_TRY(checkExtractable(listing, onlyUnder));
+    const QString archive = nameOf(listing.path);
+    struct Expected {
+        const ArchiveEntry* entry = nullptr;
+        bool seen = false;
+    };
+    QHash<QString, Expected> expected;
+    qsizetype remaining = 0;
+    for (const ArchiveEntry& e : listing.entries) {
+        if (!isUnder(e.name, onlyUnder))
+            continue;
+        ++remaining;
+        if (e.type == ArchiveEntry::Type::File)
+            expected.insert(e.name, Expected{&e, false});
+    }
+    const auto mismatch = [&](const QString& what) {
+        return Error(ErrorCode::CorruptData,
+                     QStringLiteral("%1 does not match its own list of files (%2).").arg(archive, what));
+    };
+    LaReader r;
+    FW_TRY(r.open(listing, token));
+    while (remaining > 0) {
+        struct archive_entry* e = nullptr;
+        const int rc = archive_read_next_header(r.handle(), &e);
+        if (rc == ARCHIVE_EOF)
+            break;
+        if (rc == ARCHIVE_RETRY)
+            continue;
+        if (rc < ARCHIVE_WARN)
+            return r.failure({});
+        QString name;
+        if (!r.entryName(e, name))
+            return unreadableName(listing.path, {});
+        if (!isUnder(name, onlyUnder))
+            continue;
+        --remaining;
+        if (zip::Reader::extractedPath(name).isEmpty())
+            continue; // the destination itself
+        const ArchiveEntry::Type type = LaReader::entryType(e);
+        if (type != ArchiveEntry::Type::File)
+            continue; // folders are made by the caller, links never
+        const auto listed = expected.find(name);
+        if (listed == expected.end() || listed->seen)
+            return mismatch(name);
+        listed->seen = true;
+        const ArchiveEntry& entry = *listed->entry;
+        const QDateTime modified = LaReader::modifiedOf(e);
+        // The caller may have laid its output out with the listed time.
+        if (modified.isValid() != entry.modified.isValid()
+            || (modified.isValid() && modified.toSecsSinceEpoch() != entry.modified.toSecsSinceEpoch()))
+            return mismatch(QStringLiteral("the time of %1").arg(name));
+        FW_TRY_ASSIGN(const bool wanted, visitor.begin(entry, modified));
+        if (!wanted) {
+            if (archive_read_data_skip(r.handle()) < ARCHIVE_WARN)
+                return r.failure(name);
+            continue;
+        }
+        qint64 produced = 0;
+        for (;;) {
+            const void* block = nullptr;
+            size_t size = 0;
+            la_int64_t offset = 0;
+            const int rd = archive_read_data_block(r.handle(), &block, &size, &offset);
+            if (rd == ARCHIVE_EOF)
+                break;
+            if (rd == ARCHIVE_RETRY)
+                continue;
+            // A warning here is a checksum that did not match or data that
+            // could not be decoded: never a file to build from.
+            if (rd != ARCHIVE_OK)
+                return r.failure(name);
+            if (size == 0)
+                continue;
+            if (offset != produced)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 is damaged in %2.").arg(name, archive),
+                             QStringLiteral("data at %1, expected at %2").arg(offset).arg(produced));
+            if (qint64(size) > entry.size - produced)
+                return Error(ErrorCode::CorruptData, QStringLiteral("%1 is larger than the archive says.").arg(name));
+            FW_TRY(visitor.data(static_cast<const char*>(block), qint64(size)));
+            produced += qint64(size);
+            if (!token.checkpoint())
+                return Error::cancelled();
+        }
+        if (produced != entry.size)
+            return Error(ErrorCode::CorruptData, QStringLiteral("%1 is damaged in %2.").arg(name, archive),
+                         QStringLiteral("%1 of %2 bytes").arg(produced).arg(entry.size));
+        FW_TRY(visitor.end());
+    }
+    for (auto it = expected.constBegin(); it != expected.constEnd(); ++it)
+        if (!it->seen)
+            return mismatch(QStringLiteral("%1 is missing").arg(it.key()));
+    return success();
 }
 
 } // namespace fw::archive

@@ -51,6 +51,7 @@ struct SourceNode {
     int parent = -1;
     std::vector<int> children; // sorted by up-cased name
     int imageEntry = -1;       // edits: data comes from this entry of the original image
+    int archiveItem = -1;      // builds from an archive: data comes from this archive::GameListing item
 };
 
 struct SourceTree {

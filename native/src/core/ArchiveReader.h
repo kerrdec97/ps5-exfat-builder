@@ -25,9 +25,11 @@
 #include "core/Result.h"
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <vector>
 
 namespace fw::archive {
@@ -48,6 +50,9 @@ struct ArchiveEntry {
     Type type = Type::File;
     qint64 size = 0;     // files: the size the archive lists
     bool encrypted = false;
+    // Files: the modification time the archive lists, in whole seconds, as
+    // extractArchive() gives the unpacked file; invalid when it lists none.
+    QDateTime modified;
 };
 
 struct ArchiveListing {
@@ -97,6 +102,26 @@ struct ExtractResult {
 Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QString& destination,
                                      const QString& onlyUnder, const CancellationToken& token,
                                      ProgressReporter* progress = nullptr);
+
+// One pass through the archive that hands the files under `onlyUnder` to the
+// caller instead of writing them (builds that stream an archive into an
+// image, ArchiveStream.h). The rules of extractArchive(): every name checked
+// first (checkExtractable), every checksum verified while its file is read,
+// and the pass fails on an entry that is damaged, larger or smaller than
+// listed, not listed, listed twice, or listed with another modification time;
+// a listed file the pass never met fails it at the end.
+struct ArchiveVisitor {
+    // A file under `onlyUnder`, by its listed name and the time the pass
+    // reads for it. Returns whether its data is wanted; when not, it is
+    // passed over (libarchive still decodes what a solid archive needs).
+    std::function<Result<bool>(const ArchiveEntry& listed, const QDateTime& modified)> begin;
+    // The next bytes of the wanted file, in order.
+    std::function<Status(const char* data, qint64 size)> data;
+    // The wanted file is complete (its size and checksum are right).
+    std::function<Status()> end;
+};
+Status visitArchive(const ArchiveListing& listing, const QString& onlyUnder, const ArchiveVisitor& visitor,
+                    const CancellationToken& token);
 
 // Tests only: how many characters the names of one list may have together
 // (listArchive, checkExtractable) and how many folders and files they may
