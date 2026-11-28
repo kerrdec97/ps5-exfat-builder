@@ -32,6 +32,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <thread>
 
@@ -216,7 +217,7 @@ private slots:
         std::thread watch([&stopWatch, hbFile] {
             while (!stopWatch.load()) {
                 if (!hbFile.isEmpty()) {
-                    std::ofstream o((hbFile + QStringLiteral(".phase")).toStdWString(), std::ios::trunc);
+                    std::ofstream o(std::filesystem::path((hbFile + QStringLiteral(".phase")).toStdU16String()), std::ios::trunc);
                     o << "phase " << phase.load() << std::endl;
                 }
                 std::this_thread::sleep_for(std::chrono::seconds(1));
