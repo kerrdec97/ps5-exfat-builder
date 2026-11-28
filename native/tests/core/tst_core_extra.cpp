@@ -767,8 +767,14 @@ private slots:
         };
         auto r = runProcess(spec, CancellationToken());
         QVERIFY(r.ok());
+#ifdef Q_OS_MACOS
+        // macOS cannot bind a process to cores: the limit says it was not applied.
+        QVERIFY(!applied);
+        QVERIFY(!widened);
+#else
         QVERIFY(applied);
         QVERIFY(widened);
+#endif
         QVERIFY(!setProcessCpuLimit(0, 1));
     }
 

@@ -436,7 +436,17 @@ private slots:
         plain->setEnabled(false);
         QCoreApplication::processEvents();
 
-        const QImage shot = m_window->grab().toImage();
+        // On the window's colour, as the screen shows it: Linux's offscreen
+        // grab leaves unpainted areas transparent (read as white), Windows'
+        // fills them with the window colour.
+        const QImage raw = m_window->grab().toImage();
+        QImage shot(raw.size(), QImage::Format_RGB32);
+        shot.setDevicePixelRatio(raw.devicePixelRatio());
+        shot.fill(color::bg_1);
+        {
+            QPainter painter(&shot);
+            painter.drawImage(QPoint(0, 0), raw);
+        }
         // The strongest text pixel of a label: fully covered, so it is the text colour.
         auto textColor = [&](const QWidget* w) {
             const QRect r(w->mapTo(m_window.get(), QPoint(0, 0)), w->size());
@@ -459,6 +469,9 @@ private slots:
         };
         for (const Sample& s : samples) {
             const QColor got = textColor(s.label);
+            if (!close(got, s.color)) // the picture says more than the numbers
+                shot.copy(QRect(s.label->mapTo(m_window.get(), QPoint(0, 0)), s.label->size()))
+                    .save(QDir(QDir::tempPath()).filePath(QStringLiteral("tst_ui_widgets-%1.png").arg(QString::fromLatin1(s.name).replace(u' ', u'-'))));
             QVERIFY2(close(got, s.color), qPrintable(QStringLiteral("%1: %2, expected %3").arg(QLatin1String(s.name), got.name(), s.color.name())));
         }
         QLabel* messageText = nullptr;
@@ -2008,7 +2021,11 @@ private slots:
         QTRY_VERIFY((tip = shownTip()));
         QVERIFY(tip->width() < theme::size::toolTipMax);
         QVERIFY(!tip->wordWrap());
-        QVERIFY2(tip->height() < tall / 3, qPrintable(QStringLiteral("%1 of %2").arg(tip->height()).arg(tall)));
+        // Its own one-line size, nothing kept from the long tip before it (the
+        // ratio to the long tip depends on the font: Inter wraps into fewer lines).
+        QVERIFY2(tip->height() <= tip->sizeHint().height() && tip->height() < tall / 2,
+                 qPrintable(QStringLiteral("%1 of %2 (its own size hint %3, one line %4)")
+                                .arg(tip->height()).arg(tall).arg(tip->sizeHint().height()).arg(tip->fontMetrics().height())));
     }
 
     void menuLeavesRoomForItsShadow()

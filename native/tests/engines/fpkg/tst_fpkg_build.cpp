@@ -1065,7 +1065,11 @@ private slots:
         const QString ownTemp = QDir::toNativeSeparators(qEnvironmentVariable("TEMP"));
         const auto checkRun = [&](const QJsonObject& r, const QString& command, int cpus) {
             QCOMPARE(r.value(QStringLiteral("argv")).toArray().first().toString(), command);
+#ifdef Q_OS_MACOS
+            Q_UNUSED(cpus); // macOS cannot bind a process to cores
+#else
             QCOMPARE(r.value(QStringLiteral("cpus")).toInt(), cpus);
+#endif
 #ifdef Q_OS_WIN
             QCOMPARE(r.value(QStringLiteral("priority")).toInt(), 0x40); // idle
             const QString temp = r.value(QStringLiteral("TEMP")).toString();

@@ -44,12 +44,12 @@ jobs:
             runner: macos-15
             qt-host: mac
             qt-arch: clang_64
-            cmake-extra: -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+            cmake-extra: -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
           - name: macos-x86_64
             runner: macos-15-intel
             qt-host: mac
             qt-arch: clang_64
-            cmake-extra: -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+            cmake-extra: -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150

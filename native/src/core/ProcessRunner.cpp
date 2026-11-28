@@ -18,6 +18,7 @@
 #else
 #include <csignal>
 #include <sched.h>
+#include <sys/resource.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -82,12 +83,17 @@ bool setProcessCpuLimit(qint64 pid, int cores)
     }
     CloseHandle(h);
     return ok != FALSE;
-#else
+#elif defined(Q_OS_LINUX)
     cpu_set_t set;
     CPU_ZERO(&set);
     for (int i = 0; i < n && i < CPU_SETSIZE; ++i)
         CPU_SET(i, &set);
     return sched_setaffinity(pid_t(pid), sizeof(set), &set) == 0;
+#else
+    // macOS has no way to bind a process to cores (only scheduling hints):
+    // the limit is not applied, and the caller says so.
+    Q_UNUSED(n);
+    return false;
 #endif
 }
 
@@ -127,8 +133,13 @@ QString applyProcessPriority(qint64 pid, int mode)
     CloseHandle(h);
     return cpu ? processPriorityName(mode) : QString();
 #else
-    Q_UNUSED(mode);
-    return {};
+    // Linux and macOS: the process's nice value (Idle 19, Below Normal 10).
+    // A child starts at its parent's value, so Normal has nothing to change
+    // (raising the priority again would need administrator rights).
+    const int niceness = mode == 0 ? 19 : mode == 1 ? 10 : 0;
+    if (niceness == 0)
+        return processPriorityName(mode);
+    return ::setpriority(PRIO_PROCESS, id_t(pid), niceness) == 0 ? processPriorityName(mode) : QString();
 #endif
 }
 
@@ -406,7 +417,12 @@ Result<ProcessResult> runProcess(const ProcessSpec& spec, const CancellationToke
     });
     JobHandle jobObject;
 #else
-    proc.setChildProcessModifier([] { ::setpgid(0, 0); });
+    const int niceness = spec.startPriorityMode == 0 ? 19 : spec.startPriorityMode == 1 ? 10 : 0;
+    proc.setChildProcessModifier([niceness] {
+        ::setpgid(0, 0);
+        if (niceness > 0)
+            (void)::setpriority(PRIO_PROCESS, 0, niceness); // async-signal-safe
+    });
 #endif
 
     QElapsedTimer timer;

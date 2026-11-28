@@ -38,6 +38,11 @@ struct ProcessSpec {
     // Called once right after the process started (and joined the kill-tree
     // job object), with its process id — e.g. to apply a CPU affinity limit.
     std::function<void(qint64 pid)> onStarted;
+    // Linux and macOS: the priority the child starts with (applyProcessPriority's
+    // modes: 0 idle, 1 below normal; -1 or 2 leave it). Set in the child before
+    // the program runs, so none of its work happens at the normal priority.
+    // Windows applies the mode through onStarted (the process starts suspended).
+    int startPriorityMode = -1;
 };
 
 struct ProcessResult {

@@ -69,7 +69,9 @@
 #include <windows.h>
 #include <shellapi.h>
 #else
+#include <cerrno>
 #include <sched.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
@@ -165,22 +167,27 @@ int cpuCount()
     for (DWORD_PTR m = proc; m; m >>= 1)
         n += int(m & 1);
     return n;
-#else
+#elif defined(__linux__)
     cpu_set_t set;
     CPU_ZERO(&set);
     if (sched_getaffinity(0, sizeof(set), &set) != 0)
         return -1;
     return CPU_COUNT(&set);
+#else
+    return -1; // macOS: no affinity to read
 #endif
 }
 
-// The Windows priority class (0x40 idle, 0x4000 below normal, 0x20 normal); 0 elsewhere.
+// The Windows priority class (0x40 idle, 0x4000 below normal, 0x20 normal);
+// elsewhere the nice value (19 idle, 10 below normal, 0 normal).
 unsigned long priorityClass()
 {
 #ifdef _WIN32
     return GetPriorityClass(GetCurrentProcess());
 #else
-    return 0;
+    errno = 0;
+    const int niceness = getpriority(PRIO_PROCESS, 0);
+    return errno == 0 && niceness > 0 ? (unsigned long)niceness : 0;
 #endif
 }
 
