@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=exFAT Image Builder
+GenericName=PS5 game image builder
+Comment=Build, verify and convert exFAT, FFPKG and PFS images of your own PS5 game dumps
+Exec=exfat-image-builder %F
+Icon=exfat-image-builder
+Terminal=false
+Categories=Utility;Archiving;
+Keywords=PS5;exFAT;FFPKG;PFS;image;backport;
+StartupWMClass=exFAT Image Builder

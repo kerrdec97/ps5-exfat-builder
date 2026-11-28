@@ -459,7 +459,17 @@ Result<QString> unpackArchiveSource(const QString& path, const QString& tempDir,
         FW_TRY(r.extractAll(dest, token, progress, false, g.rootPrefix));
         rootPrefix = g.rootPrefix;
     }
-    const QString root = QDir::cleanPath(QDir(dest).filePath(zip::Reader::extractedPath(rootPrefix)));
+    QString root = QDir::cleanPath(QDir(dest).filePath(zip::Reader::extractedPath(rootPrefix)));
+    if (!QFileInfo(root).isDir() && !rootPrefix.isEmpty()) {
+        // The folder is named as its first entry spells it, which on a
+        // case-sensitive drive may differ from the spelling chosen above.
+        const QFileInfo want(root);
+        for (const QFileInfo& fi : QDir(want.absolutePath()).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot))
+            if (fi.fileName().compare(want.fileName(), Qt::CaseInsensitive) == 0) {
+                root = fi.absoluteFilePath();
+                break;
+            }
+    }
     if (!QFileInfo(root).isDir())
         return Error(ErrorCode::CorruptData, QStringLiteral("The game folder was not found after unpacking %1.").arg(nativePath(path)));
     return root;

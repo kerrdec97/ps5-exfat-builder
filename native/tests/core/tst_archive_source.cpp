@@ -710,6 +710,15 @@ private slots:
         if (!found)
             QSKIP("libarchive's 7z writer changed this name while writing it; the reader's own check is tested by the other rows");
         const Status st = fwa::checkArchiveSource(a);
+#ifndef Q_OS_WIN
+        // Device names and trailing dots or spaces are Windows' limits: Linux
+        // and macOS store them as they are (a ':' and every path trick stay
+        // refused on every computer).
+        if (says == QLatin1String("cannot store") && !name.contains(u':')) {
+            QVERIFY2(st.ok(), st.ok() ? "" : qPrintable(st.error().toLogString()));
+            return;
+        }
+#endif
         QVERIFY(!st.ok());
         QVERIFY2(st.error().message.contains(says), qPrintable(st.error().message));
         const QString temp = fresh(QStringLiteral("temp"));

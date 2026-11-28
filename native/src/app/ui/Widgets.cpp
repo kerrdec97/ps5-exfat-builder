@@ -23,6 +23,7 @@
 #include <QPainterPath>
 #include <QPointer>
 #include <QProcess>
+#include <QStandardPaths>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -2462,14 +2463,45 @@ bool openInFileManager(const QString& path)
     if (path.isEmpty())
         return false;
     const QFileInfo fi(path);
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN)
     if (fi.exists() && !fi.isDir())
         return QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(fi.absoluteFilePath())});
+#elif defined(Q_OS_MACOS)
+    if (fi.exists() && !fi.isDir())
+        return QProcess::startDetached(QStringLiteral("/usr/bin/open"), {QStringLiteral("-R"), fi.absoluteFilePath()});
 #endif
     // A file that was moved away: its folder is the next best thing to show.
     const QString dir = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
     if (!QFileInfo(dir).isDir())
         return false;
+#if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
+    // Linux: the file managers' common D-Bus call selects the file (Files,
+    // Dolphin, Nemo, Caja, Thunar...). Asked without waiting; where no file
+    // manager answers it, the folder opens as before.
+    const QString dbusSend = QStandardPaths::findExecutable(QStringLiteral("dbus-send"));
+    if (fi.exists() && !fi.isDir() && !dbusSend.isEmpty()) {
+        auto* p = new QProcess(qApp);
+        p->setProgram(dbusSend);
+        p->setArguments({QStringLiteral("--session"), QStringLiteral("--print-reply"), QStringLiteral("--dest=org.freedesktop.FileManager1"),
+                         QStringLiteral("--type=method_call"), QStringLiteral("/org/freedesktop/FileManager1"),
+                         QStringLiteral("org.freedesktop.FileManager1.ShowItems"),
+                         QStringLiteral("array:string:") + QUrl::fromLocalFile(fi.absoluteFilePath()).toString(QUrl::FullyEncoded),
+                         QStringLiteral("string:")});
+        QObject::connect(p, &QProcess::finished, p, [p, dir](int code, QProcess::ExitStatus status) {
+            if (status != QProcess::NormalExit || code != 0)
+                QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+            p->deleteLater();
+        });
+        QObject::connect(p, &QProcess::errorOccurred, p, [p, dir](QProcess::ProcessError e) {
+            if (e == QProcess::FailedToStart) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+                p->deleteLater();
+            }
+        });
+        p->start();
+        return true;
+    }
+#endif
     return QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 

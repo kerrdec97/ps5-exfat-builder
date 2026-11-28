@@ -779,7 +779,7 @@ private slots:
     {
 #ifdef Q_OS_MACOS
         QVERIFY(!power::isSupported(power::Action::Hibernate));
-        QCOMPARE(power::perform(power::Action::Hibernate).error().code(), ErrorCode::PermissionDenied); // refused before anything else
+        QCOMPARE(power::perform(power::Action::Hibernate).error().code, ErrorCode::PermissionDenied); // refused before anything else
 #else
         QVERIFY(power::isSupported(power::Action::Hibernate));
 #endif
@@ -806,7 +806,7 @@ private slots:
 #endif
         // Never acts from a test program, whatever the platform.
         QVERIFY(power::performBlocked());
-        QCOMPARE(power::perform(power::Action::Shutdown).error().code(), ErrorCode::PermissionDenied);
+        QCOMPARE(power::perform(power::Action::Shutdown).error().code, ErrorCode::PermissionDenied);
     }
 
     // Keep-awake: on, then off again, without leaving a lock holder behind.

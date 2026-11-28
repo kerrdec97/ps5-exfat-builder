@@ -260,13 +260,13 @@ struct ArchiveWalker : Walked {
     qint64 seen = 0;
 };
 
+// The AMPR runtime's own names, compared without regard to letter case on
+// every computer, as the exFAT and FFPKG builds do: a dump unpacked from an
+// exFAT image or a Windows copy on Linux or macOS may spell them in other
+// letters, and the console's file system does not tell them apart.
 bool samePath(const QByteArray& a, const char* b)
 {
-#ifdef Q_OS_WIN
-    return asciiLower(a) == asciiLower(QByteArray(b)); // NTFS lookups are case-insensitive
-#else
-    return a == b;
-#endif
+    return asciiLower(a) == asciiLower(QByteArray(b));
 }
 
 // The dump's own ampr_emu.index (the plan's entry for it), read when the

@@ -25,6 +25,11 @@
 #include <signal.h>
 #include <unistd.h>
 #endif
+#ifdef Q_OS_MACOS
+#include <fcntl.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -160,7 +165,10 @@ bool isSameOrInside(const QString& child, const QString& parent)
 {
     QString c = QDir::cleanPath(QFileInfo(child).absoluteFilePath());
     QString p = QDir::cleanPath(QFileInfo(parent).absoluteFilePath());
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+    // NTFS, and APFS / HFS+ as macOS formats them, do not tell letter case
+    // apart: "/Games/x" lies in "/games" there (the cautious answer for the
+    // "is the output inside the source" checks on a case-sensitive volume too).
     c = c.toLower();
     p = p.toLower();
 #endif
@@ -476,6 +484,36 @@ constexpr char kOwnerMarkerMagic[] = "fw-temp 1\n"; // first line of TempDir's m
 // When this process started (Windows: its creation time in 100 ns units), or
 // 0 when that cannot be told. With the process id it names the owner of a
 // temporary folder, also after the id has gone to a later process.
+#if defined(Q_OS_LINUX)
+// Field 22 of /proc/<pid>/stat: clock ticks after boot. The command name
+// (field 2) is in parentheses and may hold spaces, so fields are counted
+// after its closing parenthesis.
+qint64 processStartTime(qint64 pid)
+{
+    QFile f(QStringLiteral("/proc/%1/stat").arg(pid));
+    if (!f.open(QIODevice::ReadOnly))
+        return 0;
+    const QByteArray stat = f.read(4096);
+    const qsizetype close = stat.lastIndexOf(')');
+    if (close < 0)
+        return 0;
+    const QList<QByteArray> rest = stat.mid(close + 1).simplified().split(' ');
+    // rest[0] is field 3 (state), so field 22 is rest[19].
+    return rest.size() > 19 ? rest.at(19).toLongLong() : 0;
+}
+#elif defined(Q_OS_MACOS)
+// The kernel's start time of the process, in microseconds.
+qint64 processStartTime(qint64 pid)
+{
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, int(pid)};
+    struct kinfo_proc info {};
+    size_t size = sizeof(info);
+    if (sysctl(mib, 4, &info, &size, nullptr, 0) != 0 || size == 0)
+        return 0;
+    return qint64(info.kp_proc.p_starttime.tv_sec) * 1000000 + info.kp_proc.p_starttime.tv_usec;
+}
+#endif
+
 qint64 ownStartTime()
 {
 #ifdef Q_OS_WIN
@@ -485,6 +523,9 @@ qint64 ownStartTime()
             return qint64(0);
         return qint64((quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime);
     }();
+    return started;
+#elif defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
+    static const qint64 started = processStartTime(QCoreApplication::applicationPid());
     return started;
 #else
     return 0;
@@ -526,8 +567,18 @@ bool processStillRuns(qint64 pid, qint64 started)
         return false;
     return started <= 0 || !timed || qint64((quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime) == started;
 #else
+    if (::kill(pid_t(pid), 0) != 0 && errno != EPERM)
+        return false;
+#if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
+    // Running: the owner only if it started when the marker says (a process
+    // id is given to a later process once its owner ended).
+    if (started > 0)
+        if (const qint64 now = processStartTime(pid); now > 0)
+            return now == started;
+#else
     Q_UNUSED(started);
-    return ::kill(pid_t(pid), 0) == 0 || errno == EPERM;
+#endif
+    return true;
 #endif
 }
 } // namespace
@@ -698,7 +749,9 @@ VolumeInfo volumeInfo(const QString& anyPathOnVolume)
     }
 #else
     const QString fs = v.fileSystem.toLower();
-    v.isNetwork = fs.startsWith(QStringLiteral("nfs")) || fs == u"cifs" || fs == u"smb3" || fs.startsWith(QStringLiteral("fuse.sshfs"));
+    // Linux: nfs, nfs4, cifs, smb3, sshfs. macOS: smbfs, afpfs, nfs, webdav.
+    v.isNetwork = fs.startsWith(QStringLiteral("nfs")) || fs == u"cifs" || fs == u"smb3" || fs == u"smbfs" || fs == u"afpfs"
+        || fs == u"webdav" || fs.startsWith(QStringLiteral("fuse.sshfs"));
 #endif
     static const QStringList cloud = {QStringLiteral("onedrive"), QStringLiteral("google drive"), QStringLiteral("googledrive"),
                                       QStringLiteral("dropbox"), QStringLiteral("iclouddrive"), QStringLiteral("icloud drive"),
@@ -1005,6 +1058,13 @@ Status flushToDisk(QFile& file, const QString& displayName)
     if (h == -1 || !FlushFileBuffers(reinterpret_cast<HANDLE>(h)))
         return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
                      QStringLiteral("FlushFileBuffers failed (%1)").arg(GetLastError()));
+#elif defined(Q_OS_MACOS)
+    // fsync() on macOS only hands the data to the drive; F_FULLFSYNC also
+    // empties the drive's own cache (what FlushFileBuffers does on Windows).
+    // Drives that do not support it (some network and FUSE ones) get fsync.
+    if (::fcntl(file.handle(), F_FULLFSYNC) != 0 && ::fsync(file.handle()) != 0)
+        return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
+                     QStringLiteral("F_FULLFSYNC and fsync failed (%1)").arg(QString::fromLocal8Bit(std::strerror(errno))));
 #else
     if (::fsync(file.handle()) != 0)
         return Error(ErrorCode::IoError, QStringLiteral("Could not finish writing %1 to the drive.").arg(displayName),
@@ -1046,6 +1106,15 @@ bool isProtectedLocation(const QString& path)
 #ifdef Q_OS_WIN
     for (const char* variable : {"SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"})
         folders << qEnvironmentVariable(variable);
+#else
+    // The system's own folders (and on macOS the mount point of every drive).
+    for (const char* folder : {"/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/media", "/mnt", "/opt", "/proc",
+                               "/root", "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/usr/local", "/var"})
+        folders << QString::fromLatin1(folder);
+#ifdef Q_OS_MACOS
+    for (const char* folder : {"/Applications", "/Library", "/System", "/Users", "/Volumes", "/private", "/cores"})
+        folders << QString::fromLatin1(folder);
+#endif
 #endif
     return std::any_of(folders.cbegin(), folders.cend(), [&](const QString& folder) {
         return !folder.isEmpty() && isSameOrInside(abs, folder) && isSameOrInside(folder, abs);

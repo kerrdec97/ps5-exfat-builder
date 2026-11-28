@@ -558,7 +558,8 @@ private slots:
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/sce_sys/param.json"), R"({"titleId":"PPSA06666"})"));
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/fakelib/libSceAmpr.sprx"), QByteArray("old runtime")));
         QVERIFY(fwtest::writeTextFile(game + QStringLiteral("/data/a.bin"), compressible(200000, 3)));
-        QVERIFY(fwtest::writeTextFile(game + u'/' + name, content));
+        if (!fwtest::writeTextFile(game + u'/' + name, content))
+            QSKIP("This drive cannot hold a 300-byte name (ext4 and APFS allow 255 bytes), so no dump here can have one");
         const auto warned = [&](const QStringList& warnings) {
             return std::any_of(warnings.begin(), warnings.end(), [&](const QString& w) {
                 return w.startsWith(QStringLiteral("ampr_emu.index: 1 file(s) left out")) && w.contains(name);

@@ -506,6 +506,12 @@ private:
                 budget = std::min(budget, m_opt.stallAfterBytes - *got);
             if (drop && !m_dropped)
                 budget = std::min(budget, m_opt.dropAfterBytes - *got);
+            // The client has gone: what is still buffered is read at once, as a
+            // real server does (Linux buffers far more of an aborted upload than
+            // Windows, and draining it at the throttled rate would hold the file
+            // open for seconds after the cancel).
+            if (d->state() != QAbstractSocket::ConnectedState && m_opt.stallAfterBytes < 0 && !drop)
+                budget = 1LL << 40;
             if (budget > 0 && d->bytesAvailable() > 0) {
                 const QByteArray b = d->read(std::min(budget, d->bytesAvailable()));
                 file->write(b);
@@ -542,6 +548,28 @@ private:
         QObject::connect(timer, &QTimer::timeout, d, pump);
         QObject::connect(d, &QTcpSocket::readyRead, d, pump);
         QObject::connect(d, &QTcpSocket::disconnected, d, pump);
+        // The client dropped the whole session (a cancel): a real server ends
+        // that session's upload soon after, wherever its reading had got to.
+        // Half a second later, so a DELE right after the cancel still meets
+        // the open file (refuseDeleteWhileOpen) and the client's retry runs.
+        // On Linux the 64 KiB read buffer would otherwise hide the closed
+        // socket until the throttled pump had drained the kernel's buffer.
+        if (s->ctrl)
+            QObject::connect(s->ctrl, &QTcpSocket::disconnected, d, [this, s, d, file, done] {
+                QTimer::singleShot(500, d, [this, s, d, file, done] {
+                    if (*done)
+                        return;
+                    *done = true;
+                    m_openForWrite.remove(file->fileName());
+                    file->close();
+                    if (s->data == d) {
+                        s->data = nullptr;
+                        m_active.fetch_sub(1);
+                    }
+                    d->abort();
+                    d->deleteLater();
+                });
+            });
         timer->start();
         pump();
     }

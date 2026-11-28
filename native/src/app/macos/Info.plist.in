@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>exFAT Image Builder</string>
+    <key>CFBundleIconFile</key>
+    <string>app.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.kerrdec97.exfat-image-builder</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>exFAT Image Builder</string>
+    <key>CFBundleDisplayName</key>
+    <string>exFAT Image Builder</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@PROJECT_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@PROJECT_VERSION@</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>@FW_MACOS_MIN_VERSION@</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>© kerrdec97. All rights reserved.</string>
+    <!-- Shown by macOS when the app first reads a game dump in one of these places. -->
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>exFAT Image Builder reads the game folders you choose and writes images next to them.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>exFAT Image Builder reads the game folders you choose and writes images next to them.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>exFAT Image Builder reads the game folders you choose and writes images next to them.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>exFAT Image Builder reads game dumps from, and writes images to, the drives you choose.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>exFAT Image Builder reads game dumps from, and writes images to, the network folders you choose.</string>
+    <!-- PS5 Connect: FTP, payloads and the kernel log on the user's own console. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>exFAT Image Builder connects to your PS5 on the local network (FTP, payloads, console log).</string>
+    <!-- After the queue: shut down and restart go through System Events. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>exFAT Image Builder asks System Events to shut down or restart the computer after the queue, when you chose that.</string>
+</dict>
+</plist>

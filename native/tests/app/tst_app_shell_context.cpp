@@ -316,6 +316,7 @@ private slots:
     {
         QFile::remove(QDir(Paths::dataDir()).filePath(QStringLiteral("library.json")));
         ui::LibraryStore store;
+#ifdef Q_OS_WIN
         store.addScanFolder(QStringLiteral("D:/Games"));
         store.addScanFolder(QStringLiteral("d:\\games\\"));
         store.addScanFolder(QStringLiteral("D:/Games/sub/.."));
@@ -324,6 +325,18 @@ private slots:
         QCOMPARE(store.scanFolders().size(), 2);
         store.removeScanFolder(QStringLiteral("e:/DUMPS/"));
         QCOMPARE(store.scanFolders(), QStringList{QStringLiteral("D:/Games")});
+#else
+        // Linux and macOS: the same path written differently is one folder; a
+        // backslash is part of a name there, not a separator.
+        store.addScanFolder(QStringLiteral("/media/ps5/Games"));
+        store.addScanFolder(QStringLiteral("/media/ps5/Games/"));
+        store.addScanFolder(QStringLiteral("/media/ps5/Games/sub/.."));
+        QCOMPARE(store.scanFolders(), QStringList{QStringLiteral("/media/ps5/Games")});
+        store.setScanFolders({QStringLiteral("/srv/Dumps"), QStringLiteral("/srv/Dumps/"), QStringLiteral("/media/ps5/Games")});
+        QCOMPARE(store.scanFolders().size(), 2);
+        store.removeScanFolder(QStringLiteral("/srv/Dumps/"));
+        QCOMPARE(store.scanFolders(), QStringList{QStringLiteral("/media/ps5/Games")});
+#endif
     }
 
     // The Library page's folders are the "Library folders" setting: folders
@@ -331,6 +344,9 @@ private slots:
     // added on the page is in Settings.
     void libraryFoldersAreTheSetting()
     {
+#ifndef Q_OS_WIN
+        QSKIP("Version 4 settings (Windows paths) exist only on Windows; libraryFoldersSurviveAReset covers the setting here");
+#endif
         const QString libraryJson = QDir(Paths::dataDir()).filePath(QStringLiteral("library.json"));
         QFile::remove(libraryJson);
         AppContext ctx;
@@ -383,6 +399,9 @@ private slots:
     // to them, as the next start does; one it shares is not listed twice.
     void legacyImportJoinsTheLibraryFolders()
     {
+#ifndef Q_OS_WIN
+        QSKIP("Version 4 settings (Windows paths) exist only on Windows");
+#endif
         const QString libraryJson = QDir(Paths::dataDir()).filePath(QStringLiteral("library.json"));
         QFile::remove(libraryJson);
         AppContext ctx;
@@ -434,7 +453,7 @@ private slots:
         s.resetAll();
         QVERIFY(s.isDefault(preset));
         QCOMPARE(store.scanFolders(), folders);
-        QCOMPARE(s.value(key).toStringList(), (QStringList{QStringLiteral("D:\\PS5\\Games"), QStringLiteral("E:\\Dumps")}));
+        QCOMPARE(s.value(key).toStringList(), (QStringList{QDir::toNativeSeparators(folders.at(0)), QDir::toNativeSeparators(folders.at(1))}));
         QVERIFY(readAll(libraryJson).contains("E:/Dumps"));
         QCOMPARE(changed.count(), 0);
 

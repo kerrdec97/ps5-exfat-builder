@@ -1684,8 +1684,14 @@ private slots:
     void pathFieldTakesQuotedPathsAndTheRightKindOfDrop()
     {
         PathField field(PathField::Mode::Directory);
+#ifdef Q_OS_WIN
         field.edit()->setText(QStringLiteral("  \"C:\\Dumps\\My Game\"  "));
         QCOMPARE(field.path(), QStringLiteral("C:/Dumps/My Game"));
+#else
+        // A backslash is part of a name on Linux and macOS: only the quotes go.
+        field.edit()->setText(QStringLiteral("  \"/media/Dumps/My Game\"  "));
+        QCOMPARE(field.path(), QStringLiteral("/media/Dumps/My Game"));
+#endif
 
         const QString file = m_root.filePath(QStringLiteral("drop.bin"));
         QVERIFY(fwtest::writeTextFile(file, "x"));

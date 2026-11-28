@@ -178,7 +178,8 @@ private slots:
     {
         const QString src = makeGame(QStringLiteral("long-name"), true);
         const QString name = QString(100, QChar(0x4E00));
-        QVERIFY(writeRandom(src + QStringLiteral("/data/") + name, 1000, 78));
+        if (!writeRandom(src + QStringLiteral("/data/") + name, 1000, 78))
+            QSKIP("This drive cannot hold a 300-byte name (ext4 and APFS allow 255 bytes), so no dump here can have one");
         const Built b = build(src, QStringLiteral("auto"));
         QVERIFY(b.ok);
         QVERIFY(b.hasIndex);

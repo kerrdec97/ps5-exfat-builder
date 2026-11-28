@@ -894,13 +894,25 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
     const auto wanted = [&](const Entry& e) {
         return onlyUnder.isEmpty() || e.name.startsWith(onlyUnder, Qt::CaseInsensitive);
     };
+    // The folder's own spelling may vary between entries ("Game/", "GAME/"):
+    // one folder on Windows, named as its first entry spells it. Every entry
+    // takes that spelling, so a case-sensitive drive gets the same one folder.
+    QString folder = onlyUnder;
+    for (const Entry& e : m_entries)
+        if (wanted(e)) {
+            folder = e.name.left(onlyUnder.size());
+            break;
+        }
+    const auto spelled = [&](const Entry& e) {
+        return onlyUnder.isEmpty() ? e.name : folder + e.name.mid(onlyUnder.size());
+    };
     // Validate every name before writing anything.
     QString rel;
     QHash<QString, QString> written; // what the destination compares -> the name as extracted
     for (const Entry& e : m_entries) {
         if (!wanted(e))
             continue;
-        const NameCheck check = extractionPath(e.name, rel);
+        const NameCheck check = extractionPath(spelled(e), rel);
         if (check == NameCheck::Unsafe)
             return Error(ErrorCode::CorruptData,
                          QStringLiteral("The archive contains an unsafe path (%1); nothing was extracted.").arg(e.name));
@@ -911,7 +923,7 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
     // archive with that name would be taken for a leftover and removed, and
     // the extraction would end complete with one file missing.
     for (const Entry& e : m_entries) {
-        if (!wanted(e) || e.isDirectory() || extractionPath(e.name, rel) != NameCheck::Ok)
+        if (!wanted(e) || e.isDirectory() || extractionPath(spelled(e), rel) != NameCheck::Ok)
             continue;
         const auto other = written.constFind(hostNameKey(PartFile::partPathFor(rel)).toLower());
         if (other != written.constEnd())
@@ -923,7 +935,7 @@ Status Reader::extractAll(const QString& destination, const CancellationToken& t
     QDir().mkpath(destination);
     const QDir dest(destination);
     for (const Entry& e : m_entries) {
-        if (!wanted(e) || extractionPath(e.name, rel) != NameCheck::Ok)
+        if (!wanted(e) || extractionPath(spelled(e), rel) != NameCheck::Ok)
             continue; // not asked for, or the destination folder itself
         const QString target = dest.filePath(rel);
         if (!isSameOrInside(target, destination))

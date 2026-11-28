@@ -341,6 +341,9 @@ private slots:
     // first, the imported ones that are new (compared as paths) follow.
     void legacyImportJoinsAFolderList()
     {
+#ifndef Q_OS_WIN
+        QSKIP("Version 4 settings (Windows paths) exist only on Windows");
+#endif
         fwtest::Registry reg;
         const QString key = QStringLiteral("library.folders");
         const SettingDef* def = reg.schema->find(key);

@@ -1,0 +1,183 @@
+name: Native (C++) Linux and macOS build, test and package
+
+# Builds exFAT Image Builder (native/) with Qt 6.10.3 (the Qt of the Windows
+# release and of the notices) on Linux and macOS, runs every automated test
+# offline, packages the release files with native/packaging/make-release-unix.sh
+# (Linux: AppImage + tar.gz; macOS: ad-hoc signed .app in a .dmg, one per
+# processor), runs the packaged program's self-test and screenshots every page.
+# Everything is uploaded as build artefacts; nothing is published.
+#
+# Linux builds on Ubuntu 22.04, the oldest system the AppImage supports (glibc
+# 2.35), as the PS5 Backport engine it bundles does. Third-party code is pinned:
+# actions by commit SHA, sources and engines by SHA-256 (native/cmake), the
+# AppImage tools by SHA-256 (make-release-unix.sh). No secrets are used.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev/linux-mac-port]
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'LICENSES/**'
+      - '.github/workflows/native-unix.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-unix-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            qt-host: linux
+            qt-arch: linux_gcc_64
+            cmake-extra: -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12
+          - name: macos-arm64
+            runner: macos-15
+            qt-host: mac
+            qt-arch: clang_64
+            cmake-extra: -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+          - name: macos-x86_64
+            runner: macos-15-intel
+            qt-host: mac
+            qt-arch: clang_64
+            cmake-extra: -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      QT_VERSION: '6.10.3'
+      # No test and no run of the app may put the runner to sleep or shut it
+      # down, and none of them goes online.
+      FW_NO_POWER_ACTIONS: '1'
+      FW_OFFLINE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install the build tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          # g++-12 for C++20; the X11/xcb libraries the Qt platform plug-ins need
+          # (linuxdeploy copies what the AppImage must carry); fonts-inter is the
+          # app's interface font; exfatprogs gives the tests fsck.exfat.
+          sudo apt-get install -y -qq ninja-build g++-12 libgl1-mesa-dev libegl1 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-randr0 \
+            libxcb-render-util0 libxcb-image0 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
+            fonts-inter fonts-dejavu-core exfatprogs file desktop-file-utils
+
+      - name: Install the build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: ${{ matrix.qt-host }}
+          target: desktop
+          arch: ${{ matrix.qt-arch }}
+          cache: true
+
+      - name: Check the Qt version
+        run: |
+          f="$(ls "$QT_ROOT_DIR"/lib/cmake/Qt6Core/Qt6CoreConfigVersion*.cmake | head -1)"
+          found="$(sed -n 's/^set(PACKAGE_VERSION "\([0-9.]*\)").*/\1/p' "$QT_ROOT_DIR"/lib/cmake/Qt6Core/Qt6CoreConfigVersion*.cmake | head -1)"
+          echo "Qt $found at $QT_ROOT_DIR"
+          [ "$found" = "$QT_VERSION" ] || { echo "Qt $found was installed, $QT_VERSION is required"; exit 1; }
+
+      - name: Cache the hash-pinned downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Each file is checked against its pinned SHA-256 when it is used.
+          path: |
+            build/_deps/ampr-emu-ng
+            build/_deps/backport-engine
+            build/_appimage-tools
+          key: engines-${{ matrix.name }}-${{ hashFiles('native/cmake/AmprRuntime.cmake', 'native/cmake/BackportEngine.cmake', 'native/packaging/make-release-unix.sh') }}
+
+      - name: Configure
+        run: >
+          cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR"
+          -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=ON
+          -DFW_WARNINGS_AS_ERRORS=OFF
+          -DFW_FETCH_BACKPORT_ENGINE=ON
+          -DFW_FETCH_AMPR_RUNTIME=ON
+          ${{ matrix.cmake-extra }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Automated tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mkdir -p ci-out
+          set +e
+          ctest --test-dir build --timeout 900 -j 3 --output-junit "$PWD/ci-out/ctest-junit.xml" 2>&1 | tee ci-out/ctest.txt
+          code=${PIPESTATUS[0]}
+          if [ $code -ne 0 ]; then
+            # Every failing test's own output, run again by CTest with the same environment.
+            ctest --test-dir build --timeout 900 --rerun-failed --output-on-failure 2>&1 | tee ci-out/ctest-failed.txt
+          fi
+          exit $code
+
+      - name: Keep every later run of the app away from the runner's own folders
+        run: |
+          box="$RUNNER_TEMP/fw-app"
+          mkdir -p "$box"
+          {
+            echo "FW_DATA_DIR=$box/data"
+            echo "D97BETA_CONFIG_DIR=$box/backport-config"
+            echo "D97BETA_DATA_DIR=$box/backport-data"
+            echo "D97BETA_ENGINE_HOME=$box/backport-engine-home"
+          } >> "$GITHUB_ENV"
+
+      - name: Release files (make-release-unix.sh)
+        run: bash native/packaging/make-release-unix.sh --build-dir build --out-dir ci-out/release --tools-dir build/_appimage-tools
+
+      - name: Screenshot every page with the packaged program
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mkdir -p ci-out/pages
+          if [ "$RUNNER_OS" = Linux ]; then
+            prog="$PWD/ci-out/release/exFAT-Image-Builder-${{ matrix.name }}.AppImage"
+            export APPIMAGE_EXTRACT_AND_RUN=1
+          else
+            hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg" "ci-out/release/exFAT-Image-Builder-${{ matrix.name }}.dmg"
+            prog="$RUNNER_TEMP/dmg/exFAT Image Builder.app/Contents/MacOS/exFAT Image Builder"
+          fi
+          "$prog" --self-test | tee ci-out/self-test.json
+          "$prog" --screenshot-pages "$PWD/ci-out/pages" | tee ci-out/screenshots.txt
+          [ "$RUNNER_OS" = Linux ] || hdiutil detach "$RUNNER_TEMP/dmg"
+
+      - name: Upload release files
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: native-${{ matrix.name }}-packages
+          path: ci-out/release
+          if-no-files-found: error
+
+      - name: Upload test results and screenshots
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: native-${{ matrix.name }}-evidence
+          path: |
+            ci-out/*.txt
+            ci-out/*.xml
+            ci-out/*.json
+            ci-out/pages
+          if-no-files-found: ignore

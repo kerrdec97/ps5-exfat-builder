@@ -517,8 +517,15 @@ private slots:
         q.holdQueue(false);
         panel->clearOverrides();
         // An image in a drive root gets its defaults without a doubled separator.
-        page->openImage(QStringLiteral("Q:/game.exfat"));
-        QVERIFY2(page->convertOutput().startsWith(QStringLiteral("Q:/game")), qPrintable(page->convertOutput()));
+        // An absolute path on a drive that is not there ("Q:/" would be a
+        // relative folder name on Linux and macOS).
+#ifdef Q_OS_WIN
+        const QString missing = QStringLiteral("Q:/game");
+#else
+        const QString missing = QStringLiteral("/fw-no-such-drive/game");
+#endif
+        page->openImage(missing + QStringLiteral(".exfat"));
+        QVERIFY2(page->convertOutput().startsWith(missing), qPrintable(page->convertOutput()));
         page->openImage({});
     }
 

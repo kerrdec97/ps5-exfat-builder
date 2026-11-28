@@ -123,6 +123,7 @@ static QString displayFamily()
 QString monoFamily()
 {
     static const QString family = pickFamily({QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas"),
+                                              QStringLiteral("SF Mono"), QStringLiteral("Menlo"), // macOS
                                               QStringLiteral("DejaVu Sans Mono"), QStringLiteral("Noto Sans Mono"),
                                               QStringLiteral("Liberation Mono")},
                                              QStringLiteral("monospace"));

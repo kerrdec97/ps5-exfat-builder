@@ -50,6 +50,11 @@ int main(int argc, char* argv[])
     QApplication::setApplicationDisplayName(QStringLiteral("exFAT Image Builder"));
     QApplication::setApplicationVersion(QString::fromLatin1(fw::build::kVersion));
     QApplication::setWindowIcon(fw::launcher::appIcon());
+#if defined(Q_OS_LINUX)
+    // Wayland takes a window's icon and name from its desktop entry
+    // (packaging/linux/exfat-image-builder.desktop).
+    QGuiApplication::setDesktopFileName(QStringLiteral("exfat-image-builder"));
+#endif
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("PS5 exFAT Image Builder v5"));

@@ -1236,6 +1236,7 @@ Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QStrin
     QDir().mkpath(destination);
     const QDir dest(destination);
     ExtractResult result;
+    QString folder; // onlyUnder as the first entry under it spells it (null until then)
     LaReader r;
     FW_TRY(r.open(listing, token));
     while (remaining > 0) {
@@ -1253,7 +1254,13 @@ Result<ExtractResult> extractArchive(const ArchiveListing& listing, const QStrin
         if (!isUnder(name, onlyUnder))
             continue; // libarchive passes over its data
         --remaining;
-        const QString rel = zip::Reader::extractedPath(name);
+        // The folder's own spelling may vary between entries ("Game/" and
+        // "GAME/"): one folder on Windows, named as its first entry spells it.
+        // Every entry takes that spelling, so a case-sensitive drive gets the
+        // same one folder.
+        if (folder.isNull())
+            folder = name.left(onlyUnder.size());
+        const QString rel = zip::Reader::extractedPath(folder + name.mid(onlyUnder.size()));
         if (rel.isEmpty())
             continue; // the destination itself
         const QString target = dest.filePath(rel);
