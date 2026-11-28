@@ -3,6 +3,10 @@
 *.ps1 text eol=crlf
 *.py text eol=lf
 *.md text eol=lf
+# Run or read on Linux and macOS: a CR at the end of a line breaks them there.
+*.sh text eol=lf
+*.desktop text eol=lf
+*.plist.in text eol=lf
 *.png binary
 *.ico binary
 
