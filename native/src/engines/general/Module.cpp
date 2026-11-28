@@ -186,7 +186,9 @@ void registerModule(ModuleContext& ctx)
         d.defaultValue = QStringLiteral("none");
         d.choices = {{QStringLiteral("none"), QStringLiteral("Do nothing"), {}},
                      {QStringLiteral("sleep"), QStringLiteral("Sleep"), {}},
+#ifndef Q_OS_MACOS // macOS cannot hibernate on request (power::isSupported)
                      {QStringLiteral("hibernate"), QStringLiteral("Hibernate"), {}},
+#endif
                      {QStringLiteral("shutdown"), QStringLiteral("Shut down"), {}},
                      {QStringLiteral("restart"), QStringLiteral("Restart"), {}}};
         d.order = order++;

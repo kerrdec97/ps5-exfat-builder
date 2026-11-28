@@ -28,7 +28,23 @@ using namespace fw;
 
 namespace {
 
+// This platform's download, as GitHub lists it, and as SHA256SUMS.txt names it.
+#if defined(Q_OS_WIN)
 const QString kProgram = QStringLiteral("exFAT.Image.Builder.exe"); // as GitHub serves "exFAT Image Builder.exe"
+const QByteArray kProgramInSums = "exFAT Image Builder.exe";
+#elif defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
+const QString kProgram = QStringLiteral("exFAT-Image-Builder-macos-arm64.dmg");
+const QByteArray kProgramInSums = "exFAT-Image-Builder-macos-arm64.dmg";
+#elif defined(Q_OS_MACOS)
+const QString kProgram = QStringLiteral("exFAT-Image-Builder-macos-x86_64.dmg");
+const QByteArray kProgramInSums = "exFAT-Image-Builder-macos-x86_64.dmg";
+#elif defined(Q_PROCESSOR_ARM_64)
+const QString kProgram = QStringLiteral("exFAT-Image-Builder-linux-aarch64.AppImage");
+const QByteArray kProgramInSums = "exFAT-Image-Builder-linux-aarch64.AppImage";
+#else
+const QString kProgram = QStringLiteral("exFAT-Image-Builder-linux-x86_64.AppImage");
+const QByteArray kProgramInSums = "exFAT-Image-Builder-linux-x86_64.AppImage";
+#endif
 const QString kGithub = QStringLiteral("https://github.com");
 
 // Minimal HTTP/1.1 server: GET <path> → fixed responses.
@@ -154,7 +170,7 @@ QByteArray programBytes(char fill)
 QByteArray sumsLine(const QByteArray& payload)
 {
     // The release script writes the name with spaces.
-    return QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex() + "  exFAT Image Builder.exe\n";
+    return QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex() + "  " + kProgramInSums + "\n";
 }
 
 } // namespace
@@ -235,6 +251,7 @@ private slots:
     void checksumLookupTreatsSpacesAndDotsAlike()
     {
         // SHA256SUMS.txt names the file as it was built; GitHub serves it with dots.
+#ifdef Q_OS_WIN
         const QByteArray sums = QByteArray(64, 'c') + "  exFAT Image Builder.exe\n";
         QCOMPARE(update::findChecksum(sums, kProgram), QString(64, u'c'));
         QCOMPARE(update::findChecksum(sums, QStringLiteral("exFAT Image Builder.exe")), QString(64, u'c'));
@@ -244,6 +261,11 @@ private slots:
         const QByteArray both = QByteArray(64, 'd') + "  exFAT Image Builder.exe\n" + QByteArray(64, 'e') + "  exFAT.Image.Builder.exe\n";
         QCOMPARE(update::findChecksum(both, kProgram), QString(64, u'e'));
         QVERIFY(update::findChecksum(both, QStringLiteral("exFAT.Image Builder.exe")).isEmpty());
+#else
+        const QByteArray sums = QByteArray(64, 'c') + "  " + kProgramInSums + "\n";
+        QCOMPARE(update::findChecksum(sums, kProgram), QString(64, u'c'));
+        QCOMPARE(update::findChecksum("\xEF\xBB\xBF" + sums, kProgram), QString(64, u'c'));
+#endif
     }
 
     void parsesV5Release()
@@ -278,6 +300,7 @@ private slots:
         auto older = update::parseRelease(v5Release(kGithub, QStringLiteral("5.0.2")), QStringLiteral("5.1.0"));
         QVERIFY(older.ok() && !older->newerThanRunning);
 
+#ifdef Q_OS_WIN
         // The name with spaces (as built) is accepted too.
         QJsonObject spaced = QJsonDocument::fromJson(v5Release(kGithub, QStringLiteral("5.0.2"))).object();
         QJsonArray assets = spaced.value(QStringLiteral("assets")).toArray();
@@ -288,6 +311,20 @@ private slots:
         auto sp = update::parseRelease(QJsonDocument(spaced).toJson(), QStringLiteral("5.0.1"));
         QVERIFY(sp.ok());
         QCOMPARE(sp->assetName, QStringLiteral("exFAT Image Builder.exe"));
+#else
+        // Another platform's build is never offered: a release with only the
+        // Windows program has no download here.
+        QJsonObject win = QJsonDocument::fromJson(v5Release(kGithub, QStringLiteral("5.0.2"))).object();
+        QJsonArray winAssets = win.value(QStringLiteral("assets")).toArray();
+        QJsonObject winFirst = winAssets.at(0).toObject();
+        winFirst.insert(QStringLiteral("name"), QStringLiteral("exFAT.Image.Builder.exe"));
+        winAssets.replace(0, winFirst);
+        win.insert(QStringLiteral("assets"), winAssets);
+        auto w = update::parseRelease(QJsonDocument(win).toJson(), QStringLiteral("5.0.1"));
+        QVERIFY(w.ok() && w->newerThanRunning);
+        QVERIFY(w->assetName.isEmpty());
+        QVERIFY(!w->canDownload());
+#endif
     }
 
     void newerReleaseWithoutUsableDownloadIsStillNewer()
@@ -327,6 +364,7 @@ private slots:
         QVERIFY(r.ok());
         QCOMPARE(r->version, QStringLiteral("9.0.0"));
         QVERIFY(r->newerThanRunning);
+#ifdef Q_OS_WIN
         QCOMPARE(r->installerName, QStringLiteral("exFAT-Image-Builder-Farewell-9.0.0-win64-setup.exe"));
         QVERIFY(r->sumsUrl.endsWith(QStringLiteral("SHA256SUMS.txt")));
         QVERIFY(r->canDownload());
@@ -337,6 +375,11 @@ private slots:
         auto u = update::parseRelease(QJsonDocument(untagged).toJson(), QStringLiteral("5.0.0"));
         QVERIFY(u.ok());
         QCOMPARE(u->version, QStringLiteral("9.0.0"));
+#else
+        // The Windows installer is not a download here.
+        QVERIFY(r->installerName.isEmpty());
+        QVERIFY(!r->canDownload());
+#endif
 
         QJsonObject pre = QJsonDocument::fromJson(v5Release(kGithub, QStringLiteral("9.0.0"))).object();
         pre.insert(QStringLiteral("prerelease"), true);
@@ -442,8 +485,12 @@ private slots:
         http.routes[QStringLiteral("/latest")] = {200, v5Release(http.base(), version)};
         http.routes[assetPath(version, kProgram)] = {200, payload};
         http.routes[assetPath(version, QStringLiteral("SHA256SUMS.txt"))] = {200, sumsLine(payload)};
+#ifdef Q_OS_WIN
         QVERIFY(fwtest::writeTextFile(QDir(updatesDir()).filePath(QStringLiteral("exFAT-Image-Builder-Farewell-5.0.0-win64-setup.exe")), "old installer"));
         QVERIFY(fwtest::writeTextFile(QDir(updatesDir()).filePath(QStringLiteral("exFAT Image Builder.exe")), "an older program"));
+#else
+        QVERIFY(fwtest::writeTextFile(QDir(updatesDir()).filePath(kProgram), "an older program"));
+#endif
         QVERIFY(fwtest::writeTextFile(QDir(updatesDir()).filePath(QStringLiteral("notes.txt")), "other"));
 
         Env env(m_root.filePath(QStringLiteral("e17")));
@@ -560,7 +607,7 @@ private slots:
         QCOMPARE(unlisted->error->code, ErrorCode::VerificationFailed);
 
         // Wrong checksum → refused, nothing left behind.
-        http.routes[sumsPath] = {200, QByteArray(64, 'f') + "  exFAT Image Builder.exe\n"};
+        http.routes[sumsPath] = {200, QByteArray(64, 'f') + "  " + kProgramInSums + "\n"};
         auto bad = env.run(update::kDownloadJob, {{QStringLiteral("release"), rel}});
         QVERIFY(bad);
         QCOMPARE(bad->state, JobState::Failed);

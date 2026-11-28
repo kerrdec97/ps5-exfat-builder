@@ -4,6 +4,9 @@
 
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QPointer>
+#include <QProcess>
+#include <QStandardPaths>
 
 #include <mutex>
 
@@ -59,9 +62,56 @@ bool setKeepAwake(bool keepAwake)
     }
     g_active = keepAwake;
 #else
-    g_active = false;
-    Q_UNUSED(keepAwake);
-    return false;
+    // Linux: systemd-inhibit holds a sleep lock for as long as its child runs;
+    // the child (tail --pid) ends with this app, so a crash cannot leave the
+    // lock behind. macOS: caffeinate -i (no idle sleep) -w <pid> does the same.
+    static QPointer<QProcess> holder;
+    if (!keepAwake) {
+        if (holder) {
+            holder->kill();
+            holder->waitForFinished(2000);
+            delete holder;
+        }
+        g_active = false;
+    } else {
+        const QString pid = QString::number(QCoreApplication::applicationPid());
+        QString program;
+        QStringList args;
+#ifdef Q_OS_MACOS
+        program = QStringLiteral("/usr/bin/caffeinate");
+        args = {QStringLiteral("-i"), QStringLiteral("-w"), pid};
+#else
+        program = QStandardPaths::findExecutable(QStringLiteral("systemd-inhibit"));
+        args = {QStringLiteral("--what=sleep:idle"), QStringLiteral("--who=exFAT Image Builder"),
+                QStringLiteral("--why=Jobs are running"), QStringLiteral("--mode=block"),
+                QStringLiteral("tail"), QStringLiteral("--pid=") + pid, QStringLiteral("-f"), QStringLiteral("/dev/null")};
+#endif
+        if (program.isEmpty() || !QFileInfo(program).isExecutable() || !QCoreApplication::instance()) {
+            Logger::instance().log(LogLevel::Warning, QStringLiteral("power"),
+                                   QStringLiteral("Could not keep the computer awake: %1 is not available")
+                                       .arg(program.isEmpty() ? QStringLiteral("systemd-inhibit") : program));
+            return g_active;
+        }
+        auto* p = new QProcess(QCoreApplication::instance());
+        p->setProgram(program);
+        p->setArguments(args);
+        p->setStandardInputFile(QProcess::nullDevice());
+        p->setStandardOutputFile(QProcess::nullDevice()); // stderr stays readable for the refusal reason
+        p->start();
+        // A lock holder that ends at once was refused (no logind session, as in
+        // a container or WSL): it does not count.
+        if (!p->waitForStarted(3000) || p->waitForFinished(300)) {
+            Logger::instance().log(LogLevel::Warning, QStringLiteral("power"),
+                                   QStringLiteral("Could not keep the computer awake: %1 %2")
+                                       .arg(program, p->state() == QProcess::NotRunning && p->error() != QProcess::FailedToStart
+                                                         ? QStringLiteral("ended at once (%1)").arg(QString::fromUtf8(p->readAllStandardError()).trimmed())
+                                                         : QStringLiteral("did not start")));
+            delete p;
+            return g_active;
+        }
+        holder = p;
+        g_active = true;
+    }
 #endif
     Logger::instance().log(LogLevel::Debug, QStringLiteral("power"),
                            g_active ? QStringLiteral("Keeping the computer awake while jobs run")
@@ -167,8 +217,76 @@ Status perform(Action action)
     }
     return success();
 #else
-    return Error(ErrorCode::Unsupported, QStringLiteral("Power actions are only available on Windows."));
+    if (!isSupported(action))
+        return Error(ErrorCode::Unsupported, QStringLiteral("%1 is not available on this computer.").arg(actionLabel(action)));
+    const auto [program, args] = commandFor(action);
+    QProcess p;
+    p.setProgram(program);
+    p.setArguments(args);
+    p.setStandardInputFile(QProcess::nullDevice());
+    p.start();
+    if (!p.waitForStarted(5000))
+        return Error(ErrorCode::NotFound, QStringLiteral("Could not start %1.").arg(program));
+    if (!p.waitForFinished(60000) || p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
+        const QString why = QString::fromUtf8(p.readAllStandardError()).trimmed();
+        return Error(ErrorCode::PermissionDenied, QStringLiteral("The system did not allow the computer to %1%2")
+                                                      .arg(actionVerb(action), why.isEmpty() ? QStringLiteral(".") : QStringLiteral(": ") + why));
+    }
+    return success();
 #endif
 }
+
+bool isSupported(Action action)
+{
+#ifdef Q_OS_MACOS
+    return action != Action::Hibernate; // macOS has no hibernate on request (pmset hibernatemode is a system setting)
+#else
+    Q_UNUSED(action);
+    return true;
+#endif
+}
+
+#ifndef Q_OS_WIN
+QString actionVerb(Action action)
+{
+    switch (action) {
+    case Action::Sleep: return QStringLiteral("sleep");
+    case Action::Hibernate: return QStringLiteral("hibernate");
+    case Action::Shutdown: return QStringLiteral("shut down");
+    case Action::Restart: return QStringLiteral("restart");
+    case Action::None: break;
+    }
+    return QString();
+}
+
+std::pair<QString, QStringList> commandFor(Action action)
+{
+#ifdef Q_OS_MACOS
+    // pmset needs no administrator rights for sleepnow; shut down and restart go
+    // through System Events like the Apple menu (macOS may ask once to allow it).
+    switch (action) {
+    case Action::Sleep: return {QStringLiteral("/usr/bin/pmset"), {QStringLiteral("sleepnow")}};
+    case Action::Shutdown:
+        return {QStringLiteral("/usr/bin/osascript"), {QStringLiteral("-e"), QStringLiteral("tell application \"System Events\" to shut down")}};
+    case Action::Restart:
+        return {QStringLiteral("/usr/bin/osascript"), {QStringLiteral("-e"), QStringLiteral("tell application \"System Events\" to restart")}};
+    case Action::Hibernate:
+    case Action::None: break;
+    }
+    return {};
+#else
+    // systemd-logind lets the user of the active local session do these
+    // without a password (polkit); otherwise systemctl says why not.
+    switch (action) {
+    case Action::Sleep: return {QStringLiteral("systemctl"), {QStringLiteral("suspend")}};
+    case Action::Hibernate: return {QStringLiteral("systemctl"), {QStringLiteral("hibernate")}};
+    case Action::Shutdown: return {QStringLiteral("systemctl"), {QStringLiteral("poweroff")}};
+    case Action::Restart: return {QStringLiteral("systemctl"), {QStringLiteral("reboot")}};
+    case Action::None: break;
+    }
+    return {};
+#endif
+}
+#endif
 
 } // namespace fw::power

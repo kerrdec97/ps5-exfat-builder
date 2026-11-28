@@ -211,7 +211,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     auto* own = caption(FW_TR("Use it only with games and content you own and dumped yourself."), legal);
     own->setWordWrap(true);
     legal->body()->addWidget(own);
-    auto* sony = caption(affiliationNote(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("tools"))), legal);
+    auto* sony = caption(affiliationNote(QDir(Paths::resourceDir()).filePath(QStringLiteral("tools"))), legal);
     sony->setWordWrap(true);
     sony->setToolTip(FW_TR("FPKG packages are built with your own Publishing Tools, located through Settings › Tools."));
     legal->body()->addWidget(sony);
@@ -246,7 +246,7 @@ AboutPage::AboutPage(AppContext& ctx, QWidget* parent)
     tgrid->setColumnStretch(1, 3);
     third->body()->addLayout(tgrid);
     // The release is one exe that unpacks itself: show where the texts are.
-    const QString licences = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("LICENSES"));
+    const QString licences = QDir(Paths::resourceDir()).filePath(QStringLiteral("LICENSES"));
     if (QFileInfo(licences).isDir()) {
         auto* open = button(FW_TR("Open the LICENSES folder"), ButtonVariant::Subtle, QStringLiteral("folder_open"), third);
         connect(open, &QPushButton::clicked, this, [licences] { openInFileManager(licences); });

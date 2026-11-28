@@ -2082,7 +2082,7 @@ void Ps5ConnectPage::klogSnapshot()
 // ---- Y2JB -----------------------------------------------------------------------------
 
 // The private build's own YouTube packages (make-release -PrivateYoutube).
-QString bundledYoutubeFolder() { return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("tools/youtube")); }
+QString bundledYoutubeFolder() { return QDir(Paths::resourceDir()).filePath(QStringLiteral("tools/youtube")); }
 
 void Ps5ConnectPage::installYoutube(const QString& path)
 {

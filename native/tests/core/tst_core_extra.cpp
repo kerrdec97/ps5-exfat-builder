@@ -7,6 +7,7 @@
 #include "core/Paths.h"
 #include "core/OrderedJson.h"
 #include "core/PathSafety.h"
+#include "core/Power.h"
 #include "core/ProcessRunner.h"
 #include "support/TestSupport.h"
 
@@ -769,6 +770,54 @@ private slots:
         QVERIFY(applied);
         QVERIFY(widened);
         QVERIFY(!setProcessCpuLimit(0, 1));
+    }
+
+    // After-queue actions exist on every platform (Linux: systemctl, macOS:
+    // pmset / System Events); only Hibernate is missing on macOS. A test
+    // program never performs one.
+    void powerActionsPerPlatform()
+    {
+#ifdef Q_OS_MACOS
+        QVERIFY(!power::isSupported(power::Action::Hibernate));
+        QCOMPARE(power::perform(power::Action::Hibernate).error().code(), ErrorCode::PermissionDenied); // refused before anything else
+#else
+        QVERIFY(power::isSupported(power::Action::Hibernate));
+#endif
+        QVERIFY(power::isSupported(power::Action::Sleep));
+        QVERIFY(power::isSupported(power::Action::Shutdown));
+        QVERIFY(power::isSupported(power::Action::Restart));
+#ifndef Q_OS_WIN
+        const auto sleep = power::commandFor(power::Action::Sleep);
+        const auto off = power::commandFor(power::Action::Shutdown);
+        const auto restart = power::commandFor(power::Action::Restart);
+#ifdef Q_OS_MACOS
+        QCOMPARE(sleep.first, QStringLiteral("/usr/bin/pmset"));
+        QCOMPARE(sleep.second, QStringList{QStringLiteral("sleepnow")});
+        QVERIFY(off.second.join(u' ').contains(QStringLiteral("to shut down")));
+        QVERIFY(restart.second.join(u' ').contains(QStringLiteral("to restart")));
+        QVERIFY(power::commandFor(power::Action::Hibernate).first.isEmpty());
+#else
+        QCOMPARE(sleep, (std::pair<QString, QStringList>{QStringLiteral("systemctl"), {QStringLiteral("suspend")}}));
+        QCOMPARE(power::commandFor(power::Action::Hibernate).second, QStringList{QStringLiteral("hibernate")});
+        QCOMPARE(off.second, QStringList{QStringLiteral("poweroff")});
+        QCOMPARE(restart.second, QStringList{QStringLiteral("reboot")});
+#endif
+        QVERIFY(power::commandFor(power::Action::None).first.isEmpty());
+#endif
+        // Never acts from a test program, whatever the platform.
+        QVERIFY(power::performBlocked());
+        QCOMPARE(power::perform(power::Action::Shutdown).error().code(), ErrorCode::PermissionDenied);
+    }
+
+    // Keep-awake: on, then off again, without leaving a lock holder behind.
+    // Where the platform refuses (no logind session in a container), "on"
+    // reports false and changes nothing.
+    void keepAwakeTurnsOffCleanly()
+    {
+        const bool on = power::setKeepAwake(true);
+        QCOMPARE(power::isKeepingAwake(), on);
+        QVERIFY(!power::setKeepAwake(false));
+        QVERIFY(!power::isKeepingAwake());
     }
 };
 

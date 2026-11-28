@@ -26,11 +26,29 @@ namespace {
 
 // The release tag carries the version; the one-file program's name has none.
 const QRegularExpression kTagRe(QStringLiteral("^v?(\\d+\\.\\d+\\.\\d+)$"));
-// "exFAT Image Builder.exe" as built; GitHub serves the spaces as dots.
+// This platform's download. Windows: "exFAT Image Builder.exe" as built
+// (GitHub serves the spaces as dots). Linux: the AppImage, macOS: the disk
+// image for this processor (packaging/make-release-unix.sh). Like the
+// Windows program, their names carry no version. A build for another
+// platform is never offered.
+#if defined(Q_OS_WIN)
 const QRegularExpression kProgramRe(QStringLiteral("^exFAT[ .]Image[ .]Builder\\.exe$"),
                                     QRegularExpression::CaseInsensitiveOption);
-// The installer name of earlier builds, still understood.
+#elif defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
+const QRegularExpression kProgramRe(QStringLiteral("^exFAT-Image-Builder-macos-arm64\\.dmg$"));
+#elif defined(Q_OS_MACOS)
+const QRegularExpression kProgramRe(QStringLiteral("^exFAT-Image-Builder-macos-x86_64\\.dmg$"));
+#elif defined(Q_PROCESSOR_ARM_64)
+const QRegularExpression kProgramRe(QStringLiteral("^exFAT-Image-Builder-linux-aarch64\\.AppImage$"));
+#else
+const QRegularExpression kProgramRe(QStringLiteral("^exFAT-Image-Builder-linux-x86_64\\.AppImage$"));
+#endif
+// The installer name of earlier Windows builds, still understood there.
+#ifdef Q_OS_WIN
 const QRegularExpression kInstallerRe(QStringLiteral("^exFAT-Image-Builder-Farewell-(\\d+\\.\\d+\\.\\d+)-win64-setup\\.exe$"));
+#else
+const QRegularExpression kInstallerRe(QStringLiteral("(?!)")); // never matches
+#endif
 const QRegularExpression kVersionRe(QStringLiteral("^\\d+\\.\\d+\\.\\d+$"));
 const QString kAssetPathPrefix = QStringLiteral("/kerrdec97/ps5-exfat-builder/releases/download/");
 constexpr qint64 kMinInstallerBytes = 5LL * 1024 * 1024;

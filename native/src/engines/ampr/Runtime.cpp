@@ -1,5 +1,6 @@
 #include "engines/ampr/Runtime.h"
 
+#include "core/Paths.h"
 #include "core/Tr.h"
 
 #include <QCoreApplication>
@@ -18,7 +19,7 @@ QString bundledRuntimePath()
     const QString env = qEnvironmentVariable("FW_AMPR_RUNTIME");
     if (!env.isEmpty())
         return env;
-    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("engines/ampr-emu-ng/libSceAmpr.sprx"));
+    return QDir(Paths::resourceDir()).filePath(QStringLiteral("engines/ampr-emu-ng/libSceAmpr.sprx"));
 }
 
 namespace {

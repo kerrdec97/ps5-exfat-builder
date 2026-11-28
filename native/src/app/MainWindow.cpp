@@ -934,8 +934,16 @@ void MainWindow::showUpdateDownloaded()
     m_aboutPage->setUpdateAction(FW_TR("Show in folder"), nativePath(m_downloadedUpdate));
     auto* bar = new InfoBar(Tone::Ok, this);
     bar->setTitle(FW_TR("Version %1 downloaded and verified").arg(version));
+#if defined(Q_OS_WIN)
     bar->setMessage(FW_TR("To update, close the app and replace your exFAT Image Builder.exe with the downloaded file (%1).")
                         .arg(QFileInfo(m_downloadedUpdate).fileName()));
+#elif defined(Q_OS_MACOS)
+    bar->setMessage(FW_TR("To update, close the app, open the downloaded disk image (%1) and drag exFAT Image Builder into Applications, replacing the old copy.")
+                        .arg(QFileInfo(m_downloadedUpdate).fileName()));
+#else
+    bar->setMessage(FW_TR("To update, close the app and replace your exFAT Image Builder AppImage with the downloaded file (%1). Keep it executable (chmod +x).")
+                        .arg(QFileInfo(m_downloadedUpdate).fileName()));
+#endif
     bar->setToolTip(plainTip(nativePath(m_downloadedUpdate)));
     auto* show = bar->addLink(FW_TR("Show in folder"));
     connect(show, &Link::activated, this, &MainWindow::runUpdateAction);

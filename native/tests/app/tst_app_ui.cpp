@@ -194,7 +194,28 @@ private:
     QHash<QTcpSocket*, QByteArray> m_buf;
 };
 
+// This platform's download as GitHub lists it, and its line in SHA256SUMS.txt.
+#if defined(Q_OS_WIN)
 const QString kUpdateProgram = QStringLiteral("exFAT.Image.Builder.exe"); // as GitHub serves "exFAT Image Builder.exe"
+const QByteArray kUpdateProgramInSums = "exFAT Image Builder.exe";
+const QString kReplaceHint = QStringLiteral("close the app and replace your exFAT Image Builder.exe");
+#elif defined(Q_OS_MACOS)
+#if defined(Q_PROCESSOR_ARM_64)
+const QString kUpdateProgram = QStringLiteral("exFAT-Image-Builder-macos-arm64.dmg");
+#else
+const QString kUpdateProgram = QStringLiteral("exFAT-Image-Builder-macos-x86_64.dmg");
+#endif
+const QByteArray kUpdateProgramInSums = kUpdateProgram.toUtf8();
+const QString kReplaceHint = QStringLiteral("drag exFAT Image Builder into Applications");
+#else
+#if defined(Q_PROCESSOR_ARM_64)
+const QString kUpdateProgram = QStringLiteral("exFAT-Image-Builder-linux-aarch64.AppImage");
+#else
+const QString kUpdateProgram = QStringLiteral("exFAT-Image-Builder-linux-x86_64.AppImage");
+#endif
+const QByteArray kUpdateProgramInSums = kUpdateProgram.toUtf8();
+const QString kReplaceHint = QStringLiteral("close the app and replace your exFAT Image Builder AppImage");
+#endif
 
 QString updateAssetPath(const QString& version, const QString& file)
 {
@@ -1572,7 +1593,7 @@ private slots:
         const QString version = QStringLiteral("9.2.0");
         QByteArray program(6 * 1024 * 1024, 'p');
         program[321] = 'q';
-        const QByteArray sums = QCryptographicHash::hash(program, QCryptographicHash::Sha256).toHex() + "  exFAT Image Builder.exe\n";
+        const QByteArray sums = QCryptographicHash::hash(program, QCryptographicHash::Sha256).toHex() + "  " + kUpdateProgramInSums + "\n";
         http.routes[QStringLiteral("/latest")] = updateRelease(http.base(), version, true, program.size());
         http.routes[updateAssetPath(version, QStringLiteral("SHA256SUMS.txt"))] = sums;
         QByteArray damaged = program;
@@ -1604,7 +1625,7 @@ private slots:
         bar = updateBanner();
         const QString text = labelTexts(bar);
         QVERIFY2(text.contains(QStringLiteral("Version 9.2.0 downloaded and verified")), qPrintable(text));
-        QVERIFY2(text.contains(QStringLiteral("close the app and replace your exFAT Image Builder.exe")), qPrintable(text));
+        QVERIFY2(text.contains(kReplaceHint), qPrintable(text));
         QVERIFY(!text.contains(QStringLiteral("install"), Qt::CaseInsensitive));
         QVERIFY(linkIn(bar, QStringLiteral("Show in folder")));
         QVERIFY(!linkIn(bar, QStringLiteral("Download")));

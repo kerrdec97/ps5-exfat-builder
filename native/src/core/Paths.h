@@ -32,6 +32,12 @@ QString launcherExe();
 // Where the program's own files are: the unpacked copy when it was started
 // through the launcher, otherwise the executable's folder.
 QString programDir();
+// Where the files shipped with the program are (engines/, tools/, LICENSES/,
+// the notices): programDir() on Windows and Linux; inside a macOS app bundle
+// <name>.app/Contents/Resources (code signing allows no data files next to
+// the executable in Contents/MacOS). Outside a bundle (a developer build, a
+// test) programDir() on macOS too.
+QString resourceDir();
 // `portable.txt` in appDir(): the file that turns portable mode on. It is
 // looked at once, when the locations are resolved (isPortable()).
 QString portableMarkerFile();

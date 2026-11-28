@@ -53,8 +53,23 @@ void ensure()
             s.data = QDir(exeDir).filePath(QStringLiteral("data"));
             s.local = s.data;
         } else {
+#if defined(Q_OS_WIN)
+            // %APPDATA% / %LOCALAPPDATA%\kerrdec97\exFAT Image Builder Farewell:
+            // the folder names of every earlier version, so settings carry over.
             s.data = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
             s.local = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+#elif defined(Q_OS_MACOS)
+            // ~/Library/Application Support/exFAT Image Builder (no earlier
+            // version to carry over, so no organisation folder and no "Farewell").
+            s.data = QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath(QStringLiteral("exFAT Image Builder"));
+            s.local = s.data;
+#else
+            // XDG: settings, queue and history in ~/.config/exfat-image-builder;
+            // logs, cache and the (large) temp folder in
+            // ~/.local/share/exfat-image-builder, never in /tmp (often RAM).
+            s.data = QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)).filePath(QStringLiteral("exfat-image-builder"));
+            s.local = QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath(QStringLiteral("exfat-image-builder"));
+#endif
             if (s.data.isEmpty())
                 s.data = QDir::home().filePath(QStringLiteral(".farewell-edition"));
             if (s.local.isEmpty())
@@ -101,6 +116,19 @@ QString launcherExe()
 QString programDir()
 {
     return QCoreApplication::instance() ? QCoreApplication::applicationDirPath() : QString();
+}
+
+QString resourceDir()
+{
+    const QString program = programDir();
+#ifdef Q_OS_MACOS
+    // .../Name.app/Contents/MacOS → .../Name.app/Contents/Resources
+    QDir dir(program);
+    if (dir.dirName() == QLatin1String("MacOS") && dir.cdUp() && dir.dirName() == QLatin1String("Contents")
+        && dir.exists(QStringLiteral("Resources")))
+        return QDir::cleanPath(dir.filePath(QStringLiteral("Resources")));
+#endif
+    return program;
 }
 
 QString portableMarkerFile()
