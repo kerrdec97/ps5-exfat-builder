@@ -880,9 +880,16 @@ void SettingsPage::addLocationsCard()
         return p;
     };
     const bool fromLauncher = !at.launcherExe.isEmpty();
+#ifdef Q_OS_WIN
     if (fromLauncher)
         addLocation(QStringLiteral("exe"), FW_TR("The exe you start"), at.launcherExe);
     addLocation(QStringLiteral("program"), fromLauncher ? FW_TR("Unpacked program") : FW_TR("Program"), at.program);
+#else
+    // Linux: the AppImage or the folder edition's start script (nothing is unpacked next to it).
+    if (fromLauncher)
+        addLocation(QStringLiteral("exe"), FW_TR("The program you start"), at.launcherExe);
+    addLocation(QStringLiteral("program"), FW_TR("Program"), at.program);
+#endif
     addLocation(QStringLiteral("data"), FW_TR("Settings, queue and history"), at.data);
     addLocation(QStringLiteral("logs"), FW_TR("Logs"), at.logs);
     m_tempLocation = addLocation(QStringLiteral("temp"), FW_TR("Temporary files"), at.temp);
@@ -907,7 +914,11 @@ void SettingsPage::addLocationsCard()
     titleRow->addWidget(badge, 0, Qt::AlignVCenter);
     titleRow->addStretch(1);
     col->addLayout(titleRow);
+#ifdef Q_OS_WIN
     auto* what = caption(FW_TR("Keeps the unpacked program, settings, queue and logs in folders next to the exe, for example on an external drive."), prow);
+#else
+    auto* what = caption(FW_TR("Keeps settings, queue and logs in a folder next to the program you start, for example on an external drive."), prow);
+#endif
     what->setWordWrap(true);
     col->addWidget(what);
     ph->addLayout(col, 1);
@@ -926,10 +937,22 @@ void SettingsPage::addLocationsCard()
     } else {
         auto* make = button(FW_TR("Make this copy portable…"), ButtonVariant::Secondary, {}, prow);
         make->setObjectName(QStringLiteral("make-portable"));
+#ifdef Q_OS_MACOS
+        // An app bundle keeps its files in Application Support; a portable.txt
+        // inside it would break its signature.
+        const bool canMake = false;
+#else
         const bool canMake = fromLauncher || !at.folderExe.isEmpty();
+#endif
         make->setEnabled(canMake);
         if (!canMake) {
+#if defined(Q_OS_WIN)
             const QString why = FW_TR("This copy was started without the single-file exe (a developer run), so there is no exe to make portable.");
+#elif defined(Q_OS_MACOS)
+            const QString why = FW_TR("The macOS app has no portable mode: it keeps its files in your Library folder.");
+#else
+            const QString why = FW_TR("This copy was started without the AppImage or the folder edition's start script (a developer run), so there is nothing to make portable.");
+#endif
             make->setToolTip(why);
             note(why);
         }
@@ -973,7 +996,11 @@ void SettingsPage::makePortable()
     const QString exe = Paths::launcherExe();
     portable::Plan plan;
     if (!exe.isEmpty())
+#ifdef Q_OS_WIN
         plan = portable::planFor(exe, Paths::dataDir());
+#else
+        plan = portable::planForFolderEdition(exe, Paths::dataDir()); // the AppImage or the start script: nothing unpacks
+#endif
     else if (portable::isFolderEdition(QCoreApplication::applicationDirPath()))
         plan = portable::planForFolderEdition(QCoreApplication::applicationFilePath(), Paths::dataDir());
     else

@@ -116,8 +116,19 @@ jobs:
           -DFW_FETCH_AMPR_RUNTIME=ON
           ${{ matrix.cmake-extra }}
 
+      # Failures are repeated as annotations (::error::): those are readable
+      # through the public API without signing in, unlike the job's log.
       - name: Build
-        run: cmake --build build --parallel
+        run: |
+          mkdir -p ci-out
+          set +e
+          cmake --build build --parallel -- -k 0 2>&1 | tee ci-out/build.txt
+          code=${PIPESTATUS[0]}
+          if [ $code -ne 0 ]; then
+            grep -E 'error:|error [A-Z]+[0-9]+:|FAILED:|CMake Error' ci-out/build.txt | sort -u | head -40 \
+              | while IFS= read -r l; do echo "::error::${l:0:900}"; done
+          fi
+          exit $code
 
       - name: Automated tests
         env:
@@ -130,6 +141,8 @@ jobs:
           if [ $code -ne 0 ]; then
             # Every failing test's own output, run again by CTest with the same environment.
             ctest --test-dir build --timeout 900 --rerun-failed --output-on-failure 2>&1 | tee ci-out/ctest-failed.txt
+            grep -E '^FAIL!|^   Loc:|^   Actual|^   Expected|\*\*\*(Failed|Timeout|Exception)|Segmentation|QFATAL' ci-out/ctest-failed.txt | head -60 \
+              | while IFS= read -r l; do echo "::error::${l:0:900}"; done
           fi
           exit $code
 

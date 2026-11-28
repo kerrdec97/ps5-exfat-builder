@@ -151,7 +151,7 @@ if [ "$PLATFORM" = linux ]; then
     LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-$ARCH.AppImage"
     LINUXDEPLOY_SHA256_x86_64="c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d"
     QTPLUGIN_URL="https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-qt-$ARCH.AppImage"
-    QTPLUGIN_SHA256_x86_64="@QTPLUGIN_SHA256@"
+    QTPLUGIN_SHA256_x86_64="15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724" # GitHub publishes no digest for this release: hash of the download of 28 Nov 2026 (12,317,424 bytes, as listed)
     APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$ARCH.AppImage"
     APPIMAGETOOL_SHA256_x86_64="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
     RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-$ARCH"
@@ -200,8 +200,13 @@ if [ "$PLATFORM" = linux ]; then
     # program's folder in a running AppImage is read-only).
     mkdir -p "$APPDIR/apprun-hooks"
     cat > "$APPDIR/apprun-hooks/fw-portable.sh" <<'HOOK'
-# exFAT Image Builder: the folder the user keeps the AppImage in.
-if [ -n "${APPIMAGE:-}" ]; then export FW_LAUNCHER_DIR="$(dirname "$APPIMAGE")"; fi
+# exFAT Image Builder: the AppImage file the user starts and its folder
+# (portable.txt is looked for there; a restart starts the AppImage again,
+# because this mount goes away when the app ends).
+if [ -n "${APPIMAGE:-}" ]; then
+    export FW_LAUNCHER_DIR="$(dirname "$APPIMAGE")"
+    export FW_LAUNCHER_EXE="$APPIMAGE"
+fi
 HOOK
     "$TOOLS_DIR/linuxdeploy-$ARCH.AppImage" --appdir "$APPDIR" \
         --executable "$APPDIR/usr/bin/exfat-image-builder" \
@@ -226,7 +231,7 @@ HOOK
 # exFAT Image Builder, folder edition: a portable.txt in this folder keeps the
 # settings and logs in ./data instead of your home folder.
 here="$(cd "$(dirname "$0")" && pwd)"
-[ -f "$here/portable.txt" ] && export FW_LAUNCHER_DIR="$here"
+export FW_LAUNCHER_DIR="$here" FW_LAUNCHER_EXE="$here/exfat-image-builder"
 exec "$here/AppRun" "$@"
 RUN
     chmod +x "$FOLDER/exfat-image-builder"
